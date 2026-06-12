@@ -1,5 +1,7 @@
 name: Check DESCO Balance
 
+# self-hosted mode: fork this repo, set the secrets below, and this workflow
+# checks your balance on a schedule for free - no server needed.
 on:
   schedule:
     - cron: '0 6 * * *'
@@ -13,14 +15,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '20'
-          cache: 'npm'
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm install
+        run: bun install --frozen-lockfile
 
       - name: Check balance and send notifications
         env:
@@ -34,4 +35,4 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           LOW_THRESHOLD: ${{ secrets.LOW_THRESHOLD }}
           CRITICAL_THRESHOLD: ${{ secrets.CRITICAL_THRESHOLD }}
-        run: npm run check-balance
+        run: bun run check-balance

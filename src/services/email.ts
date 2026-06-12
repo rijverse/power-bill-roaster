@@ -3,30 +3,29 @@ import { Config } from '../config';
 import { EmailContent } from '../types';
 
 export class EmailService {
-    private transporter: nodemailer.Transporter;
-    private config: Config;
+  private transporter: nodemailer.Transporter;
+  private config: Config;
 
-    constructor(config: Config) {
-        this.config = config;
-        this.transporter = nodemailer.createTransport({
-            host: config.smtp.host,
-            port: config.smtp.port,
-            secure: config.smtp.port === 465,
-            auth: {
-                user: config.smtp.user,
-                pass: config.smtp.pass,
-            },
-        });
-    }
+  constructor(config: Config) {
+    this.config = config;
+    this.transporter = nodemailer.createTransport({
+      host: config.smtp.host,
+      port: config.smtp.port,
+      secure: config.smtp.port === 465,
+      auth: {
+        user: config.smtp.user,
+        pass: config.smtp.pass,
+      },
+    });
+  }
 
-    async send(content: EmailContent): Promise<void> {
-        await this.transporter.sendMail({
-            from: this.config.email.from,
-            to: this.config.email.to,
-            subject: content.subject,
-            text: content.text,
-            html: content.html,
-        });
-    }
+  async send(content: EmailContent): Promise<void> {
+    await this.transporter.sendMail({
+      from: this.config.email.from,
+      to: this.config.email.to,
+      subject: content.subject,
+      text: content.text,
+      html: content.html,
+    });
+  }
 }
-

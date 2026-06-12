@@ -2,40 +2,44 @@ import fetch from 'node-fetch';
 import https from 'https';
 import { ApiResponse, BalanceData } from '../types';
 
-const API_BASE_URL = 'https://prepaid.desco.org.bd/api/tkdes/customer';
+// Overridable for tests (point at a mock server)
+const API_BASE_URL =
+  process.env.DESCO_API_BASE_URL || 'https://prepaid.desco.org.bd/api/tkdes/customer';
 
-// DESCO API has certificate issues, so we need to disable verification
-// This is a known limitation - consider monitoring for certificate updates
-const httpsAgent = new https.Agent({
-    rejectUnauthorized: false,
-});
+// desco api has certificate issues, so we need to disable verification
+// this is a known limitation consider monitoring for certificate updates
+// (only applies to https; http mock servers must not receive a tls agent)
+const httpsAgent = API_BASE_URL.startsWith('https')
+  ? new https.Agent({
+      rejectUnauthorized: false,
+    })
+  : undefined;
 
 function validateApiResponse(response: unknown): response is ApiResponse {
-    if (typeof response !== 'object' || response === null) {
-        return false;
-    }
-    const obj = response as Record<string, unknown>;
+  if (typeof response !== 'object' || response === null) {
+    return false;
+  }
+  const obj = response as Record<string, unknown>;
 
-    if (obj.code !== 200 || typeof obj.data !== 'object' || obj.data === null) {
-        return false;
-    }
+  if (obj.code !== 200 || typeof obj.data !== 'object' || obj.data === null) {
+    return false;
+  }
 
-    const data = obj.data as Record<string, unknown>;
-    return typeof data.balance === 'number';
+  const data = obj.data as Record<string, unknown>;
+  return typeof data.balance === 'number';
 }
 
 export class DescoApiClient {
-    async getBalance(accountNo: string, meterNo: string): Promise<BalanceData> {
-        const url = `${API_BASE_URL}/getBalance?accountNo=${accountNo}&meterNo=${meterNo}`;
+  async getBalance(accountNo: string, meterNo: string): Promise<BalanceData> {
+    const url = `${API_BASE_URL}/getBalance?accountNo=${accountNo}&meterNo=${meterNo}`;
 
-        const response = await fetch(url, {agent: httpsAgent});
-        const apiResponse = await response.json();
+    const response = await fetch(url, { agent: httpsAgent });
+    const apiResponse: unknown = await response.json();
 
-        if (!validateApiResponse(apiResponse)) {
-            throw new Error('Invalid API response: missing or invalid data');
-        }
-
-        return apiResponse.data;
+    if (!validateApiResponse(apiResponse)) {
+      throw new Error('Invalid API response: missing or invalid data');
     }
-}
 
+    return apiResponse.data;
+  }
+}

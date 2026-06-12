@@ -1,4 +1,5 @@
 import { AlertAction } from '../core/alert-machine';
+import { RunOutPrediction, formatDaysLeft } from '../core/prediction';
 
 export interface MeterContext {
   nickname: string | null;
@@ -7,6 +8,7 @@ export interface MeterContext {
   balance: number;
   lowThreshold: number;
   criticalThreshold: number;
+  prediction?: RunOutPrediction | null;
 }
 
 const RECHARGE_URL = 'https://prepaid.desco.org.bd/';
@@ -19,6 +21,15 @@ function balanceLine(ctx: MeterContext): string {
   return `💰 Balance: ৳${ctx.balance.toFixed(2)}`;
 }
 
+function predictionLine(ctx: MeterContext): string[] {
+  if (!ctx.prediction) {
+    return [];
+  }
+  return [
+    `🔮 At your current burn rate (৳${ctx.prediction.burnPerDay.toFixed(0)}/day): ${formatDaysLeft(ctx.prediction.daysLeft)} until ৳0.`,
+  ];
+}
+
 export function lowAlertMessage(ctx: MeterContext): string {
   return [
     `⚡ *Your Electricity Is About to Ghost You*`,
@@ -27,6 +38,7 @@ export function lowAlertMessage(ctx: MeterContext): string {
     `📟 ${meterLabel(ctx)}`,
     ``,
     `You're under ৳${ctx.lowThreshold}. The fridge is nervous. The WiFi router is writing its will.`,
+    ...predictionLine(ctx),
     ``,
     `Recharge before this becomes a candle-lit situation: ${RECHARGE_URL}`,
   ].join('\n');
@@ -40,6 +52,7 @@ export function criticalAlertMessage(ctx: MeterContext): string {
     `📟 ${meterLabel(ctx)}`,
     ``,
     `THIS IS NOT A DRILL. You're under ৳${ctx.criticalThreshold}. DESCO is about to cut you off and you'll be charging your phone at a tea stall like it's 2005.`,
+    ...predictionLine(ctx),
     ``,
     `RECHARGE RIGHT NOW → ${RECHARGE_URL}`,
     ``,
@@ -55,6 +68,7 @@ export function reminderMessage(ctx: MeterContext): string {
     `📟 ${meterLabel(ctx)}`,
     ``,
     `Yesterday's warning apparently didn't land. The balance didn't recharge itself overnight - shocking, I know.`,
+    ...predictionLine(ctx),
     ``,
     `${RECHARGE_URL}`,
   ].join('\n');
@@ -93,5 +107,10 @@ export function balanceStatusMessage(ctx: MeterContext): string {
       : ctx.balance < ctx.lowThreshold
         ? '⚠️ LOW'
         : '✅ OK';
-  return [`📟 ${meterLabel(ctx)}`, balanceLine(ctx), `Status: ${status}`].join('\n');
+  return [
+    `📟 ${meterLabel(ctx)}`,
+    balanceLine(ctx),
+    `Status: ${status}`,
+    ...predictionLine(ctx),
+  ].join('\n');
 }

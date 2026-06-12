@@ -2,13 +2,18 @@ import fetch from 'node-fetch';
 import https from 'https';
 import { ApiResponse, BalanceData } from '../types';
 
-const API_BASE_URL = 'https://prepaid.desco.org.bd/api/tkdes/customer';
+// Overridable for tests (point at a mock server)
+const API_BASE_URL =
+  process.env.DESCO_API_BASE_URL || 'https://prepaid.desco.org.bd/api/tkdes/customer';
 
 // desco api has certificate issues, so we need to disable verification
 // this is a known limitation consider monitoring for certificate updates
-const httpsAgent = new https.Agent({
-  rejectUnauthorized: false,
-});
+// (only applies to https; http mock servers must not receive a tls agent)
+const httpsAgent = API_BASE_URL.startsWith('https')
+  ? new https.Agent({
+      rejectUnauthorized: false,
+    })
+  : undefined;
 
 function validateApiResponse(response: unknown): response is ApiResponse {
   if (typeof response !== 'object' || response === null) {

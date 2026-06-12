@@ -136,6 +136,17 @@ bun run build
 bun run test
 ```
 
+### End-to-End Test
+
+```bash
+docker compose -f docker-compose.test.yml up --build
+```
+
+Spins up the app, a throwaway Postgres, and [Mockoon](https://mockoon.com) faking both the
+Telegram and DESCO APIs. A scripted mock user registers a meter, the fake balance (৳42.50)
+trips the critical threshold, and the alert fires - watch the app logs. Clean up with
+`docker compose -f docker-compose.test.yml down -v`.
+
 ### Lint & Format
 
 ```bash

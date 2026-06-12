@@ -22,7 +22,10 @@ const HELP_TEXT = [
 ].join('\n');
 
 export function createBot(db: Db, config: ServerConfig): Bot {
-  const bot = new Bot(config.telegramBotToken);
+  const bot = new Bot(
+    config.telegramBotToken,
+    config.telegramApiRoot ? { client: { apiRoot: config.telegramApiRoot } } : undefined
+  );
   const pending = new Map<number, PendingRegistration>();
 
   async function findUser(chatId: number) {

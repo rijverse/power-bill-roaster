@@ -1,0 +1,47 @@
+# Isolated end-to-end test: app + throwaway Postgres + Mockoon faking both
+# the Telegram Bot API and the DESCO API. Nothing external is contacted.
+#
+#   docker compose -f docker-compose.test.yml up --build
+#
+# Expected flow (watch the app logs): mock user runs /start -> /register ->
+# account -> meter (validated against the mock DESCO), then the scheduler
+# polls, sees balance 42.50 < critical 100, and fires a critical alert.
+#
+#   docker compose -f docker-compose.test.yml down -v   # clean up
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: powerroast
+      POSTGRES_PASSWORD: powerroast
+      POSTGRES_DB: powerroast
+    volumes:
+      # Postgres runs drizzle's migration .sql files on first init
+      - ./drizzle:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U powerroast']
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  mockoon:
+    image: mockoon/cli:latest
+    command: ['--data', '/data/mock.json', '--port', '8080']
+    volumes:
+      - ./mock/telegram-desco-mock.json:/data/mock.json:ro
+
+  app:
+    build: .
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      mockoon:
+        condition: service_started
+    restart: on-failure
+    environment:
+      DATABASE_URL: postgres://powerroast:powerroast@postgres-test:5432/powerroast
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_API_ROOT: http://mockoon:8080
+      DESCO_API_BASE_URL: http://mockoon:8080/api/tkdes/customer
+      POLL_INTERVAL_HOURS: '0.01' # ~36s so the alert cycle happens during the test
+      JITTER_MAX_MS: '100'

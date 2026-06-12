@@ -24,6 +24,8 @@ export interface Config {
 export interface ServerConfig {
   databaseUrl: string;
   telegramBotToken: string;
+  /** override the Telegram Bot API root (mock servers / local bot-api). Null = api.telegram.org */
+  telegramApiRoot: string | null;
   port: number;
   pollIntervalHours: number;
   reminderIntervalHours: number;
@@ -46,6 +48,7 @@ export function getServerConfig(): ServerConfig {
   return {
     databaseUrl: process.env.DATABASE_URL!,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
+    telegramApiRoot: process.env.TELEGRAM_API_ROOT || null,
     port: parseInt(process.env.PORT || '3000'),
     pollIntervalHours: parseFloat(process.env.POLL_INTERVAL_HOURS || '6'),
     reminderIntervalHours: parseFloat(process.env.REMINDER_INTERVAL_HOURS || '24'),

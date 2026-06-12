@@ -1,0 +1,232 @@
+{
+  "uuid": "a1b2c3d4-0000-4000-8000-000000000001",
+  "lastMigration": 19,
+  "name": "telegram-desco-mock",
+  "endpointPrefix": "",
+  "latency": 0,
+  "port": 8080,
+  "hostname": "0.0.0.0",
+  "routes": [
+    {
+      "uuid": "a1b2c3d4-0000-4000-8000-000000000010",
+      "documentation": "Telegram getMe",
+      "method": "post",
+      "endpoint": ":token/getMe",
+      "responses": [
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000011",
+          "body": "{\"ok\":true,\"result\":{\"id\":1000,\"is_bot\":true,\"first_name\":\"PowerRoastMock\",\"username\":\"power_roast_mock_bot\",\"can_join_groups\":true,\"can_read_all_group_messages\":false,\"supports_inline_queries\":false}}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        }
+      ],
+      "enabled": true,
+      "randomResponse": false,
+      "sequentialResponse": false
+    },
+    {
+      "uuid": "a1b2c3d4-0000-4000-8000-000000000020",
+      "documentation": "Telegram deleteWebhook",
+      "method": "post",
+      "endpoint": ":token/deleteWebhook",
+      "responses": [
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000021",
+          "body": "{\"ok\":true,\"result\":true}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        }
+      ],
+      "enabled": true,
+      "randomResponse": false,
+      "sequentialResponse": false
+    },
+    {
+      "uuid": "a1b2c3d4-0000-4000-8000-000000000030",
+      "documentation": "Telegram getUpdates - scripted conversation keyed on polling offset",
+      "method": "post",
+      "endpoint": ":token/getUpdates",
+      "responses": [
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000031",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":1,\"message\":{\"message_id\":1,\"date\":1750000000,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"/start\",\"entities\":[{\"type\":\"bot_command\",\"offset\":0,\"length\":6}]}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "default: /start",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000032",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":2,\"message\":{\"message_id\":2,\"date\":1750000010,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"/register\",\"entities\":[{\"type\":\"bot_command\",\"offset\":0,\"length\":9}]}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "/register",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [
+            { "target": "body", "modifier": "offset", "value": "2", "operator": "equals" }
+          ],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000033",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":3,\"message\":{\"message_id\":3,\"date\":1750000020,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"12345678\"}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "account number",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [
+            { "target": "body", "modifier": "offset", "value": "3", "operator": "equals" }
+          ],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000034",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":4,\"message\":{\"message_id\":4,\"date\":1750000030,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"87654321\"}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "meter number",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [
+            { "target": "body", "modifier": "offset", "value": "4", "operator": "equals" }
+          ],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000035",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":5,\"message\":{\"message_id\":5,\"date\":1750000040,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"/balance\",\"entities\":[{\"type\":\"bot_command\",\"offset\":0,\"length\":8}]}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "/balance",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [
+            { "target": "body", "modifier": "offset", "value": "5", "operator": "equals" }
+          ],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000036",
+          "body": "{\"ok\":true,\"result\":[]}",
+          "latency": 1500,
+          "statusCode": 200,
+          "label": "conversation finished: no more updates",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [
+            { "target": "body", "modifier": "offset", "value": "6", "operator": "equals" }
+          ],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        }
+      ],
+      "enabled": true,
+      "randomResponse": false,
+      "sequentialResponse": false
+    },
+    {
+      "uuid": "a1b2c3d4-0000-4000-8000-000000000040",
+      "documentation": "Telegram sendMessage - logs what the bot says",
+      "method": "post",
+      "endpoint": ":token/sendMessage",
+      "responses": [
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000041",
+          "body": "{\"ok\":true,\"result\":{\"message_id\":100,\"date\":1750000050,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"text\":\"ok\"}}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        }
+      ],
+      "enabled": true,
+      "randomResponse": false,
+      "sequentialResponse": false
+    },
+    {
+      "uuid": "a1b2c3d4-0000-4000-8000-000000000050",
+      "documentation": "DESCO getBalance - 42.50 BDT, below the critical threshold",
+      "method": "get",
+      "endpoint": "api/tkdes/customer/getBalance",
+      "responses": [
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000051",
+          "body": "{\"code\":200,\"desc\":\"OK\",\"data\":{\"accountNo\":\"12345678\",\"meterNo\":\"87654321\",\"balance\":42.5,\"currentMonthConsumption\":123.45,\"readingTime\":\"2026-06-12 10:00:00\"}}",
+          "latency": 200,
+          "statusCode": 200,
+          "label": "",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        }
+      ],
+      "enabled": true,
+      "randomResponse": false,
+      "sequentialResponse": false
+    }
+  ],
+  "proxyMode": false,
+  "proxyHost": "",
+  "proxyRemovePrefix": false,
+  "tlsOptions": {
+    "enabled": false,
+    "type": "CERT",
+    "pfxPath": "",
+    "certPath": "",
+    "keyPath": "",
+    "caPath": "",
+    "passphrase": ""
+  },
+  "cors": true,
+  "headers": [],
+  "proxyReqHeaders": [],
+  "proxyResHeaders": []
+}

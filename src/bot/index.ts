@@ -6,6 +6,10 @@ import { ServerConfig } from '../config';
 import { balanceStatusMessage } from '../notifications/telegram-templates';
 import { RateLimiter } from '../core/rate-limiter';
 import { maxMetersFor } from '../core/plans';
+import { predictRunOut } from '../core/prediction';
+
+const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_NICKNAME_LENGTH = 30;
 
 interface PendingRegistration {
   step: 'account' | 'meter';
@@ -23,6 +27,7 @@ const HELP_TEXT = [
   '/register - add your DESCO meter',
   '/balance - check balances right now',
   '/threshold <low> <critical> - set alert levels (e.g. /threshold 200 100)',
+  '/nickname <name> - name your meter (e.g. "Flat 3B")',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
   '/privacy - what we store and why',
@@ -116,6 +121,15 @@ export function createBot(db: Db, config: ServerConfig): Bot {
           accountNo: meter.accountNo,
           meterNo: meter.meterNo,
         });
+        const recentReadings = await db
+          .select({ balance: schema.readings.balance, fetchedAt: schema.readings.fetchedAt })
+          .from(schema.readings)
+          .where(
+            and(
+              eq(schema.readings.meterId, meter.id),
+              gte(schema.readings.fetchedAt, new Date(Date.now() - PREDICTION_WINDOW_MS))
+            )
+          );
         await ctx.reply(
           balanceStatusMessage({
             nickname: meter.nickname,
@@ -124,6 +138,10 @@ export function createBot(db: Db, config: ServerConfig): Bot {
             balance: data.balance,
             lowThreshold: meter.lowThreshold,
             criticalThreshold: meter.criticalThreshold,
+            prediction: predictRunOut(
+              recentReadings.map(r => ({ balance: r.balance, at: r.fetchedAt })),
+              data.balance
+            ),
           })
         );
       } catch {
@@ -156,6 +174,44 @@ export function createBot(db: Db, config: ServerConfig): Bot {
         .where(eq(schema.meters.id, meter.id));
     }
     await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
+  });
+
+  bot.command('nickname', async ctx => {
+    const args = (ctx.match ?? '').trim();
+    const meters = await userMeters(ctx.chat.id);
+    if (meters.length === 0) {
+      await ctx.reply('No meters registered yet. Use /register to add one.');
+      return;
+    }
+    if (!args) {
+      await ctx.reply(
+        'Usage: /nickname <name> - e.g. /nickname Flat 3B' +
+          (meters.length > 1 ? '\nWith multiple meters: /nickname <meterNo> <name>' : '')
+      );
+      return;
+    }
+
+    const tokens = args.split(/\s+/);
+    const byMeterNo = meters.find(m => m.meterNo === tokens[0]);
+    let target = meters[0];
+    let name = args;
+    if (byMeterNo && tokens.length > 1) {
+      target = byMeterNo;
+      name = tokens.slice(1).join(' ');
+    } else if (meters.length > 1) {
+      await ctx.reply('You have multiple meters - use /nickname <meterNo> <name>.');
+      return;
+    }
+
+    if (name.length > MAX_NICKNAME_LENGTH) {
+      await ctx.reply(
+        `That's a novel, not a nickname. Keep it under ${MAX_NICKNAME_LENGTH} characters.`
+      );
+      return;
+    }
+
+    await db.update(schema.meters).set({ nickname: name }).where(eq(schema.meters.id, target.id));
+    await ctx.reply(`Done. Meter ${target.meterNo} now answers to "${name}".`);
   });
 
   bot.command('meters', async ctx => {

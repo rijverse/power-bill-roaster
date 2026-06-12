@@ -1,6 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { eq, and, gte } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
+import { predictRunOut } from './prediction';
 import { getProvider } from '../providers';
 import { renderAlert, MeterContext } from '../notifications/telegram-templates';
 import { ServerConfig } from '../config';
@@ -15,6 +16,8 @@ const BACKOFF_BASE_MS = 2000;
 // desco api changed or we got blocked, and alert the operator.
 const ERROR_RATE_ALARM = 0.5;
 const ERROR_RATE_MIN_SAMPLE = 5;
+// burn rate is computed from the last week of readings
+const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -166,6 +169,16 @@ export class Scheduler {
       return;
     }
 
+    const recentReadings = await this.db
+      .select({ balance: schema.readings.balance, fetchedAt: schema.readings.fetchedAt })
+      .from(schema.readings)
+      .where(
+        and(
+          eq(schema.readings.meterId, meter.id),
+          gte(schema.readings.fetchedAt, new Date(now.getTime() - PREDICTION_WINDOW_MS))
+        )
+      );
+
     const ctx: MeterContext = {
       nickname: meter.nickname,
       accountNo: meter.accountNo,
@@ -173,6 +186,10 @@ export class Scheduler {
       balance,
       lowThreshold: meter.lowThreshold,
       criticalThreshold: meter.criticalThreshold,
+      prediction: predictRunOut(
+        recentReadings.map(r => ({ balance: r.balance, at: r.fetchedAt })),
+        balance
+      ),
     };
     const message = renderAlert(decision.action, ctx);
     if (!message || user.telegramChatId === null) {

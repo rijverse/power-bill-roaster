@@ -86,9 +86,7 @@
           "headers": [{ "key": "Content-Type", "value": "application/json" }],
           "filePath": "",
           "sendFileAsBody": false,
-          "rules": [
-            { "target": "body", "modifier": "offset", "value": "2", "operator": "equals" }
-          ],
+          "rules": [{ "target": "body", "modifier": "offset", "value": "2", "operator": "equals" }],
           "rulesOperator": "AND",
           "disableTemplating": true,
           "fallbackTo404": false
@@ -102,9 +100,7 @@
           "headers": [{ "key": "Content-Type", "value": "application/json" }],
           "filePath": "",
           "sendFileAsBody": false,
-          "rules": [
-            { "target": "body", "modifier": "offset", "value": "3", "operator": "equals" }
-          ],
+          "rules": [{ "target": "body", "modifier": "offset", "value": "3", "operator": "equals" }],
           "rulesOperator": "AND",
           "disableTemplating": true,
           "fallbackTo404": false
@@ -118,9 +114,7 @@
           "headers": [{ "key": "Content-Type", "value": "application/json" }],
           "filePath": "",
           "sendFileAsBody": false,
-          "rules": [
-            { "target": "body", "modifier": "offset", "value": "4", "operator": "equals" }
-          ],
+          "rules": [{ "target": "body", "modifier": "offset", "value": "4", "operator": "equals" }],
           "rulesOperator": "AND",
           "disableTemplating": true,
           "fallbackTo404": false
@@ -134,9 +128,7 @@
           "headers": [{ "key": "Content-Type", "value": "application/json" }],
           "filePath": "",
           "sendFileAsBody": false,
-          "rules": [
-            { "target": "body", "modifier": "offset", "value": "5", "operator": "equals" }
-          ],
+          "rules": [{ "target": "body", "modifier": "offset", "value": "5", "operator": "equals" }],
           "rulesOperator": "AND",
           "disableTemplating": true,
           "fallbackTo404": false
@@ -150,9 +142,7 @@
           "headers": [{ "key": "Content-Type", "value": "application/json" }],
           "filePath": "",
           "sendFileAsBody": false,
-          "rules": [
-            { "target": "body", "modifier": "offset", "value": "6", "operator": "equals" }
-          ],
+          "rules": [{ "target": "body", "modifier": "offset", "value": "6", "operator": "equals" }],
           "rulesOperator": "AND",
           "disableTemplating": true,
           "fallbackTo404": false

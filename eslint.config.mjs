@@ -4,7 +4,15 @@ import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: ['dist/', 'drizzle/', 'coverage/', 'node_modules/', '*.config.*', '*.mjs'],
+    ignores: [
+      'dist/',
+      'drizzle/',
+      'coverage/',
+      'node_modules/',
+      'scripts/', // dev utilities, outside the tsconfig project
+      '*.config.*',
+      '*.mjs',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

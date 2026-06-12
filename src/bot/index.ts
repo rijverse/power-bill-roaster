@@ -5,8 +5,15 @@ import { getProvider } from '../providers';
 import { ServerConfig } from '../config';
 import { balanceStatusMessage } from '../notifications/telegram-templates';
 import { RateLimiter } from '../core/rate-limiter';
-import { maxMetersFor } from '../core/plans';
+import { maxMetersFor, smsPerMonthFor, priceBdtFor, isPurchasablePlan } from '../core/plans';
 import { predictRunOut } from '../core/prediction';
+import { normalizeBdPhone } from '../core/phone';
+import { SubscriptionService } from '../billing';
+import { signDashboardToken } from '../web/token';
+import { eraseUser } from '../core/erase-user';
+
+const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
+const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
 
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
@@ -28,8 +35,13 @@ const HELP_TEXT = [
   '/balance - check balances right now',
   '/threshold <low> <critical> - set alert levels (e.g. /threshold 200 100)',
   '/nickname <name> - name your meter (e.g. "Flat 3B")',
+  '/sms <phone> - get alerts by SMS too (paid plans)',
+  '/plan - your current plan',
+  '/upgrade - more meters, SMS alerts',
+  '/dashboard - balance history charts in your browser',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
+  '/delete - erase your account and all data',
   '/privacy - what we store and why',
   '/help - this message',
 ].join('\n');
@@ -40,17 +52,18 @@ const PRIVACY_TEXT = [
   '*What I store:* your Telegram chat id, the account & meter numbers you register, and the balance history I read for them.',
   '*Why:* that is literally the product - I cannot watch a balance without them.',
   '*What I never do:* sell or share your data, message anyone but you, or store DESCO credentials (there are none - balances are read with just the account/meter numbers).',
-  '*Leaving:* /stop pauses all monitoring immediately. Want your data fully erased? Tell me via /stop and contact the operator.',
+  '*Leaving:* /stop pauses all monitoring immediately. /delete erases your account and every byte of your data - no questions, no email required.',
   '',
   '_Power Roast is an independent project, not affiliated with DESCO._',
 ].join('\n');
 
-export function createBot(db: Db, config: ServerConfig): Bot {
+export function createBot(db: Db, config: ServerConfig, subscriptions: SubscriptionService): Bot {
   const bot = new Bot(
     config.telegramBotToken,
     config.telegramApiRoot ? { client: { apiRoot: config.telegramApiRoot } } : undefined
   );
   const pending = new Map<number, PendingRegistration>();
+  const pendingDeletes = new Map<number, number>(); // chatId -> confirm-by timestamp
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
 
   async function findUser(chatId: number) {
@@ -176,6 +189,166 @@ export function createBot(db: Db, config: ServerConfig): Bot {
     await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
   });
 
+  bot.command('dashboard', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    const token = signDashboardToken(
+      user.id,
+      Date.now() + DASHBOARD_LINK_TTL_MS,
+      config.dashboardSecret
+    );
+    await ctx.reply(
+      [
+        `Your dashboard (link valid 24h, then ask me again):`,
+        `${config.publicBaseUrl}/dash?t=${token}`,
+      ].join('\n')
+    );
+  });
+
+  bot.command('plan', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    const lines = [
+      `Plan: *${user.plan}*`,
+      `Meters: up to ${maxMetersFor(user.plan)}`,
+      `SMS budget: ${smsPerMonthFor(user.plan)}/month`,
+    ];
+    const subscription = await subscriptions.activeFor(user.id);
+    if (subscription?.currentPeriodEnd) {
+      lines.push(`Renews/expires: ${subscription.currentPeriodEnd.toDateString()}`);
+    }
+    if (user.plan === 'free') {
+      lines.push('', 'Want SMS alerts and more meters? /upgrade');
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  });
+
+  bot.command('upgrade', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    const requested = (ctx.match ?? '').trim().toLowerCase();
+    if (!isPurchasablePlan(requested)) {
+      await ctx.reply(
+        [
+          '*Plans*',
+          '',
+          `*plus* - ৳${priceBdtFor('plus')}/month: 5 meters, ${smsPerMonthFor('plus')} SMS/month, hourly-grade attention`,
+          `*business* - ৳${priceBdtFor('business')}/month: unlimited meters, ${smsPerMonthFor('business')} SMS/month, for landlords`,
+          '',
+          'Pick one: /upgrade plus  or  /upgrade business',
+        ].join('\n'),
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+    if (user.plan === requested) {
+      await ctx.reply(`You're already on ${requested}. Generous, but no.`);
+      return;
+    }
+
+    try {
+      const result = await subscriptions.startUpgrade(user, requested);
+      if (result.activated) {
+        await ctx.reply(
+          `✅ You're on *${requested}* now. SMS budget: ${smsPerMonthFor(requested)}/month. Add a phone with /sms <number>.`,
+          { parse_mode: 'Markdown' }
+        );
+      } else if (result.paymentUrl) {
+        await ctx.reply(`Complete your payment here: ${result.paymentUrl}`);
+      } else {
+        await ctx.reply('Payment is pending - I will confirm once it clears.');
+      }
+    } catch (error) {
+      console.error('Upgrade failed:', error);
+      await ctx.reply(
+        'Payments are not live yet - real billing is around the corner. Watch this space.'
+      );
+    }
+  });
+
+  // operator-only: /grant <telegram chat id> <plan> [days]
+  bot.command('grant', async ctx => {
+    if (config.adminChatId === null || ctx.chat.id !== config.adminChatId) {
+      return;
+    }
+    const [chatIdRaw, plan, daysRaw] = (ctx.match ?? '').trim().split(/\s+/);
+    const targetChatId = parseInt(chatIdRaw);
+    const days = daysRaw ? parseInt(daysRaw) : 30;
+    if (!Number.isFinite(targetChatId) || !isPurchasablePlan(plan) || !Number.isFinite(days)) {
+      await ctx.reply('Usage: /grant <telegram chat id> <plus|business> [days=30]');
+      return;
+    }
+    const [target] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.telegramChatId, targetChatId));
+    if (!target) {
+      await ctx.reply(`No user with chat id ${targetChatId}.`);
+      return;
+    }
+    await subscriptions.grant(target.id, plan, days);
+    await ctx.reply(
+      `Granted ${plan} to user ${target.id} (chat ${targetChatId}) for ${days} days.`
+    );
+  });
+
+  bot.command('sms', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('Register a meter first with /register.');
+      return;
+    }
+    const budget = smsPerMonthFor(user.plan);
+    if (budget === 0) {
+      await ctx.reply(
+        'SMS alerts are a paid feature - they reach you even when the power (and your WiFi) is already gone. Paid plans are coming soon; Telegram alerts stay free forever.'
+      );
+      return;
+    }
+
+    const phone = normalizeBdPhone((ctx.match ?? '').trim());
+    if (!phone) {
+      await ctx.reply('Usage: /sms <BD mobile number> - e.g. /sms 01712345678');
+      return;
+    }
+
+    const [existing] = await db
+      .select()
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.userId, user.id),
+          eq(schema.channels.type, 'sms'),
+          eq(schema.channels.address, phone)
+        )
+      );
+    if (existing) {
+      await db
+        .update(schema.channels)
+        .set({ enabled: true })
+        .where(eq(schema.channels.id, existing.id));
+    } else {
+      await db.insert(schema.channels).values({
+        userId: user.id,
+        type: 'sms',
+        address: phone,
+        verified: false,
+      });
+    }
+    await ctx.reply(
+      `Done. Low/critical alerts will also go to ${phone} (up to ${budget} SMS/month on your plan).`
+    );
+  });
+
   bot.command('nickname', async ctx => {
     const args = (ctx.match ?? '').trim();
     const meters = await userMeters(ctx.chat.id);
@@ -225,6 +398,38 @@ export function createBot(db: Db, config: ServerConfig): Bot {
         `📟 ${m.nickname ?? m.meterNo} - account ${m.accountNo}, thresholds ৳${m.lowThreshold}/৳${m.criticalThreshold}`
     );
     await ctx.reply(lines.join('\n'));
+  });
+
+  bot.command('delete', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('Nothing to delete - you have no account.');
+      return;
+    }
+    const arg = (ctx.match ?? '').trim();
+    if (arg !== 'CONFIRM') {
+      pendingDeletes.set(ctx.chat.id, Date.now() + DELETE_CONFIRM_WINDOW_MS);
+      await ctx.reply(
+        [
+          '⚠️ This permanently erases your account: meters, balance history, alerts, subscription - everything. No undo.',
+          '',
+          'If you mean it, send within 60 seconds:',
+          '/delete CONFIRM',
+        ].join('\n')
+      );
+      return;
+    }
+    const confirmBy = pendingDeletes.get(ctx.chat.id);
+    if (!confirmBy || Date.now() > confirmBy) {
+      await ctx.reply('That confirmation expired. Start again with /delete.');
+      return;
+    }
+    pendingDeletes.delete(ctx.chat.id);
+    pending.delete(ctx.chat.id);
+    await eraseUser(db, user.id);
+    await ctx.reply(
+      'Done. Everything is erased. It was an honor roasting you. The lights are your problem now. 🕯️'
+    );
   });
 
   bot.command('stop', async ctx => {

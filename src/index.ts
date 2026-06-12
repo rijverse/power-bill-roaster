@@ -1,53 +1,33 @@
-import http from 'http';
-import { getServerConfig, ServerConfig } from './config';
+import { getServerConfig } from './config';
 import { createDb } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
-
-// 200 while poll cycles complete on schedule, 503 once one is overdue
-// lets an external uptime monitor catch a wedged poller, not just a dead
-// process.
-function createHealthServer(scheduler: Scheduler, config: ServerConfig): http.Server {
-  const startedAt = Date.now();
-  return http.createServer((req, res) => {
-    if (req.url !== '/health') {
-      res.writeHead(404).end();
-      return;
-    }
-    const intervalMs = config.pollIntervalHours * 60 * 60 * 1000;
-    const last = scheduler.lastCycleCompletedAt;
-    // allow one full interval of grace before the first cycle completes
-    const overdue = last
-      ? Date.now() - last.getTime() > intervalMs * 2
-      : Date.now() - startedAt > intervalMs;
-    res.writeHead(overdue ? 503 : 200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        status: overdue ? 'stale' : 'ok',
-        lastPollCycleAt: last?.toISOString() ?? null,
-      })
-    );
-  });
-}
+import { Dispatcher } from './notifications/dispatcher';
+import { createSmsGateway } from './notifications/sms';
+import { createPaymentProvider, SubscriptionService } from './billing';
+import { createWebServer } from './web/server';
 
 async function main(): Promise<void> {
   const config = getServerConfig();
   const { db, pool } = createDb(config.databaseUrl);
 
-  const bot = createBot(db, config);
-  const scheduler = new Scheduler(
-    db,
-    {
-      sendTelegram: async (chatId, text) => {
-        await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-      },
+  const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
+  const bot = createBot(db, config, subscriptions);
+  const telegramSender = {
+    sendTelegram: async (chatId: number, text: string) => {
+      await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     },
-    config
-  );
+  };
+  const smsGateway = createSmsGateway(config);
+  if (smsGateway) {
+    console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
+  }
+  const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
+  const scheduler = new Scheduler(db, telegramSender, dispatcher, config, subscriptions);
 
-  const healthServer = createHealthServer(scheduler, config);
+  const healthServer = createWebServer(db, scheduler, config);
   healthServer.listen(config.port, () => {
-    console.log(`Health endpoint on :${config.port}/health`);
+    console.log(`Web server on :${config.port} (/health, /dash)`);
   });
 
   const shutdown = async (signal: string) => {
@@ -62,6 +42,28 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   scheduler.start();
+
+  // Telegram's "/" autocomplete menu (user-facing commands only)
+  try {
+    await bot.api.setMyCommands([
+      { command: 'register', description: 'Add your DESCO meter' },
+      { command: 'balance', description: 'Check balances right now' },
+      { command: 'dashboard', description: 'Balance history charts' },
+      { command: 'threshold', description: 'Set alert levels' },
+      { command: 'nickname', description: 'Name your meter' },
+      { command: 'sms', description: 'Get alerts by SMS (paid plans)' },
+      { command: 'plan', description: 'Your current plan' },
+      { command: 'upgrade', description: 'More meters, SMS alerts' },
+      { command: 'meters', description: 'List your meters' },
+      { command: 'stop', description: 'Pause all monitoring' },
+      { command: 'delete', description: 'Erase your account and data' },
+      { command: 'privacy', description: 'What we store and why' },
+      { command: 'help', description: 'All commands' },
+    ]);
+  } catch (error) {
+    console.warn('setMyCommands failed (fine in mock mode):', error);
+  }
+
   console.log('Starting Telegram bot (long polling)…');
   await bot.start();
 }

@@ -3,12 +3,12 @@ import { Db, schema } from '../db';
 import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
 import { predictRunOut } from './prediction';
 import { getProvider } from '../providers';
-import { renderAlert, MeterContext } from '../notifications/telegram-templates';
+import { MeterContext } from '../notifications/telegram-templates';
+import { Dispatcher, TelegramSender } from '../notifications/dispatcher';
+import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
 
-export interface AlertSender {
-  sendTelegram(chatId: number, text: string): Promise<void>;
-}
+export type AlertSender = TelegramSender;
 
 const MAX_FETCH_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 2000;
@@ -32,7 +32,9 @@ export class Scheduler {
   constructor(
     private db: Db,
     private sender: AlertSender,
-    private config: ServerConfig
+    private dispatcher: Dispatcher,
+    private config: ServerConfig,
+    private subscriptions: SubscriptionService
   ) {}
 
   start(): void {
@@ -60,6 +62,14 @@ export class Scheduler {
     let failed = 0;
 
     try {
+      // lapsed subscriptions downgrade before alerts go out, so SMS budgets
+      // and meter caps reflect the plan the user is actually paying for
+      try {
+        await this.subscriptions.expireOverdue();
+      } catch (error) {
+        console.error('Subscription expiry sweep failed:', error);
+      }
+
       const rows = await this.db
         .select({ meter: schema.meters, user: schema.users })
         .from(schema.meters)
@@ -191,25 +201,7 @@ export class Scheduler {
         balance
       ),
     };
-    const message = renderAlert(decision.action, ctx);
-    if (!message || user.telegramChatId === null) {
-      return;
-    }
-
-    let deliveryStatus = 'sent';
-    try {
-      await this.sender.sendTelegram(user.telegramChatId, message);
-    } catch (error) {
-      deliveryStatus = 'failed';
-      console.error(`Failed to deliver alert for meter ${meter.id}:`, error);
-    }
-
-    await this.db.insert(schema.alertsLog).values({
-      meterId: meter.id,
-      level: decision.level,
-      action: decision.action,
-      deliveryStatus,
-    });
+    await this.dispatcher.dispatchAlert(user, meter, decision.action, decision.level, ctx);
   }
 
   private async alarmOperator(text: string): Promise<void> {

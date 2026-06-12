@@ -96,8 +96,24 @@ export const alertsLog = pgTable('alerts_log', {
   sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const subscriptions = pgTable('subscriptions', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id),
+  plan: text('plan').notNull(), // plus | business
+  provider: text('provider').notNull(), // sandbox | bkash | sslcommerz | manual
+  status: text('status').notNull().default('pending'), // pending | active | cancelled | expired
+  externalRef: text('external_ref'), // provider-side payment/agreement id
+  currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
+  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type Meter = typeof meters.$inferSelect;
 export type Reading = typeof readings.$inferSelect;
 export type AlertStateRow = typeof alertState.$inferSelect;
 export type Channel = typeof channels.$inferSelect;
+export type Subscription = typeof subscriptions.$inferSelect;

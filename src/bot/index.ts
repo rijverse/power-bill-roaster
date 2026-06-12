@@ -5,8 +5,9 @@ import { getProvider } from '../providers';
 import { ServerConfig } from '../config';
 import { balanceStatusMessage } from '../notifications/telegram-templates';
 import { RateLimiter } from '../core/rate-limiter';
-import { maxMetersFor } from '../core/plans';
+import { maxMetersFor, smsPerMonthFor } from '../core/plans';
 import { predictRunOut } from '../core/prediction';
+import { normalizeBdPhone } from '../core/phone';
 
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
@@ -28,6 +29,7 @@ const HELP_TEXT = [
   '/balance - check balances right now',
   '/threshold <low> <critical> - set alert levels (e.g. /threshold 200 100)',
   '/nickname <name> - name your meter (e.g. "Flat 3B")',
+  '/sms <phone> - get alerts by SMS too (paid plans)',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
   '/privacy - what we store and why',
@@ -174,6 +176,54 @@ export function createBot(db: Db, config: ServerConfig): Bot {
         .where(eq(schema.meters.id, meter.id));
     }
     await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
+  });
+
+  bot.command('sms', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('Register a meter first with /register.');
+      return;
+    }
+    const budget = smsPerMonthFor(user.plan);
+    if (budget === 0) {
+      await ctx.reply(
+        'SMS alerts are a paid feature - they reach you even when the power (and your WiFi) is already gone. Paid plans are coming soon; Telegram alerts stay free forever.'
+      );
+      return;
+    }
+
+    const phone = normalizeBdPhone((ctx.match ?? '').trim());
+    if (!phone) {
+      await ctx.reply('Usage: /sms <BD mobile number> - e.g. /sms 01712345678');
+      return;
+    }
+
+    const [existing] = await db
+      .select()
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.userId, user.id),
+          eq(schema.channels.type, 'sms'),
+          eq(schema.channels.address, phone)
+        )
+      );
+    if (existing) {
+      await db
+        .update(schema.channels)
+        .set({ enabled: true })
+        .where(eq(schema.channels.id, existing.id));
+    } else {
+      await db.insert(schema.channels).values({
+        userId: user.id,
+        type: 'sms',
+        address: phone,
+        verified: false,
+      });
+    }
+    await ctx.reply(
+      `Done. Low/critical alerts will also go to ${phone} (up to ${budget} SMS/month on your plan).`
+    );
   });
 
   bot.command('nickname', async ctx => {

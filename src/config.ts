@@ -35,6 +35,34 @@ export interface ServerConfig {
     low: number;
     critical: number;
   };
+  sms:
+    | { gateway: null }
+    | { gateway: 'console' }
+    | { gateway: 'bulksmsbd'; bulksmsbd: { apiKey: string; senderId: string; baseUrl: string } };
+}
+
+function getSmsConfig(): ServerConfig['sms'] {
+  const gateway = process.env.SMS_GATEWAY;
+  if (!gateway) {
+    return { gateway: null };
+  }
+  if (gateway === 'console') {
+    return { gateway: 'console' };
+  }
+  if (gateway === 'bulksmsbd') {
+    if (!process.env.BULKSMSBD_API_KEY || !process.env.BULKSMSBD_SENDER_ID) {
+      throw new Error('SMS_GATEWAY=bulksmsbd requires BULKSMSBD_API_KEY and BULKSMSBD_SENDER_ID');
+    }
+    return {
+      gateway: 'bulksmsbd',
+      bulksmsbd: {
+        apiKey: process.env.BULKSMSBD_API_KEY,
+        senderId: process.env.BULKSMSBD_SENDER_ID,
+        baseUrl: process.env.BULKSMSBD_BASE_URL || 'http://bulksmsbd.net/api',
+      },
+    };
+  }
+  throw new Error(`Unknown SMS_GATEWAY: ${gateway}`);
 }
 
 const REQUIRED_SERVER_ENV_VARS = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN'] as const;
@@ -58,6 +86,7 @@ export function getServerConfig(): ServerConfig {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
     },
+    sms: getSmsConfig(),
   };
 }
 

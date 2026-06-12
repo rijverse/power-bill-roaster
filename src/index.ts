@@ -3,6 +3,8 @@ import { getServerConfig, ServerConfig } from './config';
 import { createDb } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
+import { Dispatcher } from './notifications/dispatcher';
+import { createSmsGateway } from './notifications/sms';
 
 // 200 while poll cycles complete on schedule, 503 once one is overdue
 // lets an external uptime monitor catch a wedged poller, not just a dead
@@ -35,15 +37,17 @@ async function main(): Promise<void> {
   const { db, pool } = createDb(config.databaseUrl);
 
   const bot = createBot(db, config);
-  const scheduler = new Scheduler(
-    db,
-    {
-      sendTelegram: async (chatId, text) => {
-        await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-      },
+  const telegramSender = {
+    sendTelegram: async (chatId: number, text: string) => {
+      await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     },
-    config
-  );
+  };
+  const smsGateway = createSmsGateway(config);
+  if (smsGateway) {
+    console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
+  }
+  const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
+  const scheduler = new Scheduler(db, telegramSender, dispatcher, config);
 
   const healthServer = createHealthServer(scheduler, config);
   healthServer.listen(config.port, () => {

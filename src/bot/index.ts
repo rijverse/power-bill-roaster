@@ -9,6 +9,9 @@ import { maxMetersFor, smsPerMonthFor, priceBdtFor, isPurchasablePlan } from '..
 import { predictRunOut } from '../core/prediction';
 import { normalizeBdPhone } from '../core/phone';
 import { SubscriptionService } from '../billing';
+import { signDashboardToken } from '../web/token';
+
+const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
@@ -33,6 +36,7 @@ const HELP_TEXT = [
   '/sms <phone> - get alerts by SMS too (paid plans)',
   '/plan - your current plan',
   '/upgrade - more meters, SMS alerts',
+  '/dashboard - balance history charts in your browser',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
   '/privacy - what we store and why',
@@ -179,6 +183,25 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
         .where(eq(schema.meters.id, meter.id));
     }
     await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
+  });
+
+  bot.command('dashboard', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    const token = signDashboardToken(
+      user.id,
+      Date.now() + DASHBOARD_LINK_TTL_MS,
+      config.dashboardSecret
+    );
+    await ctx.reply(
+      [
+        `Your dashboard (link valid 24h, then ask me again):`,
+        `${config.publicBaseUrl}/dash?t=${token}`,
+      ].join('\n')
+    );
   });
 
   bot.command('plan', async ctx => {

@@ -1,37 +1,11 @@
-import http from 'http';
-import { getServerConfig, ServerConfig } from './config';
+import { getServerConfig } from './config';
 import { createDb } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
 import { Dispatcher } from './notifications/dispatcher';
 import { createSmsGateway } from './notifications/sms';
 import { createPaymentProvider, SubscriptionService } from './billing';
-
-// 200 while poll cycles complete on schedule, 503 once one is overdue
-// lets an external uptime monitor catch a wedged poller, not just a dead
-// process.
-function createHealthServer(scheduler: Scheduler, config: ServerConfig): http.Server {
-  const startedAt = Date.now();
-  return http.createServer((req, res) => {
-    if (req.url !== '/health') {
-      res.writeHead(404).end();
-      return;
-    }
-    const intervalMs = config.pollIntervalHours * 60 * 60 * 1000;
-    const last = scheduler.lastCycleCompletedAt;
-    // allow one full interval of grace before the first cycle completes
-    const overdue = last
-      ? Date.now() - last.getTime() > intervalMs * 2
-      : Date.now() - startedAt > intervalMs;
-    res.writeHead(overdue ? 503 : 200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        status: overdue ? 'stale' : 'ok',
-        lastPollCycleAt: last?.toISOString() ?? null,
-      })
-    );
-  });
-}
+import { createWebServer } from './web/server';
 
 async function main(): Promise<void> {
   const config = getServerConfig();
@@ -51,9 +25,9 @@ async function main(): Promise<void> {
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
   const scheduler = new Scheduler(db, telegramSender, dispatcher, config, subscriptions);
 
-  const healthServer = createHealthServer(scheduler, config);
+  const healthServer = createWebServer(db, scheduler, config);
   healthServer.listen(config.port, () => {
-    console.log(`Health endpoint on :${config.port}/health`);
+    console.log(`Web server on :${config.port} (/health, /dash)`);
   });
 
   const shutdown = async (signal: string) => {

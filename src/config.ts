@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 
 export interface Config {
   desco: {
@@ -31,6 +32,10 @@ export interface ServerConfig {
   reminderIntervalHours: number;
   jitterMaxMs: number;
   adminChatId: number | null;
+  /** where dashboard links point, e.g. https://app.example.com */
+  publicBaseUrl: string;
+  /** signs dashboard links; falls back to a hash of the bot token */
+  dashboardSecret: string;
   defaultThresholds: {
     low: number;
     critical: number;
@@ -138,6 +143,10 @@ export function getServerConfig(): ServerConfig {
     reminderIntervalHours: parseFloat(process.env.REMINDER_INTERVAL_HOURS || '24'),
     jitterMaxMs: parseInt(process.env.JITTER_MAX_MS || '4000'),
     adminChatId: process.env.ADMIN_CHAT_ID ? parseInt(process.env.ADMIN_CHAT_ID) : null,
+    publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || '3000'}`,
+    dashboardSecret:
+      process.env.DASHBOARD_SECRET ||
+      crypto.createHash('sha256').update(`dash:${process.env.TELEGRAM_BOT_TOKEN}`).digest('hex'),
     defaultThresholds: {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),

@@ -1,4 +1,5 @@
 import { eq, and, gte } from 'drizzle-orm';
+import type { Pool } from 'pg';
 import { Db, schema } from '../db';
 import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
 import { predictRunOut } from './prediction';
@@ -18,6 +19,9 @@ const ERROR_RATE_ALARM = 0.5;
 const ERROR_RATE_MIN_SAMPLE = 5;
 // burn rate is computed from the last week of readings
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// arbitrary app-wide constant identifying "the poll cycle" advisory lock;
+// guarantees only one instance polls even if two processes share the DB
+const POLL_LOCK_KEY = 727274001;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -31,6 +35,7 @@ export class Scheduler {
 
   constructor(
     private db: Db,
+    private pool: Pool,
     private sender: AlertSender,
     private dispatcher: Dispatcher,
     private config: ServerConfig,
@@ -57,11 +62,25 @@ export class Scheduler {
       return;
     }
     this.running = true;
+    // advisory locks are session-scoped: acquire and release must happen on
+    // the same connection, so hold one pooled client for the whole cycle
+    const lockClient = await this.pool.connect();
+    let locked = false;
     const startedAt = Date.now();
     let ok = 0;
     let failed = 0;
 
     try {
+      const lockResult = await lockClient.query<{ locked: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS locked',
+        [POLL_LOCK_KEY]
+      );
+      locked = lockResult.rows[0]?.locked === true;
+      if (!locked) {
+        console.warn('Another instance holds the poll lock, skipping this cycle');
+        return;
+      }
+
       // lapsed subscriptions downgrade before alerts go out, so SMS budgets
       // and meter caps reflect the plan the user is actually paying for
       try {
@@ -105,6 +124,14 @@ export class Scheduler {
       );
       this.lastCycleCompletedAt = new Date();
     } finally {
+      if (locked) {
+        try {
+          await lockClient.query('SELECT pg_advisory_unlock($1)', [POLL_LOCK_KEY]);
+        } catch (error) {
+          console.error('Failed to release poll lock:', error);
+        }
+      }
+      lockClient.release();
       this.running = false;
     }
   }

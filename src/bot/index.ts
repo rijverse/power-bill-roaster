@@ -11,6 +11,7 @@ import { normalizeBdPhone } from '../core/phone';
 import { SubscriptionService } from '../billing';
 import { signDashboardToken } from '../web/token';
 import { eraseUser } from '../core/erase-user';
+import { sanitizeNickname } from '../core/sanitize';
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
@@ -376,6 +377,13 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
       return;
     }
 
+    name = sanitizeNickname(name);
+    if (!name) {
+      await ctx.reply(
+        'After removing the fancy characters there was nothing left. Letters and numbers, please.'
+      );
+      return;
+    }
     if (name.length > MAX_NICKNAME_LENGTH) {
       await ctx.reply(
         `That's a novel, not a nickname. Keep it under ${MAX_NICKNAME_LENGTH} characters.`

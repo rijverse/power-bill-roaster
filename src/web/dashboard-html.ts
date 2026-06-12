@@ -39,6 +39,7 @@ export function dashboardHtml(token: string): string {
 <script>
 const token = ${JSON.stringify(token)};
 const fmt = n => '\\u09F3' + n.toFixed(2);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
 async function load() {
   const res = await fetch('/dash/data?t=' + encodeURIComponent(token));
   const app = document.getElementById('app');
@@ -57,7 +58,7 @@ async function load() {
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML =
-      '<div class="meter-head"><span class="meter-name">📟 ' + meter.label + '</span>' +
+      '<div class="meter-head"><span class="meter-name">📟 ' + esc(meter.label) + '</span>' +
       '<span class="balance ' + cls + '">' + (meter.balance === null ? '—' : fmt(meter.balance)) + '</span></div>' +
       (meter.prediction ? '<div class="prediction">🔮 ~' + meter.prediction.daysLeft.toFixed(1) + ' days left at ' + fmt(meter.prediction.burnPerDay) + '/day</div>' : '') +
       '<canvas height="110"></canvas>';

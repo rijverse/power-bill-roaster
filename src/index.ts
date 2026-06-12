@@ -18,12 +18,23 @@ async function main(): Promise<void> {
       await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
     },
   };
+  subscriptions.notifyDowngrade = async (chatId, expiredPlan, pausedMeters) => {
+    const pausedNote =
+      pausedMeters > 0
+        ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
+        : '';
+    await telegramSender.sendTelegram(
+      chatId,
+      `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`
+    );
+  };
+
   const smsGateway = createSmsGateway(config);
   if (smsGateway) {
     console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
   }
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
-  const scheduler = new Scheduler(db, telegramSender, dispatcher, config, subscriptions);
+  const scheduler = new Scheduler(db, pool, telegramSender, dispatcher, config, subscriptions);
 
   const healthServer = createWebServer(db, scheduler, config);
   healthServer.listen(config.port, () => {

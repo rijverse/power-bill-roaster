@@ -1,6 +1,6 @@
-import { eq, and, lt } from 'drizzle-orm';
+import { eq, and, lt, inArray } from 'drizzle-orm';
 import { Db, schema } from '../db';
-import { priceBdtFor } from '../core/plans';
+import { priceBdtFor, maxMetersFor } from '../core/plans';
 import { PaymentProvider } from './types';
 
 const PERIOD_DAYS = 30;
@@ -12,6 +12,11 @@ export function periodEnd(start: Date, days = PERIOD_DAYS): Date {
 }
 
 export class SubscriptionService {
+  /** wired in after the bot exists; tells the user their plan lapsed */
+  notifyDowngrade:
+    | ((chatId: number, expiredPlan: string, pausedMeters: number) => Promise<void>)
+    | null = null;
+
   constructor(
     private db: Db,
     private provider: PaymentProvider
@@ -103,7 +108,43 @@ export class SubscriptionService {
         .update(schema.users)
         .set({ plan: 'free' })
         .where(eq(schema.users.id, subscription.userId));
-      console.log(`Subscription ${subscription.id} expired; user ${subscription.userId} -> free`);
+
+      // enforce the free-plan meter cap, or downgraded users would keep
+      // paid-tier service forever: keep the oldest meters, pause the rest
+      const cap = maxMetersFor('free');
+      const activeMeters = await this.db
+        .select()
+        .from(schema.meters)
+        .where(and(eq(schema.meters.userId, subscription.userId), eq(schema.meters.active, true)))
+        .orderBy(schema.meters.createdAt);
+      const excess = activeMeters.slice(cap);
+      if (excess.length > 0) {
+        await this.db
+          .update(schema.meters)
+          .set({ active: false })
+          .where(
+            inArray(
+              schema.meters.id,
+              excess.map(m => m.id)
+            )
+          );
+      }
+
+      const [user] = await this.db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, subscription.userId));
+      if (this.notifyDowngrade && user?.telegramChatId != null) {
+        try {
+          await this.notifyDowngrade(user.telegramChatId, subscription.plan, excess.length);
+        } catch (error) {
+          console.error(`Downgrade notice failed for user ${subscription.userId}:`, error);
+        }
+      }
+      console.log(
+        `Subscription ${subscription.id} expired; user ${subscription.userId} -> free` +
+          (excess.length > 0 ? `, paused ${excess.length} meter(s)` : '')
+      );
     }
     return overdue.length;
   }

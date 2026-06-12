@@ -5,9 +5,10 @@ import { getProvider } from '../providers';
 import { ServerConfig } from '../config';
 import { balanceStatusMessage } from '../notifications/telegram-templates';
 import { RateLimiter } from '../core/rate-limiter';
-import { maxMetersFor, smsPerMonthFor } from '../core/plans';
+import { maxMetersFor, smsPerMonthFor, priceBdtFor, isPurchasablePlan } from '../core/plans';
 import { predictRunOut } from '../core/prediction';
 import { normalizeBdPhone } from '../core/phone';
+import { SubscriptionService } from '../billing';
 
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
@@ -30,6 +31,8 @@ const HELP_TEXT = [
   '/threshold <low> <critical> - set alert levels (e.g. /threshold 200 100)',
   '/nickname <name> - name your meter (e.g. "Flat 3B")',
   '/sms <phone> - get alerts by SMS too (paid plans)',
+  '/plan - your current plan',
+  '/upgrade - more meters, SMS alerts',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
   '/privacy - what we store and why',
@@ -47,7 +50,7 @@ const PRIVACY_TEXT = [
   '_Power Roast is an independent project, not affiliated with DESCO._',
 ].join('\n');
 
-export function createBot(db: Db, config: ServerConfig): Bot {
+export function createBot(db: Db, config: ServerConfig, subscriptions: SubscriptionService): Bot {
   const bot = new Bot(
     config.telegramBotToken,
     config.telegramApiRoot ? { client: { apiRoot: config.telegramApiRoot } } : undefined
@@ -176,6 +179,99 @@ export function createBot(db: Db, config: ServerConfig): Bot {
         .where(eq(schema.meters.id, meter.id));
     }
     await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
+  });
+
+  bot.command('plan', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    const lines = [
+      `Plan: *${user.plan}*`,
+      `Meters: up to ${maxMetersFor(user.plan)}`,
+      `SMS budget: ${smsPerMonthFor(user.plan)}/month`,
+    ];
+    const subscription = await subscriptions.activeFor(user.id);
+    if (subscription?.currentPeriodEnd) {
+      lines.push(`Renews/expires: ${subscription.currentPeriodEnd.toDateString()}`);
+    }
+    if (user.plan === 'free') {
+      lines.push('', 'Want SMS alerts and more meters? /upgrade');
+    }
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  });
+
+  bot.command('upgrade', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    const requested = (ctx.match ?? '').trim().toLowerCase();
+    if (!isPurchasablePlan(requested)) {
+      await ctx.reply(
+        [
+          '*Plans*',
+          '',
+          `*plus* - ৳${priceBdtFor('plus')}/month: 5 meters, ${smsPerMonthFor('plus')} SMS/month, hourly-grade attention`,
+          `*business* - ৳${priceBdtFor('business')}/month: unlimited meters, ${smsPerMonthFor('business')} SMS/month, for landlords`,
+          '',
+          'Pick one: /upgrade plus  or  /upgrade business',
+        ].join('\n'),
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+    if (user.plan === requested) {
+      await ctx.reply(`You're already on ${requested}. Generous, but no.`);
+      return;
+    }
+
+    try {
+      const result = await subscriptions.startUpgrade(user, requested);
+      if (result.activated) {
+        await ctx.reply(
+          `✅ You're on *${requested}* now. SMS budget: ${smsPerMonthFor(requested)}/month. Add a phone with /sms <number>.`,
+          { parse_mode: 'Markdown' }
+        );
+      } else if (result.paymentUrl) {
+        await ctx.reply(`Complete your payment here: ${result.paymentUrl}`);
+      } else {
+        await ctx.reply('Payment is pending - I will confirm once it clears.');
+      }
+    } catch (error) {
+      console.error('Upgrade failed:', error);
+      await ctx.reply(
+        'Payments are not live yet - real billing is around the corner. Watch this space.'
+      );
+    }
+  });
+
+  // operator-only: /grant <telegram chat id> <plan> [days]
+  bot.command('grant', async ctx => {
+    if (config.adminChatId === null || ctx.chat.id !== config.adminChatId) {
+      return;
+    }
+    const [chatIdRaw, plan, daysRaw] = (ctx.match ?? '').trim().split(/\s+/);
+    const targetChatId = parseInt(chatIdRaw);
+    const days = daysRaw ? parseInt(daysRaw) : 30;
+    if (!Number.isFinite(targetChatId) || !isPurchasablePlan(plan) || !Number.isFinite(days)) {
+      await ctx.reply('Usage: /grant <telegram chat id> <plus|business> [days=30]');
+      return;
+    }
+    const [target] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.telegramChatId, targetChatId));
+    if (!target) {
+      await ctx.reply(`No user with chat id ${targetChatId}.`);
+      return;
+    }
+    await subscriptions.grant(target.id, plan, days);
+    await ctx.reply(
+      `Granted ${plan} to user ${target.id} (chat ${targetChatId}) for ${days} days.`
+    );
   });
 
   bot.command('sms', async ctx => {

@@ -39,6 +39,62 @@ export interface ServerConfig {
     | { gateway: null }
     | { gateway: 'console' }
     | { gateway: 'bulksmsbd'; bulksmsbd: { apiKey: string; senderId: string; baseUrl: string } };
+  billing:
+    | { provider: 'sandbox' }
+    | {
+        provider: 'bkash';
+        bkash: {
+          appKey: string;
+          appSecret: string;
+          username: string;
+          password: string;
+          baseUrl: string;
+        };
+      }
+    | {
+        provider: 'sslcommerz';
+        sslcommerz: { storeId: string; storePassword: string; baseUrl: string };
+      };
+}
+
+function getBillingConfig(): ServerConfig['billing'] {
+  const provider = process.env.BILLING_PROVIDER || 'sandbox';
+  if (provider === 'sandbox') {
+    return { provider: 'sandbox' };
+  }
+  if (provider === 'bkash') {
+    const required = ['BKASH_APP_KEY', 'BKASH_APP_SECRET', 'BKASH_USERNAME', 'BKASH_PASSWORD'];
+    const missing = required.filter(key => !process.env[key]);
+    if (missing.length > 0) {
+      throw new Error(`BILLING_PROVIDER=bkash requires: ${missing.join(', ')}`);
+    }
+    return {
+      provider: 'bkash',
+      bkash: {
+        appKey: process.env.BKASH_APP_KEY!,
+        appSecret: process.env.BKASH_APP_SECRET!,
+        username: process.env.BKASH_USERNAME!,
+        password: process.env.BKASH_PASSWORD!,
+        baseUrl: process.env.BKASH_BASE_URL || 'https://tokenized.sandbox.bka.sh/v1.2.0-beta',
+      },
+    };
+  }
+  if (provider === 'sslcommerz') {
+    if (!process.env.SSLCOMMERZ_STORE_ID || !process.env.SSLCOMMERZ_STORE_PASSWORD) {
+      throw new Error(
+        'BILLING_PROVIDER=sslcommerz requires SSLCOMMERZ_STORE_ID and SSLCOMMERZ_STORE_PASSWORD'
+      );
+    }
+    return {
+      provider: 'sslcommerz',
+      sslcommerz: {
+        storeId: process.env.SSLCOMMERZ_STORE_ID,
+        storePassword: process.env.SSLCOMMERZ_STORE_PASSWORD,
+        baseUrl: process.env.SSLCOMMERZ_BASE_URL || 'https://sandbox.sslcommerz.com',
+      },
+    };
+  }
+  throw new Error(`Unknown BILLING_PROVIDER: ${provider}`);
 }
 
 function getSmsConfig(): ServerConfig['sms'] {
@@ -87,6 +143,7 @@ export function getServerConfig(): ServerConfig {
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
     },
     sms: getSmsConfig(),
+    billing: getBillingConfig(),
   };
 }
 

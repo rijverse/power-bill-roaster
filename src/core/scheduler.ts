@@ -5,6 +5,7 @@ import { predictRunOut } from './prediction';
 import { getProvider } from '../providers';
 import { MeterContext } from '../notifications/telegram-templates';
 import { Dispatcher, TelegramSender } from '../notifications/dispatcher';
+import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
 
 export type AlertSender = TelegramSender;
@@ -32,7 +33,8 @@ export class Scheduler {
     private db: Db,
     private sender: AlertSender,
     private dispatcher: Dispatcher,
-    private config: ServerConfig
+    private config: ServerConfig,
+    private subscriptions: SubscriptionService
   ) {}
 
   start(): void {
@@ -60,6 +62,14 @@ export class Scheduler {
     let failed = 0;
 
     try {
+      // lapsed subscriptions downgrade before alerts go out, so SMS budgets
+      // and meter caps reflect the plan the user is actually paying for
+      try {
+        await this.subscriptions.expireOverdue();
+      } catch (error) {
+        console.error('Subscription expiry sweep failed:', error);
+      }
+
       const rows = await this.db
         .select({ meter: schema.meters, user: schema.users })
         .from(schema.meters)

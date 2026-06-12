@@ -148,6 +148,34 @@
           "fallbackTo404": false
         },
         {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000038",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":7,\"message\":{\"message_id\":7,\"date\":1750000060,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"/upgrade plus\",\"entities\":[{\"type\":\"bot_command\",\"offset\":0,\"length\":8}]}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "/upgrade plus (sandbox billing auto-approves)",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [{ "target": "body", "modifier": "offset", "value": "7", "operator": "equals" }],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000039",
+          "body": "{\"ok\":true,\"result\":[{\"update_id\":8,\"message\":{\"message_id\":8,\"date\":1750000070,\"chat\":{\"id\":1111,\"type\":\"private\",\"first_name\":\"Tester\"},\"from\":{\"id\":1111,\"is_bot\":false,\"first_name\":\"Tester\"},\"text\":\"/plan\",\"entities\":[{\"type\":\"bot_command\",\"offset\":0,\"length\":5}]}}]}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "/plan",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [{ "target": "body", "modifier": "offset", "value": "8", "operator": "equals" }],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        },
+        {
           "uuid": "a1b2c3d4-0000-4000-8000-000000000036",
           "body": "{\"ok\":true,\"result\":[]}",
           "latency": 1500,
@@ -156,7 +184,7 @@
           "headers": [{ "key": "Content-Type", "value": "application/json" }],
           "filePath": "",
           "sendFileAsBody": false,
-          "rules": [{ "target": "body", "modifier": "offset", "value": "7", "operator": "equals" }],
+          "rules": [{ "target": "body", "modifier": "offset", "value": "9", "operator": "equals" }],
           "rulesOperator": "AND",
           "disableTemplating": true,
           "fallbackTo404": false

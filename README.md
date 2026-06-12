@@ -136,6 +136,18 @@ bun run build
 bun run test
 ```
 
+### Run Locally (mock mode, no bot token needed)
+
+```bash
+docker compose up -d   # Postgres + Mockoon (fake Telegram & DESCO APIs)
+bun run db:migrate     # first time only
+bun run dev
+```
+
+With the mock-mode block enabled in `.env` (see `.env.example`), a scripted mock user
+registers a meter and the fake ৳42.50 balance trips a critical alert within a minute -
+the whole pipeline runs without a Telegram token or touching DESCO.
+
 ### End-to-End Test
 
 ```bash

@@ -1,3 +1,5 @@
+# local dev: Postgres + Mockoon faking the Telegram and DESCO APIs.
+# Run the app on the host with: bun run dev
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,6 +11,14 @@ services:
       - '5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
+
+  mockoon:
+    image: mockoon/cli:latest
+    command: ['--data', '/data/mock.json', '--port', '8080']
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./mock/telegram-desco-mock.json:/data/mock.json:ro
 
 volumes:
   pgdata:

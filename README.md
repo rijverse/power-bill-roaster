@@ -4,12 +4,15 @@ A TypeScript-based DESCO prepaid electricity balance monitor that sends brutally
 
 ## What It Does
 
-Checks your DESCO prepaid electricity balance and sends savage email notifications at two critical thresholds:
+It checks your DESCO prepaid meter balance and fires off angry emails if you're getting close to zero 
 
-- **Below 150 BDT** (configurable): Warning shot - "Your Electricity About to Ghost You"
-- **Below 100 BDT** (configurable): DEFCON 1 - "You're About to Live in the Stone Age"
+- **Below 150 BDT** (configurable) Warning shot  "Your Electricity About to Ghost You"
+- **Below 100 BDT** (configurable) DEFCON 1  "You're About to Live in the Stone Age"
 
-Runs automatically every 6 hours via GitHub Actions, so you'll never be caught off guard by a sudden blackout.
+## Two Ways to Run It
+
+1. **Self-hosted (free forever) ** just fork this repo, toss your details into GitHub secrets, and the workflow does its thing on a schedule. Zero servers, zero cost. The setup guide below covers this.
+2. **Hosted (coming soon) ** a Telegram bot that does it all for you  no fork, no secrets, just message the bot. Multi-meter support, balance history, and SMS alerts on the way.
 
 ## Screenshots
 <img width="484" height="826" alt="image" src="https://github.com/user-attachments/assets/70212ca2-8a4b-428d-a3c6-5be90eadbf72" />
@@ -22,7 +25,7 @@ Runs automatically every 6 hours via GitHub Actions, so you'll never be caught o
 ```bash
 git clone <your-repo-url>
 cd power-roast
-npm install
+bun install
 ```
 
 ### 2. Configure Environment Variables
@@ -47,12 +50,12 @@ CRITICAL_THRESHOLD=100
 
 ### 3. Set Up GitHub Secrets
 
-For automated checks via GitHub Actions, add these secrets to your repository:
+To make this run automatically via GitHub Actions, just drop these secrets into your repo 
 
 1. Go to your repo's **Settings** → **Secrets and variables** → **Actions**
-2. Add the following secrets:
+2. Add the following secrets
 
-**Required:**
+**Required **
 - `DESCO_ACCOUNT_NO`
 - `DESCO_METER_NO`
 - `EMAIL_TO`
@@ -61,7 +64,7 @@ For automated checks via GitHub Actions, add these secrets to your repository:
 - `SMTP_USER`
 - `SMTP_PASS`
 
-**Optional:**
+**Optional **
 - `SMTP_PORT` (defaults to 587)
 - `LOW_THRESHOLD` (defaults to 150)
 - `CRITICAL_THRESHOLD` (defaults to 100)
@@ -71,12 +74,12 @@ For automated checks via GitHub Actions, add these secrets to your repository:
 ### Run Manually
 
 ```bash
-npm run check-balance
+bun run check-balance
 ```
 
 ### Automated Checks
 
-The GitHub Actions workflow runs automatically every 6 hours. You can also trigger it manually from the **Actions** tab in your GitHub repository.
+The GitHub Actions workflow kicks in every 6 hours on its own. You can also force it to run manually from the **Actions** tab if you're impatient.
 
 ## Email Providers
 
@@ -89,19 +92,19 @@ The GitHub Actions workflow runs automatically every 6 hours. You can also trigg
 
 ### Other Providers
 
-Works with any SMTP provider. Common settings:
+Works with any SMTP provider. Common settings 
 
-- **Outlook**: `smtp-mail.outlook.com:587`
-- **Yahoo**: `smtp.mail.yahoo.com:587`
-- **Custom SMTP**: Use your provider's settings
+- **Outlook**  `smtp-mail.outlook.com:587`
+- **Yahoo**  `smtp.mail.yahoo.com:587`
+- **Custom SMTP**  Use your provider's settings
 
 ## How It Works
 
-1. Validates all required environment variables
+1. Double checks all your environment variables
 2. Fetches your current balance from DESCO's prepaid API
 3. Validates the API response
 4. Compares balance against configurable thresholds
-5. Sends hilariously aggressive email notifications if thresholds are breached
+5. Blasts out a wildly aggressive email if you're too low
 6. Logs everything for your viewing pleasure
 
 ## Configuration
@@ -124,18 +127,28 @@ Works with any SMTP provider. Common settings:
 ### Build
 
 ```bash
-npm run build
+bun run build
 ```
 
 ### Run Tests
 
 ```bash
-npm test
+bun run test
 ```
+
+### Lint & Format
+
+```bash
+bun run lint     # ESLint with type-aware rules
+bun run format   # Prettier
+```
+
+Both run in CI on every push and PR, so run them before pushing.
 
 ## Tech Stack
 
 - **TypeScript** - Type-safe balance checking
+- **bun** - Package management & script running
 - **node-fetch** - API requests
 - **nodemailer** - Email notifications
 - **GitHub Actions** - Automated scheduling
@@ -147,10 +160,10 @@ MIT - Use it, modify it, roast yourself with it.
 
 ## Disclaimer
 
-This tool is for personal use. DESCO's API usage is at your own risk. The savage emails are intentionally over-the-top - adjust the tone in `check-balance.ts` if you prefer gentler reminders.
+This is just a personal project. You're using the DESCO API at your own risk. Also the emails are intentionally meant to roast you hard  feel free to tone them down in `src/templates/` if you can't handle it.
 
 ## Security Notes
 
 - Never commit your `.env` file (it's in `.gitignore`)
 - Use GitHub Secrets for CI/CD, never hardcode credentials
-- The app disables SSL verification for the DESCO API due to certificate issues - be aware of this limitation
+- We actually disable SSL verification for DESCO's API because their certificates act up sometimes  just keeping you in the loop on that.

@@ -12,6 +12,8 @@ import { SubscriptionService } from '../billing';
 import { signDashboardToken } from '../web/token';
 import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
+import { SmsGateway } from '../notifications/sms';
+import crypto from 'crypto';
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
@@ -23,6 +25,18 @@ interface PendingRegistration {
   step: 'account' | 'meter';
   accountNo?: string;
 }
+
+interface PendingSmsVerification {
+  phone: string;
+  code: string;
+  expiresAt: number;
+  attempts: number;
+}
+
+const SMS_OTP_TTL_MS = 10 * 60 * 1000;
+const SMS_OTP_MAX_ATTEMPTS = 3;
+// OTP sends cost real money and are an SMS-pumping abuse vector - keep tight
+const SMS_OTP_SENDS_PER_HOUR = 3;
 
 // Registration verifications + on-demand /balance checks both hit DESCO;
 // keep one chat from spraying their API through us.
@@ -58,14 +72,21 @@ const PRIVACY_TEXT = [
   '_Power Roast is an independent project, not affiliated with DESCO._',
 ].join('\n');
 
-export function createBot(db: Db, config: ServerConfig, subscriptions: SubscriptionService): Bot {
+export function createBot(
+  db: Db,
+  config: ServerConfig,
+  subscriptions: SubscriptionService,
+  smsGateway: SmsGateway | null
+): Bot {
   const bot = new Bot(
     config.telegramBotToken,
     config.telegramApiRoot ? { client: { apiRoot: config.telegramApiRoot } } : undefined
   );
   const pending = new Map<number, PendingRegistration>();
   const pendingDeletes = new Map<number, number>(); // chatId -> confirm-by timestamp
+  const pendingSms = new Map<number, PendingSmsVerification>();
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
+  const otpSends = new RateLimiter(SMS_OTP_SENDS_PER_HOUR, 60 * 60 * 1000);
 
   async function findUser(chatId: number) {
     const [user] = await db
@@ -316,6 +337,13 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
       return;
     }
 
+    if (!smsGateway) {
+      await ctx.reply(
+        "SMS alerts aren't live yet - the gateway is still being set up. You'll be the first to know."
+      );
+      return;
+    }
+
     const phone = normalizeBdPhone((ctx.match ?? '').trim());
     if (!phone) {
       await ctx.reply('Usage: /sms <BD mobile number> - e.g. /sms 01712345678');
@@ -332,21 +360,34 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
           eq(schema.channels.address, phone)
         )
       );
-    if (existing) {
-      await db
-        .update(schema.channels)
-        .set({ enabled: true })
-        .where(eq(schema.channels.id, existing.id));
-    } else {
-      await db.insert(schema.channels).values({
-        userId: user.id,
-        type: 'sms',
-        address: phone,
-        verified: false,
-      });
+    if (existing?.verified && existing.enabled) {
+      await ctx.reply(`That number already gets alerts (up to ${budget} SMS/month).`);
+      return;
+    }
+
+    // prove ownership before a single alert goes out - otherwise the bot is
+    // an SMS-harassment tool pointed at arbitrary numbers
+    if (!otpSends.allow(ctx.chat.id)) {
+      await ctx.reply('Too many verification codes requested. Try again in an hour.');
+      return;
+    }
+    const code = crypto.randomInt(100000, 1000000).toString();
+    pendingSms.set(ctx.chat.id, {
+      phone,
+      code,
+      expiresAt: Date.now() + SMS_OTP_TTL_MS,
+      attempts: 0,
+    });
+    try {
+      await smsGateway.send(phone, `PowerRoast verification code: ${code}`);
+    } catch (error) {
+      pendingSms.delete(ctx.chat.id);
+      console.error('OTP send failed:', error);
+      await ctx.reply("Couldn't reach that number right now. Check it and try again in a bit.");
+      return;
     }
     await ctx.reply(
-      `Done. Low/critical alerts will also go to ${phone} (up to ${budget} SMS/month on your plan).`
+      `Sent a code to ${phone} by SMS. Reply with the 6 digits to prove it's yours (valid 10 minutes).`
     );
   });
 
@@ -479,6 +520,60 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
 
   // plain text drives the registration conversation
   bot.on('message:text', async ctx => {
+    // SMS verification codes (only when not mid-registration, where a
+    // 6-digit account number would be ambiguous)
+    const smsState = pendingSms.get(ctx.chat.id);
+    if (smsState && !pending.has(ctx.chat.id) && /^\d{6}$/.test(ctx.message.text.trim())) {
+      if (Date.now() > smsState.expiresAt) {
+        pendingSms.delete(ctx.chat.id);
+        await ctx.reply('That code expired. Start again with /sms <number>.');
+        return;
+      }
+      if (ctx.message.text.trim() !== smsState.code) {
+        smsState.attempts++;
+        if (smsState.attempts >= SMS_OTP_MAX_ATTEMPTS) {
+          pendingSms.delete(ctx.chat.id);
+          await ctx.reply('Too many wrong codes. Start again with /sms <number>.');
+        } else {
+          await ctx.reply('Nope, that is not it. Try again.');
+        }
+        return;
+      }
+      pendingSms.delete(ctx.chat.id);
+      const user = await findUser(ctx.chat.id);
+      if (!user) {
+        await ctx.reply('Account vanished mid-verification. /register first.');
+        return;
+      }
+      const [channel] = await db
+        .select()
+        .from(schema.channels)
+        .where(
+          and(
+            eq(schema.channels.userId, user.id),
+            eq(schema.channels.type, 'sms'),
+            eq(schema.channels.address, smsState.phone)
+          )
+        );
+      if (channel) {
+        await db
+          .update(schema.channels)
+          .set({ verified: true, enabled: true })
+          .where(eq(schema.channels.id, channel.id));
+      } else {
+        await db.insert(schema.channels).values({
+          userId: user.id,
+          type: 'sms',
+          address: smsState.phone,
+          verified: true,
+        });
+      }
+      await ctx.reply(
+        `✅ Verified. Low/critical alerts will also hit ${smsState.phone} - even when your WiFi is already dead.`
+      );
+      return;
+    }
+
     const state = pending.get(ctx.chat.id);
     if (!state) {
       await ctx.reply(`Not sure what you mean.\n\n${HELP_TEXT}`, {

@@ -76,7 +76,30 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 (If the update includes a new migration, run step 1 against your database first.)
 
-## 4. Monitoring
+## 4. HTTPS
+
+Dashboard links carry an auth token in the URL - over plain HTTP they're
+sniffable in transit. Put [Caddy](https://caddyserver.com) in front (automatic
+Let's Encrypt certificates) once you have a domain pointed at the server:
+
+```bash
+apt install -y caddy
+cat > /etc/caddy/Caddyfile <<'EOF'
+app.yourdomain.com {
+    reverse_proxy localhost:3000
+}
+EOF
+systemctl reload caddy
+
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw delete allow 3000/tcp   # only Caddy talks to the app now
+```
+
+Then set `PUBLIC_BASE_URL=https://app.yourdomain.com` in `.env`, restart the
+app, and point your uptime monitor at `https://app.yourdomain.com/health`.
+
+## 5. Monitoring
 
 Point any uptime monitor at `http://<server-ip>:3000/health` and alert on non-200.
 
@@ -88,7 +111,7 @@ You also get in-app alarms: the scheduler messages `ADMIN_CHAT_ID` on Telegram
 if more than half the meters in a cycle fail (likely a provider API change or
 block), and `/stats` shows users / meters / readings / alerts on demand.
 
-## 5. Email channel (optional)
+## 6. Email channel (optional)
 
 The email sender speaks plain SMTP. To enable it, set `SMTP_HOST`, `SMTP_PORT`,
 `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` (an address on a domain with proper

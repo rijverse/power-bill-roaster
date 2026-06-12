@@ -32,3 +32,13 @@ jobs:
 
       - name: Build
         run: bun run build
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run mocked end-to-end stack
+        run: bash scripts/e2e.sh

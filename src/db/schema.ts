@@ -111,9 +111,27 @@ export const subscriptions = pgTable('subscriptions', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Immutable money ledger: one row per confirmed payment. Subscriptions track
+// state; this table is the record for reconciliation and disputes.
+export const payments = pgTable('payments', {
+  id: serial('id').primaryKey(),
+  subscriptionId: integer('subscription_id')
+    .notNull()
+    .references(() => subscriptions.id),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id),
+  provider: text('provider').notNull(),
+  externalRef: text('external_ref'),
+  amountBdt: integer('amount_bdt').notNull(),
+  status: text('status').notNull().default('completed'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type Meter = typeof meters.$inferSelect;
 export type Reading = typeof readings.$inferSelect;
 export type AlertStateRow = typeof alertState.$inferSelect;
 export type Channel = typeof channels.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
+export type Payment = typeof payments.$inferSelect;

@@ -79,6 +79,8 @@ export class Dispatcher {
       return;
     }
 
+    // verified=true means the user proved they own the number (OTP) -
+    // unverified channels never receive a message
     const smsChannels = await this.db
       .select()
       .from(schema.channels)
@@ -86,7 +88,8 @@ export class Dispatcher {
         and(
           eq(schema.channels.userId, user.id),
           eq(schema.channels.type, 'sms'),
-          eq(schema.channels.enabled, true)
+          eq(schema.channels.enabled, true),
+          eq(schema.channels.verified, true)
         )
       );
     if (smsChannels.length === 0) {

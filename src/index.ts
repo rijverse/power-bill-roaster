@@ -11,8 +11,12 @@ async function main(): Promise<void> {
   const config = getServerConfig();
   const { db, pool } = createDb(config.databaseUrl);
 
+  const smsGateway = createSmsGateway(config);
+  if (smsGateway) {
+    console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
+  }
   const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
-  const bot = createBot(db, config, subscriptions);
+  const bot = createBot(db, config, subscriptions, smsGateway);
   const telegramSender = {
     sendTelegram: async (chatId: number, text: string) => {
       await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
@@ -29,10 +33,6 @@ async function main(): Promise<void> {
     );
   };
 
-  const smsGateway = createSmsGateway(config);
-  if (smsGateway) {
-    console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
-  }
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
   const scheduler = new Scheduler(db, pool, telegramSender, dispatcher, config, subscriptions);
 

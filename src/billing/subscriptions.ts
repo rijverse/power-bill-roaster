@@ -52,6 +52,13 @@ export class SubscriptionService {
 
     const status = await this.provider.verifyPayment(checkout.externalRef);
     if (status === 'paid') {
+      await this.db.insert(schema.payments).values({
+        subscriptionId: subscription.id,
+        userId: user.id,
+        provider: this.provider.name,
+        externalRef: checkout.externalRef,
+        amountBdt: priceBdtFor(plan),
+      });
       await this.activate(subscription.id);
       return { activated: true, paymentUrl: null };
     }

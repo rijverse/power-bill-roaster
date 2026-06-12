@@ -119,7 +119,7 @@ function getSmsConfig(): ServerConfig['sms'] {
       bulksmsbd: {
         apiKey: process.env.BULKSMSBD_API_KEY,
         senderId: process.env.BULKSMSBD_SENDER_ID,
-        baseUrl: process.env.BULKSMSBD_BASE_URL || 'http://bulksmsbd.net/api',
+        baseUrl: process.env.BULKSMSBD_BASE_URL || 'https://bulksmsbd.net/api',
       },
     };
   }

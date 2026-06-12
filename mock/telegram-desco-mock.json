@@ -195,6 +195,31 @@
       "sequentialResponse": false
     },
     {
+      "uuid": "a1b2c3d4-0000-4000-8000-000000000060",
+      "documentation": "Telegram setMyCommands",
+      "method": "post",
+      "endpoint": ":token/setMyCommands",
+      "responses": [
+        {
+          "uuid": "a1b2c3d4-0000-4000-8000-000000000061",
+          "body": "{\"ok\":true,\"result\":true}",
+          "latency": 0,
+          "statusCode": 200,
+          "label": "",
+          "headers": [{ "key": "Content-Type", "value": "application/json" }],
+          "filePath": "",
+          "sendFileAsBody": false,
+          "rules": [],
+          "rulesOperator": "AND",
+          "disableTemplating": true,
+          "fallbackTo404": false
+        }
+      ],
+      "enabled": true,
+      "randomResponse": false,
+      "sequentialResponse": false
+    },
+    {
       "uuid": "a1b2c3d4-0000-4000-8000-000000000040",
       "documentation": "Telegram sendMessage - logs what the bot says",
       "method": "post",

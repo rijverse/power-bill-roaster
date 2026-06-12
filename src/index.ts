@@ -42,6 +42,28 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   scheduler.start();
+
+  // Telegram's "/" autocomplete menu (user-facing commands only)
+  try {
+    await bot.api.setMyCommands([
+      { command: 'register', description: 'Add your DESCO meter' },
+      { command: 'balance', description: 'Check balances right now' },
+      { command: 'dashboard', description: 'Balance history charts' },
+      { command: 'threshold', description: 'Set alert levels' },
+      { command: 'nickname', description: 'Name your meter' },
+      { command: 'sms', description: 'Get alerts by SMS (paid plans)' },
+      { command: 'plan', description: 'Your current plan' },
+      { command: 'upgrade', description: 'More meters, SMS alerts' },
+      { command: 'meters', description: 'List your meters' },
+      { command: 'stop', description: 'Pause all monitoring' },
+      { command: 'delete', description: 'Erase your account and data' },
+      { command: 'privacy', description: 'What we store and why' },
+      { command: 'help', description: 'All commands' },
+    ]);
+  } catch (error) {
+    console.warn('setMyCommands failed (fine in mock mode):', error);
+  }
+
   console.log('Starting Telegram bot (long polling)…');
   await bot.start();
 }

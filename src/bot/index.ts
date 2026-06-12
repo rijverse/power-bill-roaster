@@ -10,8 +10,10 @@ import { predictRunOut } from '../core/prediction';
 import { normalizeBdPhone } from '../core/phone';
 import { SubscriptionService } from '../billing';
 import { signDashboardToken } from '../web/token';
+import { eraseUser } from '../core/erase-user';
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
+const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
 
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
@@ -39,6 +41,7 @@ const HELP_TEXT = [
   '/dashboard - balance history charts in your browser',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
+  '/delete - erase your account and all data',
   '/privacy - what we store and why',
   '/help - this message',
 ].join('\n');
@@ -49,7 +52,7 @@ const PRIVACY_TEXT = [
   '*What I store:* your Telegram chat id, the account & meter numbers you register, and the balance history I read for them.',
   '*Why:* that is literally the product - I cannot watch a balance without them.',
   '*What I never do:* sell or share your data, message anyone but you, or store DESCO credentials (there are none - balances are read with just the account/meter numbers).',
-  '*Leaving:* /stop pauses all monitoring immediately. Want your data fully erased? Tell me via /stop and contact the operator.',
+  '*Leaving:* /stop pauses all monitoring immediately. /delete erases your account and every byte of your data - no questions, no email required.',
   '',
   '_Power Roast is an independent project, not affiliated with DESCO._',
 ].join('\n');
@@ -60,6 +63,7 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
     config.telegramApiRoot ? { client: { apiRoot: config.telegramApiRoot } } : undefined
   );
   const pending = new Map<number, PendingRegistration>();
+  const pendingDeletes = new Map<number, number>(); // chatId -> confirm-by timestamp
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
 
   async function findUser(chatId: number) {
@@ -394,6 +398,38 @@ export function createBot(db: Db, config: ServerConfig, subscriptions: Subscript
         `📟 ${m.nickname ?? m.meterNo} - account ${m.accountNo}, thresholds ৳${m.lowThreshold}/৳${m.criticalThreshold}`
     );
     await ctx.reply(lines.join('\n'));
+  });
+
+  bot.command('delete', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('Nothing to delete - you have no account.');
+      return;
+    }
+    const arg = (ctx.match ?? '').trim();
+    if (arg !== 'CONFIRM') {
+      pendingDeletes.set(ctx.chat.id, Date.now() + DELETE_CONFIRM_WINDOW_MS);
+      await ctx.reply(
+        [
+          '⚠️ This permanently erases your account: meters, balance history, alerts, subscription - everything. No undo.',
+          '',
+          'If you mean it, send within 60 seconds:',
+          '/delete CONFIRM',
+        ].join('\n')
+      );
+      return;
+    }
+    const confirmBy = pendingDeletes.get(ctx.chat.id);
+    if (!confirmBy || Date.now() > confirmBy) {
+      await ctx.reply('That confirmation expired. Start again with /delete.');
+      return;
+    }
+    pendingDeletes.delete(ctx.chat.id);
+    pending.delete(ctx.chat.id);
+    await eraseUser(db, user.id);
+    await ctx.reply(
+      'Done. Everything is erased. It was an honor roasting you. The lights are your problem now. 🕯️'
+    );
   });
 
   bot.command('stop', async ctx => {

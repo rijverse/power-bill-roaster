@@ -38,10 +38,18 @@ Minimal production `.env`:
 ```env
 DATABASE_URL=postgres://...?sslmode=require
 TELEGRAM_BOT_TOKEN=123456:ABC...
-ADMIN_CHAT_ID=<your telegram chat id, for /stats and operator alarms>
+ADMIN_CHAT_ID=<your telegram chat id, for /stats, /grant, and operator alarms>
 POLL_INTERVAL_HOURS=6
 REMINDER_INTERVAL_HOURS=24
+# Where /dashboard links point - your server's public address
+PUBLIC_BASE_URL=http://<server-ip>:3000
 ```
+
+Optional features (see `.env.example` for the full reference):
+
+- **SMS alerts**: `SMS_GATEWAY=bulksmsbd` + `BULKSMSBD_API_KEY` + `BULKSMSBD_SENDER_ID`
+- **Billing**: `BILLING_PROVIDER` defaults to `sandbox` (auto-approves upgrades -
+  fine until real payments). bKash/SSLCommerz need merchant credentials.
 
 Start it:
 

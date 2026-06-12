@@ -14,7 +14,7 @@ services:
 
   mockoon:
     image: mockoon/cli:latest
-    command: ['--data', '/data/mock.json', '--port', '8080']
+    command: ['--data', '/data/mock.json', '--port', '8080', '--log-transaction']
     ports:
       - '8080:8080'
     volumes:

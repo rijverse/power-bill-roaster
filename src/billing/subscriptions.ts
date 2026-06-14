@@ -1,7 +1,7 @@
 import { eq, and, lt, inArray } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { priceBdtFor, maxMetersFor } from '../core/plans';
-import { PaymentProvider } from './types';
+import { PaymentProvider, PaymentStatus } from './types';
 
 const PERIOD_DAYS = 30;
 // Don't downgrade the moment a period lapses - give renewal a few days
@@ -16,6 +16,9 @@ export class SubscriptionService {
   notifyDowngrade:
     | ((chatId: number, expiredPlan: string, pausedMeters: number) => Promise<void>)
     | null = null;
+
+  /** wired in after the bot exists; tells the user a pending payment cleared */
+  notifyUpgrade: ((chatId: number, plan: string) => Promise<void>) | null = null;
 
   constructor(
     private db: Db,
@@ -50,19 +53,93 @@ export class SubscriptionService {
       })
       .returning();
 
-    const status = await this.provider.verifyPayment(checkout.externalRef);
-    if (status === 'paid') {
-      await this.db.insert(schema.payments).values({
-        subscriptionId: subscription.id,
-        userId: user.id,
-        provider: this.provider.name,
-        externalRef: checkout.externalRef,
-        amountBdt: priceBdtFor(plan),
-      });
-      await this.activate(subscription.id);
-      return { activated: true, paymentUrl: null };
+    // Sandbox clears instantly. Real providers send the user to paymentUrl and
+    // confirm later through finalizePending (called from the payment callback) -
+    // verifying here would just execute against an unauthorized payment.
+    if (this.provider.autoConfirms) {
+      const status = await this.provider.verifyPayment(checkout.externalRef);
+      if (status === 'paid') {
+        await this.recordPayment(subscription.id, user.id, checkout.externalRef, plan);
+        await this.activate(subscription.id);
+        return { activated: true, paymentUrl: null };
+      }
     }
     return { activated: false, paymentUrl: checkout.paymentUrl };
+  }
+
+  /**
+   * Confirms a pending payment after the provider's callback fires. Re-verifies
+   * with the provider server-side (never trusting the callback's own claims) and
+   * is idempotent - a duplicate callback or IPN won't double-charge or re-notify.
+   */
+  async finalizePending(
+    externalRef: string
+  ): Promise<{ status: PaymentStatus; activated: boolean }> {
+    const [subscription] = await this.db
+      .select()
+      .from(schema.subscriptions)
+      .where(eq(schema.subscriptions.externalRef, externalRef));
+    if (!subscription) {
+      return { status: 'failed', activated: false };
+    }
+    if (subscription.status === 'active') {
+      return { status: 'paid', activated: false }; // already finalized
+    }
+
+    const status = await this.provider.verifyPayment(externalRef);
+    if (status !== 'paid') {
+      return { status, activated: false };
+    }
+
+    const firstTime = await this.recordPayment(
+      subscription.id,
+      subscription.userId,
+      externalRef,
+      subscription.plan
+    );
+    await this.activate(subscription.id);
+
+    // Only the callback that actually books the payment notifies, so a racing
+    // redirect + IPN for the same payment can't double-message the user.
+    if (firstTime && this.notifyUpgrade) {
+      const [user] = await this.db
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, subscription.userId));
+      if (user?.telegramChatId != null) {
+        try {
+          await this.notifyUpgrade(user.telegramChatId, subscription.plan);
+        } catch (error) {
+          console.error(`Upgrade notice failed for user ${subscription.userId}:`, error);
+        }
+      }
+    }
+    return { status: 'paid', activated: true };
+  }
+
+  /**
+   * Append to the money ledger. The unique external_ref index makes this safe
+   * under concurrent callbacks; returns true only when this call inserted the
+   * row (false means another callback already booked it).
+   */
+  private async recordPayment(
+    subscriptionId: number,
+    userId: number,
+    externalRef: string,
+    plan: string
+  ): Promise<boolean> {
+    const inserted = await this.db
+      .insert(schema.payments)
+      .values({
+        subscriptionId,
+        userId,
+        provider: this.provider.name,
+        externalRef,
+        amountBdt: priceBdtFor(plan),
+      })
+      .onConflictDoNothing({ target: schema.payments.externalRef })
+      .returning();
+    return inserted.length > 0;
   }
 
   /** Marks a subscription active for one period and applies the plan to the user. */

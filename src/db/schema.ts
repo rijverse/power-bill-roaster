@@ -112,21 +112,27 @@ export const subscriptions = pgTable('subscriptions', {
 });
 
 // Immutable money ledger: one row per confirmed payment. Subscriptions track
-// state; this table is the record for reconciliation and disputes.
-export const payments = pgTable('payments', {
-  id: serial('id').primaryKey(),
-  subscriptionId: integer('subscription_id')
-    .notNull()
-    .references(() => subscriptions.id),
-  userId: integer('user_id')
-    .notNull()
-    .references(() => users.id),
-  provider: text('provider').notNull(),
-  externalRef: text('external_ref'),
-  amountBdt: integer('amount_bdt').notNull(),
-  status: text('status').notNull().default('completed'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+// state; this table is the record for reconciliation and disputes. The unique
+// external_ref makes confirmation idempotent - a duplicate IPN + redirect for
+// the same payment can't book the same money twice.
+export const payments = pgTable(
+  'payments',
+  {
+    id: serial('id').primaryKey(),
+    subscriptionId: integer('subscription_id')
+      .notNull()
+      .references(() => subscriptions.id),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    provider: text('provider').notNull(),
+    externalRef: text('external_ref'),
+    amountBdt: integer('amount_bdt').notNull(),
+    status: text('status').notNull().default('completed'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [uniqueIndex('payments_external_ref_idx').on(table.externalRef)]
+);
 
 export type User = typeof users.$inferSelect;
 export type Meter = typeof meters.$inferSelect;

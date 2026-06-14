@@ -13,6 +13,12 @@ export type PaymentStatus = 'paid' | 'pending' | 'failed';
  */
 export interface PaymentProvider {
   readonly name: string;
+  /**
+   * true  -> payment clears synchronously; startUpgrade verifies inline (sandbox).
+   * false -> user pays at paymentUrl and the provider confirms later via a
+   *          server callback that calls SubscriptionService.finalizePending.
+   */
+  readonly autoConfirms: boolean;
   createCheckout(opts: {
     userId: number;
     plan: string;

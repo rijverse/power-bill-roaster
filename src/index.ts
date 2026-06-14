@@ -32,13 +32,19 @@ async function main(): Promise<void> {
       `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`
     );
   };
+  subscriptions.notifyUpgrade = async (chatId, plan) => {
+    await telegramSender.sendTelegram(
+      chatId,
+      `✅ Payment confirmed - you're on *${plan}* now. Add a phone for SMS alerts with /sms <number>.`
+    );
+  };
 
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
   const scheduler = new Scheduler(db, pool, telegramSender, dispatcher, config, subscriptions);
 
-  const healthServer = createWebServer(db, scheduler, config);
+  const healthServer = createWebServer(db, scheduler, config, subscriptions);
   healthServer.listen(config.port, () => {
-    console.log(`Web server on :${config.port} (/health, /dash)`);
+    console.log(`Web server on :${config.port} (/health, /dash, /pay)`);
   });
 
   const shutdown = async (signal: string) => {

@@ -45,7 +45,7 @@ function generateHtml(balance: number, accountNo: string, meterNo: string): stri
     pitch:
       '<strong>Bruh, wake up.</strong> This balance is wheezing - "checking account three days before payday" energy.',
     roast:
-      'Not zero yet, but it can see zero from here, and zero is waving back.<br><br>Ride the meter to empty like a main character and act shocked when the AC dies at 3am and you\'re sweating through the mattress doing the math you should\'ve done today.',
+      "Not zero yet, but it can see zero from here, and zero is waving back.<br><br>Ride the meter to empty like a main character and act shocked when the AC dies at 3am and you're sweating through the mattress doing the math you should've done today.",
     accountNo,
     meterNo,
     footer: 'Top up while you still have the dignity. 💪',

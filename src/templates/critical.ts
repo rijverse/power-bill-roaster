@@ -44,7 +44,7 @@ function generateHtml(balance: number, accountNo: string, meterNo: string): stri
     pitch:
       '<strong>This is not a drill.</strong> Two digits. DESCO has its finger on the switch and is mouthing "do it" at you.',
     roast:
-      "Lights go out and you become the grown adult charging a phone at McDonald's, nursing one cold fry, calling it \"working remotely.\"<br><br>Your ancestors survived famine and war so you could forget to top up a meter. Make them proud. Or don't - the dark is free.",
+      'Lights go out and you become the grown adult charging a phone at McDonald\'s, nursing one cold fry, calling it "working remotely."<br><br>Your ancestors survived famine and war so you could forget to top up a meter. Make them proud. Or don\'t - the dark is free.',
     accountNo,
     meterNo,
     footer: 'P.S. The shame is free too. Your neighbors already know. 👀',

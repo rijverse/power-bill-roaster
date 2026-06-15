@@ -19,12 +19,17 @@ Current Balance: ৳${balance.toFixed(2)} (CRITICALLY LOW)
 Account: ${accountNo}
 Meter: ${meterNo}
 
-DESCO is about to cut your power. Recharge now or charge your phone at
-McDonald's like it's 2005.
+That balance has two digits. TWO. Your fridge is writing its will. Your WiFi
+router is updating its resume. DESCO has its finger on the switch and is
+mouthing "do it" at you.
+
+When the lights die you'll be the grown adult charging a phone at McDonald's,
+nursing one cold fry, calling it "working remotely." Your ancestors survived
+famine and war so you could forget to top up a meter.
 
 RECHARGE NOW → https://prepaid.desco.org.bd/
 
-P.S. Your neighbors are judging you.`;
+P.S. The dark is free. The shame is too. Your neighbors already know.`;
 }
 
 function generateHtml(balance: number, accountNo: string, meterNo: string): string {
@@ -33,14 +38,16 @@ function generateHtml(balance: number, accountNo: string, meterNo: string): stri
     bg: '#1a0a0a',
     badge: '💀⚡',
     title: 'Power Emergency',
+    preheader: `৳${balance.toFixed(2)} left. DESCO is about to pull the plug.`,
     balance,
     balanceLabel: 'Critically low',
-    pitch: '<strong>This is not a drill.</strong> DESCO will cut your power any moment now.',
+    pitch:
+      '<strong>This is not a drill.</strong> Two digits. DESCO has its finger on the switch and is mouthing "do it" at you.',
     roast:
-      "You'll be charging your phone at McDonald's like it's 2005, living off their WiFi and pretending to order fries.",
+      "Lights go out and you become the grown adult charging a phone at McDonald's, nursing one cold fry, calling it \"working remotely.\"<br><br>Your ancestors survived famine and war so you could forget to top up a meter. Make them proud. Or don't - the dark is free.",
     accountNo,
     meterNo,
-    footer: 'P.S. Your neighbors are judging you. 👀',
+    footer: 'P.S. The shame is free too. Your neighbors already know. 👀',
   });
 }
 
@@ -49,6 +56,7 @@ interface EmailParts {
   bg: string;
   badge: string;
   title: string;
+  preheader: string;
   balance: number;
   balanceLabel: string;
   pitch: string;
@@ -58,9 +66,9 @@ interface EmailParts {
   footer: string;
 }
 
-// Single compact card. Inline styles only, table layout, solid colors with
-// bgcolor fallbacks - the lowest common denominator that renders in Gmail,
-// Outlook and Apple Mail alike.
+// Single compact card. Inline styles only, table layout, solid hex colors (no
+// rgba - Outlook's Word engine drops it) - the lowest common denominator that
+// renders in Gmail, Outlook and Apple Mail alike.
 export function renderEmail(p: EmailParts): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -69,10 +77,11 @@ export function renderEmail(p: EmailParts): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body style="margin:0; padding:0; background-color:#0d0d0d; font-family:'Segoe UI',Tahoma,Arial,sans-serif;">
+  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all; opacity:0; color:transparent; height:0; width:0;">${p.preheader}&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;&#8204;&nbsp;</div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#0d0d0d" style="background-color:#0d0d0d;">
     <tr>
       <td align="center" style="padding:24px 12px;">
-        <table role="presentation" width="480" cellspacing="0" cellpadding="0" style="width:480px; max-width:100%; background-color:${p.bg}; border-radius:14px; overflow:hidden;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%; max-width:480px; background-color:${p.bg}; border-radius:14px; overflow:hidden;">
           <tr>
             <td bgcolor="${p.accent}" style="background-color:${p.accent}; padding:20px; text-align:center; color:#ffffff; font-size:20px; font-weight:800; text-transform:uppercase; letter-spacing:1px;">
               ${p.badge} ${p.title}
@@ -89,14 +98,14 @@ export function renderEmail(p: EmailParts): string {
           </tr>
           <tr>
             <td style="padding:0 24px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#000000" style="background-color:rgba(0,0,0,0.4); border-radius:8px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#12121c" style="background-color:#12121c; border-radius:8px;">
                 <tr>
                   <td style="padding:12px 16px; color:#9ca3af; font-size:13px;">Account</td>
                   <td style="padding:12px 16px; color:#ffffff; font-size:14px; font-family:'Courier New',monospace; text-align:right;">${p.accountNo}</td>
                 </tr>
                 <tr>
-                  <td style="padding:12px 16px; color:#9ca3af; font-size:13px; border-top:1px solid rgba(255,255,255,0.08);">Meter</td>
-                  <td style="padding:12px 16px; color:#ffffff; font-size:14px; font-family:'Courier New',monospace; text-align:right; border-top:1px solid rgba(255,255,255,0.08);">${p.meterNo}</td>
+                  <td style="padding:12px 16px; color:#9ca3af; font-size:13px; border-top:1px solid #2a2a38;">Meter</td>
+                  <td style="padding:12px 16px; color:#ffffff; font-size:14px; font-family:'Courier New',monospace; text-align:right; border-top:1px solid #2a2a38;">${p.meterNo}</td>
                 </tr>
               </table>
             </td>
@@ -107,7 +116,7 @@ export function renderEmail(p: EmailParts): string {
             </td>
           </tr>
           <tr>
-            <td bgcolor="#000000" style="background-color:rgba(0,0,0,0.5); padding:16px; text-align:center; color:#6b7280; font-size:12px;">
+            <td bgcolor="#0a0a12" style="background-color:#0a0a12; padding:16px; text-align:center; color:#6b7280; font-size:12px;">
               ${p.footer}
             </td>
           </tr>

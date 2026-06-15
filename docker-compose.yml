@@ -20,5 +20,12 @@ services:
     volumes:
       - ./mock/telegram-desco-mock.json:/data/mock.json:ro
 
+  # Catch-all SMTP for local email testing. 1025 = SMTP, 8025 = web inbox.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - '1025:1025'
+      - '8025:8025'
+
 volumes:
   pgdata:

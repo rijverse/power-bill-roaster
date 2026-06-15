@@ -13,113 +13,108 @@ export function generateCriticalEmail(
 }
 
 function generateText(balance: number, accountNo: string, meterNo: string): string {
-  return `💀 POWER EMERGENCY 💀
-
-THIS IS NOT A DRILL!
+  return `💀 POWER EMERGENCY - THIS IS NOT A DRILL
 
 Current Balance: ৳${balance.toFixed(2)} (CRITICALLY LOW)
-
-Your balance is in the danger zone. That's like, TWO digits. Do you even know how numbers work?
-
 Account: ${accountNo}
 Meter: ${meterNo}
 
-DESCO is about to cut your power and you'll be out here charging your phone at McDonald's like it's 2005. Is that the life you want? Living off their WiFi, pretending to order fries?
+DESCO is about to cut your power. Recharge now or charge your phone at
+McDonald's like it's 2005.
 
-RECHARGE RIGHT NOW → https://prepaid.desco.org.bd/
+RECHARGE NOW → https://prepaid.desco.org.bd/
 
-Or accept your fate as someone who literally can't keep the lights on. Your call, but make it quick before you can't even read this email.
-
-P.S. - Your neighbors are judging you. Just saying.`;
+P.S. Your neighbors are judging you.`;
 }
 
 function generateHtml(balance: number, accountNo: string, meterNo: string): string {
+  return renderEmail({
+    accent: '#dc2626',
+    bg: '#1a0a0a',
+    badge: '💀⚡',
+    title: 'Power Emergency',
+    balance,
+    balanceLabel: 'Critically low',
+    pitch: '<strong>This is not a drill.</strong> DESCO will cut your power any moment now.',
+    roast:
+      "You'll be charging your phone at McDonald's like it's 2005, living off their WiFi and pretending to order fries.",
+    accountNo,
+    meterNo,
+    footer: 'P.S. Your neighbors are judging you. 👀',
+  });
+}
+
+interface EmailParts {
+  accent: string;
+  bg: string;
+  badge: string;
+  title: string;
+  balance: number;
+  balanceLabel: string;
+  pitch: string;
+  roast: string;
+  accountNo: string;
+  meterNo: string;
+  footer: string;
+}
+
+// Single compact card. Inline styles only, table layout, solid colors with
+// bgcolor fallbacks - the lowest common denominator that renders in Gmail,
+// Outlook and Apple Mail alike.
+export function renderEmail(p: EmailParts): string {
   return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="margin: 0 padding: 0 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif background-color: #0d0d0d">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #0d0d0d">
-        <tr>
-            <td align="center" style="padding: 40px 20px">
-                <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="background: linear-gradient(135deg, #1a0a0a 0%, #2d0a0a 100%) border-radius: 16px overflow: hidden box-shadow: 0 25px 50px rgba(255, 0, 0, 0.3)">
-                    
-                    <!-- Header -->
-                    <tr>
-                        <td style="background: linear-gradient(90deg, #dc2626 0%, #991b1b 100%) padding: 30px text-align: center">
-                            <div style="font-size: 64px margin-bottom: 10px">💀⚡💀</div>
-                            <h1 style="margin: 0 color: #ffffff font-size: 28px font-weight: 800 text-transform: uppercase letter-spacing: 2px text-shadow: 2px 2px 4px rgba(0,0,0,0.5)">
-                                POWER EMERGENCY
-                            </h1>
-                        </td>
-                    </tr>
-                    
-                    <!-- Balance Display -->
-                    <tr>
-                        <td style="padding: 40px 30px text-align: center">
-                            <div style="background: linear-gradient(135deg, #450a0a 0%, #7f1d1d 100%) border-radius: 12px padding: 30px margin-bottom: 30px border: 2px solid #dc2626">
-                                <p style="margin: 0 0 10px 0 color: #fca5a5 font-size: 14px text-transform: uppercase letter-spacing: 3px">Current Balance</p>
-                                <p style="margin: 0 color: #fef2f2 font-size: 56px font-weight: 900">
-                                    ৳${balance.toFixed(2)}
-                                </p>
-                                <p style="margin: 10px 0 0 0 color: #f87171 font-size: 18px font-weight: 600">⚠️ CRITICALLY LOW ⚠️</p>
-                            </div>
-                            
-                            <p style="color: #fecaca font-size: 20px line-height: 1.6 margin: 0 0 25px 0">
-                                <strong>THIS IS NOT A DRILL!</strong><br>
-                                Your balance is in the danger zone. DESCO will cut your power any moment now.
-                            </p>
-                            
-                            <p style="color: #f87171 font-size: 16px line-height: 1.8 margin: 0 0 30px 0 font-style: italic">
-                                You'll be charging your phone at McDonald's like it's 2005. Is that the life you want? Living off their WiFi, pretending to order fries?
-                            </p>
-                        </td>
-                    </tr>
-                    
-                    <!-- Account Details -->
-                    <tr>
-                        <td style="padding: 0 30px 30px 30px">
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: rgba(0,0,0,0.4) border-radius: 8px overflow: hidden">
-                                <tr>
-                                    <td style="padding: 15px 20px border-bottom: 1px solid #7f1d1d">
-                                        <span style="color: #fca5a5 font-size: 12px text-transform: uppercase letter-spacing: 1px">Account No</span>
-                                        <p style="margin: 5px 0 0 0 color: #ffffff font-size: 18px font-weight: 600 font-family: 'Courier New', monospace">${accountNo}</p>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td style="padding: 15px 20px">
-                                        <span style="color: #fca5a5 font-size: 12px text-transform: uppercase letter-spacing: 1px">Meter No</span>
-                                        <p style="margin: 5px 0 0 0 color: #ffffff font-size: 18px font-weight: 600 font-family: 'Courier New', monospace">${meterNo}</p>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    
-                    <!-- CTA Button -->
-                    <tr>
-                        <td style="padding: 0 30px 40px 30px text-align: center">
-                            <a href="https://prepaid.desco.org.bd/" style="display inline block background linear gradient(90deg, #dc2626 0%, #b91c1c 100%) color #ffffff text decoration none padding 18px 50px border radius 50px font size 18px font weight 700 text transform uppercase letter spacing 2px box shadow 0 10px 30px rgba(220, 38, 38, 0.5)">
-                                ⚡ RECHARGE NOW ⚡
-                            </a>
-                        </td>
-                    </tr>
-                    
-                    <!-- Footer -->
-                    <tr>
-                        <td style="background-color: rgba(0,0,0,0.5) padding: 20px text-align: center">
-                            <p style="margin: 0 color: #a1a1aa font-size: 12px">
-                                P.S. - Your neighbors are judging you. Just saying. 👀
-                            </p>
-                        </td>
-                    </tr>
-                    
-                </table>
+<body style="margin:0; padding:0; background-color:#0d0d0d; font-family:'Segoe UI',Tahoma,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#0d0d0d" style="background-color:#0d0d0d;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="480" cellspacing="0" cellpadding="0" style="width:480px; max-width:100%; background-color:${p.bg}; border-radius:14px; overflow:hidden;">
+          <tr>
+            <td bgcolor="${p.accent}" style="background-color:${p.accent}; padding:20px; text-align:center; color:#ffffff; font-size:20px; font-weight:800; text-transform:uppercase; letter-spacing:1px;">
+              ${p.badge} ${p.title}
             </td>
-        </tr>
-    </table>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px; text-align:center;">
+              <p style="margin:0 0 4px; color:#9ca3af; font-size:12px; text-transform:uppercase; letter-spacing:2px;">Current Balance</p>
+              <p style="margin:0; color:#ffffff; font-size:48px; font-weight:900; line-height:1;">৳${p.balance.toFixed(2)}</p>
+              <p style="margin:8px 0 0; color:${p.accent}; font-size:14px; font-weight:700; text-transform:uppercase;">⚠️ ${p.balanceLabel}</p>
+              <p style="margin:24px 0 12px; color:#f3f4f6; font-size:16px; line-height:1.5;">${p.pitch}</p>
+              <p style="margin:0; color:#9ca3af; font-size:14px; line-height:1.6; font-style:italic;">${p.roast}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" bgcolor="#000000" style="background-color:rgba(0,0,0,0.4); border-radius:8px;">
+                <tr>
+                  <td style="padding:12px 16px; color:#9ca3af; font-size:13px;">Account</td>
+                  <td style="padding:12px 16px; color:#ffffff; font-size:14px; font-family:'Courier New',monospace; text-align:right;">${p.accountNo}</td>
+                </tr>
+                <tr>
+                  <td style="padding:12px 16px; color:#9ca3af; font-size:13px; border-top:1px solid rgba(255,255,255,0.08);">Meter</td>
+                  <td style="padding:12px 16px; color:#ffffff; font-size:14px; font-family:'Courier New',monospace; text-align:right; border-top:1px solid rgba(255,255,255,0.08);">${p.meterNo}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px; text-align:center;">
+              <a href="https://prepaid.desco.org.bd/" style="display:inline-block; background-color:${p.accent}; color:#ffffff; text-decoration:none; padding:14px 36px; border-radius:999px; font-size:16px; font-weight:700; text-transform:uppercase; letter-spacing:1px;">⚡ Recharge Now</a>
+            </td>
+          </tr>
+          <tr>
+            <td bgcolor="#000000" style="background-color:rgba(0,0,0,0.5); padding:16px; text-align:center; color:#6b7280; font-size:12px;">
+              ${p.footer}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>`;
 }

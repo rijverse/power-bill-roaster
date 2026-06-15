@@ -2,16 +2,109 @@ import http from 'http';
 import { eq, and, gte, desc, inArray } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { Scheduler } from '../core/scheduler';
+import { SubscriptionService } from '../billing';
 import { predictRunOut } from '../core/prediction';
 import { ServerConfig } from '../config';
 import { verifyDashboardToken } from './token';
 import { dashboardHtml } from './dashboard-html';
 
 const HISTORY_DAYS = 30;
+const MAX_BODY_BYTES = 64 * 1024;
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(
+    /[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c
+  );
+}
+
+/** Minimal user-facing page shown after a payment redirect. */
+function payPage(res: http.ServerResponse, status: number, title: string, message: string): void {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(
+    `<!doctype html><html><head><meta charset="utf-8">` +
+      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+      `<title>${escapeHtml(title)}</title>` +
+      `<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;text-align:center}` +
+      `h1{font-size:1.4rem}p{color:#444;line-height:1.5}</style></head>` +
+      `<body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>` +
+      `<p>You can close this tab and head back to Telegram.</p></body></html>`
+  );
+}
+
+function readBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/** Pull a field from the query string or, for POST callbacks, the form body. */
+async function callbackParam(
+  req: http.IncomingMessage,
+  url: URL,
+  field: string
+): Promise<string | null> {
+  const fromQuery = url.searchParams.get(field);
+  if (fromQuery) {
+    return fromQuery;
+  }
+  if (req.method === 'POST') {
+    const params = new URLSearchParams(await readBody(req));
+    return params.get(field);
+  }
+  return null;
+}
+
+/** Finalize a pending checkout and render the right page for the outcome. */
+async function settlePayment(
+  res: http.ServerResponse,
+  subscriptions: SubscriptionService,
+  externalRef: string | null
+): Promise<void> {
+  if (!externalRef) {
+    payPage(res, 400, 'Payment reference missing', 'We could not match this payment to an order.');
+    return;
+  }
+  const result = await subscriptions.finalizePending(externalRef);
+  if (result.status === 'paid') {
+    payPage(
+      res,
+      200,
+      'Payment confirmed',
+      "You're upgraded. Enjoy the extra meters and SMS alerts."
+    );
+  } else if (result.status === 'pending') {
+    payPage(
+      res,
+      200,
+      'Payment processing',
+      "We're still confirming with the gateway - your plan unlocks as soon as it clears."
+    );
+  } else {
+    payPage(
+      res,
+      200,
+      'Payment not completed',
+      'The payment did not go through. Try /upgrade again whenever you like.'
+    );
+  }
 }
 
 async function dashboardData(db: Db, userId: number) {
@@ -78,7 +171,12 @@ async function dashboardData(db: Db, userId: number) {
   };
 }
 
-export function createWebServer(db: Db, scheduler: Scheduler, config: ServerConfig): http.Server {
+export function createWebServer(
+  db: Db,
+  scheduler: Scheduler,
+  config: ServerConfig,
+  subscriptions: SubscriptionService
+): http.Server {
   const startedAt = Date.now();
 
   return http.createServer((req, res) => {
@@ -114,6 +212,35 @@ export function createWebServer(db: Db, scheduler: Scheduler, config: ServerConf
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(dashboardHtml(url.searchParams.get('t')!));
         }
+        return;
+      }
+
+      // bKash redirects here: ?paymentID=...&status=success|failure|cancel
+      if (url.pathname === '/pay/bkash/callback') {
+        if (url.searchParams.get('status') !== 'success') {
+          payPage(res, 200, 'Payment cancelled', 'No charge was made. Run /upgrade to try again.');
+          return;
+        }
+        await settlePayment(res, subscriptions, url.searchParams.get('paymentID'));
+        return;
+      }
+
+      // SSLCommerz success redirect and server-to-server IPN both confirm by tran_id
+      if (url.pathname === '/pay/sslcommerz/success' || url.pathname === '/pay/sslcommerz/ipn') {
+        const tranId = await callbackParam(req, url, 'tran_id');
+        if (url.pathname === '/pay/sslcommerz/ipn') {
+          if (tranId) {
+            await subscriptions.finalizePending(tranId);
+          }
+          json(res, 200, { received: true });
+          return;
+        }
+        await settlePayment(res, subscriptions, tranId);
+        return;
+      }
+
+      if (url.pathname === '/pay/sslcommerz/fail' || url.pathname === '/pay/sslcommerz/cancel') {
+        payPage(res, 200, 'Payment cancelled', 'No charge was made. Run /upgrade to try again.');
         return;
       }
 

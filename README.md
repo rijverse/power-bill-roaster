@@ -12,7 +12,7 @@ It checks your DESCO prepaid meter balance and fires off angry emails if you're 
 ## Two Ways to Run It
 
 1. **Self-hosted (free forever) ** just fork this repo, toss your details into GitHub secrets, and the workflow does its thing on a schedule. Zero servers, zero cost. The setup guide below covers this.
-2. **Hosted (coming soon) ** a Telegram bot that does it all for you  no fork, no secrets, just message the bot. Run-out predictions ("~3 days left at this rate"), a web dashboard with balance history charts, multi-meter support and SMS alerts on paid plans.
+2. **Hosted (Telegram bot) ** a bot that does it all for you  no fork, no secrets, just message the bot. Run-out predictions ("~3 days left at this rate"), a web dashboard with balance history charts, multi-meter support, and SMS alerts on paid plans (bKash / SSLCommerz billing). Deploy your own with [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Screenshots
 <img width="484" height="826" alt="image" src="https://github.com/user-attachments/assets/70212ca2-8a4b-428d-a3c6-5be90eadbf72" />

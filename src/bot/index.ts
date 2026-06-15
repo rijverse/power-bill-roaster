@@ -292,7 +292,7 @@ export function createBot(
     } catch (error) {
       console.error('Upgrade failed:', error);
       await ctx.reply(
-        'Payments are not live yet - real billing is around the corner. Watch this space.'
+        "Couldn't reach the payment gateway just now. Give it a minute and try /upgrade again."
       );
     }
   });
@@ -332,7 +332,7 @@ export function createBot(
     const budget = smsPerMonthFor(user.plan);
     if (budget === 0) {
       await ctx.reply(
-        'SMS alerts are a paid feature - they reach you even when the power (and your WiFi) is already gone. Paid plans are coming soon; Telegram alerts stay free forever.'
+        'SMS alerts are a paid feature - they reach you even when the power (and your WiFi) is already gone. Unlock them with /upgrade; Telegram alerts stay free forever.'
       );
       return;
     }

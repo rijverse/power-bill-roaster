@@ -49,7 +49,8 @@ Optional features (see `.env.example` for the full reference):
 
 - **SMS alerts**: `SMS_GATEWAY=bulksmsbd` + `BULKSMSBD_API_KEY` + `BULKSMSBD_SENDER_ID`
 - **Billing**: `BILLING_PROVIDER` defaults to `sandbox` (auto-approves upgrades -
-  fine until real payments). bKash/SSLCommerz need merchant credentials.
+  fine until real payments). `bkash` and `sslcommerz` are live; see
+  [Billing](#7-billing-paid-plans).
 
 Start it:
 
@@ -116,3 +117,49 @@ block), and `/stats` shows users / meters / readings / alerts on demand.
 The email sender speaks plain SMTP. To enable it, set `SMTP_HOST`, `SMTP_PORT`,
 `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` (an address on a domain with proper
 SPF/DKIM) in `.env`. Any transactional email provider works.
+
+## 7. Billing (paid plans)
+
+`BILLING_PROVIDER=sandbox` (default) auto-approves every `/upgrade` - good for
+testing, never for production. Two real gateways are implemented:
+
+```env
+# bKash Tokenized Checkout
+BILLING_PROVIDER=bkash
+BKASH_APP_KEY=...
+BKASH_APP_SECRET=...
+BKASH_USERNAME=...
+BKASH_PASSWORD=...
+# BKASH_BASE_URL defaults to the sandbox; set the production host once approved
+
+# or SSLCommerz
+BILLING_PROVIDER=sslcommerz
+SSLCOMMERZ_STORE_ID=...
+SSLCOMMERZ_STORE_PASSWORD=...
+# SSLCOMMERZ_BASE_URL defaults to the sandbox; use https://securepay.sslcommerz.com live
+```
+
+How the flow works:
+
+1. `/upgrade plus` creates a checkout and replies with a payment link.
+2. The user pays on the gateway's hosted page.
+3. The gateway redirects/IPNs back to **`PUBLIC_BASE_URL/pay/...`**, the app
+   **re-verifies the payment server-side** (it never trusts the redirect's own
+   status), records it in the `payments` ledger, activates the plan, and messages
+   the user on Telegram.
+
+Requirements:
+
+- **`PUBLIC_BASE_URL` must be publicly reachable and HTTPS** in production - the
+  callback carries money state. The same Caddy setup from section 4 covers this.
+- Register these callback URLs with your gateway account if it requires
+  pre-registration:
+  - bKash: `https://app.yourdomain.com/pay/bkash/callback`
+  - SSLCommerz success/fail/cancel/IPN are sent automatically at checkout
+    creation; just make sure `/pay/sslcommerz/*` is reachable.
+- Verify against each gateway's **sandbox** first, then swap creds and `*_BASE_URL`
+  to production. The app also exposes `/pay/sslcommerz/ipn` for SSLCommerz's
+  server-to-server confirmation (recommended - it lands even if the user closes
+  the browser before the redirect).
+
+Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment.

@@ -54,15 +54,21 @@ export interface ServerConfig {
           username: string;
           password: string;
           baseUrl: string;
+          callbackUrl: string;
         };
       }
     | {
         provider: 'sslcommerz';
-        sslcommerz: { storeId: string; storePassword: string; baseUrl: string };
+        sslcommerz: {
+          storeId: string;
+          storePassword: string;
+          baseUrl: string;
+          publicBaseUrl: string;
+        };
       };
 }
 
-function getBillingConfig(): ServerConfig['billing'] {
+function getBillingConfig(publicBaseUrl: string): ServerConfig['billing'] {
   const provider = process.env.BILLING_PROVIDER || 'sandbox';
   if (provider === 'sandbox') {
     return { provider: 'sandbox' };
@@ -81,6 +87,7 @@ function getBillingConfig(): ServerConfig['billing'] {
         username: process.env.BKASH_USERNAME!,
         password: process.env.BKASH_PASSWORD!,
         baseUrl: process.env.BKASH_BASE_URL || 'https://tokenized.sandbox.bka.sh/v1.2.0-beta',
+        callbackUrl: `${publicBaseUrl}/pay/bkash/callback`,
       },
     };
   }
@@ -96,6 +103,7 @@ function getBillingConfig(): ServerConfig['billing'] {
         storeId: process.env.SSLCOMMERZ_STORE_ID,
         storePassword: process.env.SSLCOMMERZ_STORE_PASSWORD,
         baseUrl: process.env.SSLCOMMERZ_BASE_URL || 'https://sandbox.sslcommerz.com',
+        publicBaseUrl,
       },
     };
   }
@@ -134,6 +142,9 @@ export function getServerConfig(): ServerConfig {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 
+  const publicBaseUrl =
+    process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || '3000'}`;
+
   return {
     databaseUrl: process.env.DATABASE_URL!,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
@@ -143,7 +154,7 @@ export function getServerConfig(): ServerConfig {
     reminderIntervalHours: parseFloat(process.env.REMINDER_INTERVAL_HOURS || '24'),
     jitterMaxMs: parseInt(process.env.JITTER_MAX_MS || '4000'),
     adminChatId: process.env.ADMIN_CHAT_ID ? parseInt(process.env.ADMIN_CHAT_ID) : null,
-    publicBaseUrl: process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || '3000'}`,
+    publicBaseUrl,
     dashboardSecret:
       process.env.DASHBOARD_SECRET ||
       crypto.createHash('sha256').update(`dash:${process.env.TELEGRAM_BOT_TOKEN}`).digest('hex'),
@@ -152,7 +163,7 @@ export function getServerConfig(): ServerConfig {
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
     },
     sms: getSmsConfig(),
-    billing: getBillingConfig(),
+    billing: getBillingConfig(publicBaseUrl),
   };
 }
 

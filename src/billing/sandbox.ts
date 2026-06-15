@@ -3,6 +3,7 @@ import { CheckoutSession, PaymentProvider, PaymentStatus } from './types';
 /** Auto-approving fake provider for dev and pre-launch testing. */
 export class SandboxProvider implements PaymentProvider {
   readonly name = 'sandbox';
+  readonly autoConfirms = true;
 
   createCheckout(opts: {
     userId: number;

@@ -112,4 +112,28 @@ describe('Config', () => {
       });
     });
   });
+
+  describe('getServerConfig billing', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://localhost/test';
+      process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    });
+
+    it('defaults to none so a fresh deploy never auto-approves upgrades', () => {
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(getServerConfig().billing.provider).toBe('none');
+      });
+    });
+
+    it('honors an explicit BILLING_PROVIDER=sandbox for dev', () => {
+      process.env.BILLING_PROVIDER = 'sandbox';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(getServerConfig().billing.provider).toBe('sandbox');
+      });
+    });
+  });
 });

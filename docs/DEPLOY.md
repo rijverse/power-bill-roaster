@@ -48,9 +48,10 @@ PUBLIC_BASE_URL=http://<server-ip>:3000
 Optional features (see `.env.example` for the full reference):
 
 - **SMS alerts**: `SMS_GATEWAY=bulksmsbd` + `BULKSMSBD_API_KEY` + `BULKSMSBD_SENDER_ID`
-- **Billing**: `BILLING_PROVIDER` defaults to `sandbox` (auto-approves upgrades -
-  fine until real payments). `bkash` and `sslcommerz` are live; see
-  [Billing](#7-billing-paid-plans).
+- **Billing**: `BILLING_PROVIDER` defaults to `none` - paid plans are off and
+  `/upgrade` replies "coming soon" (the free-only launch default). `bkash` and
+  `sslcommerz` are live gateways; `sandbox` auto-approves upgrades for free and is
+  for dev only. See [Billing](#7-billing-paid-plans).
 
 Start it:
 
@@ -120,8 +121,11 @@ SPF/DKIM) in `.env`. Any transactional email provider works.
 
 ## 7. Billing (paid plans)
 
-`BILLING_PROVIDER=sandbox` (default) auto-approves every `/upgrade` - good for
-testing, never for production. Two real gateways are implemented:
+`BILLING_PROVIDER=none` (default) keeps paid plans off - `/upgrade` replies
+"coming soon", so you can launch free-only without a merchant account. Switch to
+a real gateway when you're ready to charge. `BILLING_PROVIDER=sandbox`
+auto-approves every `/upgrade` for free - good for testing, never for production.
+Two real gateways are implemented:
 
 ```env
 # bKash Tokenized Checkout

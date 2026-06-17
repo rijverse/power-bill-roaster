@@ -87,6 +87,8 @@ export function createBot(
   const pendingSms = new Map<number, PendingSmsVerification>();
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
   const otpSends = new RateLimiter(SMS_OTP_SENDS_PER_HOUR, 60 * 60 * 1000);
+  // Free-only launch: paid plans are off until a real gateway is configured.
+  const billingLive = config.billing.provider !== 'none';
 
   async function findUser(chatId: number) {
     const [user] = await db
@@ -246,7 +248,12 @@ export function createBot(
       lines.push(`Renews/expires: ${subscription.currentPeriodEnd.toDateString()}`);
     }
     if (user.plan === 'free') {
-      lines.push('', 'Want SMS alerts and more meters? /upgrade');
+      lines.push(
+        '',
+        billingLive
+          ? 'Want SMS alerts and more meters? /upgrade'
+          : 'SMS alerts and more meters are coming soon.'
+      );
     }
     await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
   });
@@ -255,6 +262,13 @@ export function createBot(
     const user = await findUser(ctx.chat.id);
     if (!user) {
       await ctx.reply('No account yet - /register a meter first.');
+      return;
+    }
+    if (!billingLive) {
+      await ctx.reply(
+        "💸 Paid plans aren't switched on yet - everyone's on *free* for now (1 meter, Telegram alerts). SMS alerts and multi-meter support are coming soon; I'll announce it right here.",
+        { parse_mode: 'Markdown' }
+      );
       return;
     }
     const requested = (ctx.match ?? '').trim().toLowerCase();

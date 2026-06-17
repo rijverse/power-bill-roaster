@@ -45,6 +45,7 @@ export interface ServerConfig {
     | { gateway: 'console' }
     | { gateway: 'bulksmsbd'; bulksmsbd: { apiKey: string; senderId: string; baseUrl: string } };
   billing:
+    | { provider: 'none' }
     | { provider: 'sandbox' }
     | {
         provider: 'bkash';
@@ -69,7 +70,12 @@ export interface ServerConfig {
 }
 
 function getBillingConfig(publicBaseUrl: string): ServerConfig['billing'] {
-  const provider = process.env.BILLING_PROVIDER || 'sandbox';
+  // Default to 'none' (paid plans off) so a fresh production deploy can never
+  // auto-approve upgrades. Sandbox is opt-in for dev/testing only.
+  const provider = process.env.BILLING_PROVIDER || 'none';
+  if (provider === 'none') {
+    return { provider: 'none' };
+  }
   if (provider === 'sandbox') {
     return { provider: 'sandbox' };
   }

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   serial,
@@ -11,14 +12,25 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 
-export const users = pgTable('users', {
-  id: serial('id').primaryKey(),
-  telegramChatId: bigint('telegram_chat_id', { mode: 'number' }).unique(),
-  email: text('email'),
-  tonePref: text('tone_pref').notNull().default('roast'),
-  plan: text('plan').notNull().default('free'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: serial('id').primaryKey(),
+    telegramChatId: bigint('telegram_chat_id', { mode: 'number' }).unique(),
+    email: text('email'),
+    tonePref: text('tone_pref').notNull().default('roast'),
+    plan: text('plan').notNull().default('free'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // Email is the web app's login identity, so it must be unique - but
+  // case-insensitively, and only among rows that have one (telegram-only users
+  // keep email null and are unaffected).
+  table => [
+    uniqueIndex('users_email_lower_idx')
+      .on(sql`lower(${table.email})`)
+      .where(sql`${table.email} is not null`),
+  ]
+);
 
 export const meters = pgTable(
   'meters',

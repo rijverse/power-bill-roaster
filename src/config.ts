@@ -40,6 +40,8 @@ export interface ServerConfig {
   adminPassword: string | null;
   /** signs admin session cookies; derived from the password so rotating it logs everyone out */
   adminSessionSecret: string;
+  /** SaaS outbound email (magic-link sign-in + email alerts). null = email features off */
+  mail: { from: string; host: string; port: number; user: string; pass: string } | null;
   defaultThresholds: {
     low: number;
     critical: number;
@@ -144,6 +146,23 @@ function getSmsConfig(): ServerConfig['sms'] {
   throw new Error(`Unknown SMS_GATEWAY: ${gateway}`);
 }
 
+// SaaS email is opt-in: enabled only when a host and a from-address are set.
+// Powers magic-link sign-in for the customer web app and email alerts.
+function getMailConfig(): ServerConfig['mail'] {
+  const host = process.env.SMTP_HOST;
+  const from = process.env.EMAIL_FROM;
+  if (!host || !from) {
+    return null;
+  }
+  return {
+    from,
+    host,
+    port: parseInt(process.env.SMTP_PORT || '587'),
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+  };
+}
+
 const REQUIRED_SERVER_ENV_VARS = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN'] as const;
 
 export function getServerConfig(): ServerConfig {
@@ -181,6 +200,7 @@ export function getServerConfig(): ServerConfig {
     dashboardSecret,
     adminPassword,
     adminSessionSecret,
+    mail: getMailConfig(),
     defaultThresholds: {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),

@@ -4,6 +4,7 @@ import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
 import { Dispatcher } from './notifications/dispatcher';
 import { createSmsGateway } from './notifications/sms';
+import { createMailer } from './services/mailer';
 import { createPaymentProvider, SubscriptionService } from './billing';
 import { createWebServer } from './web/server';
 
@@ -14,6 +15,10 @@ async function main(): Promise<void> {
   const smsGateway = createSmsGateway(config);
   if (smsGateway) {
     console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
+  }
+  const mailer = createMailer(config);
+  if (mailer) {
+    console.log(`Email channel enabled (from ${mailer.from})`);
   }
   const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
   const bot = createBot(db, config, subscriptions, smsGateway);
@@ -39,12 +44,12 @@ async function main(): Promise<void> {
     );
   };
 
-  const dispatcher = new Dispatcher(db, telegramSender, smsGateway);
+  const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer);
   const scheduler = new Scheduler(db, pool, telegramSender, dispatcher, config, subscriptions);
 
-  const healthServer = createWebServer(db, scheduler, config, subscriptions);
+  const healthServer = createWebServer(db, scheduler, config, subscriptions, mailer);
   healthServer.listen(config.port, () => {
-    console.log(`Web server on :${config.port} (/health, /dash, /pay)`);
+    console.log(`Web server on :${config.port} (/health, /dash, /app, /admin, /pay)`);
   });
 
   const shutdown = async (signal: string) => {

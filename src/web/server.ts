@@ -7,12 +7,20 @@ import { verifyDashboardToken } from './token';
 import { dashboardHtml } from './dashboard-html';
 import { dashboardData } from './queries';
 import { handleAdminRequest } from './admin';
+import { handleAppRequest } from './app';
+import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 
 const MAX_BODY_BYTES = 64 * 1024;
 // Blunt brute-forcing the admin password without locking out a fat-fingered operator.
 const ADMIN_LOGIN_ATTEMPTS = 10;
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+// Customer web app: cap magic-link emails (anti email-bombing) and DESCO
+// lookups on add-meter (politeness to the upstream API).
+const APP_LOGIN_SENDS = 5;
+const APP_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const APP_METER_LOOKUPS = 6;
+const APP_METER_WINDOW_MS = 10 * 60 * 1000;
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -114,10 +122,13 @@ export function createWebServer(
   db: Db,
   scheduler: Scheduler,
   config: ServerConfig,
-  subscriptions: SubscriptionService
+  subscriptions: SubscriptionService,
+  mailer: Mailer | null = null
 ): http.Server {
   const startedAt = Date.now();
   const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
+  const appLoginLimiter = new RateLimiter(APP_LOGIN_SENDS, APP_LOGIN_WINDOW_MS);
+  const appMeterLimiter = new RateLimiter(APP_METER_LOOKUPS, APP_METER_WINDOW_MS);
 
   return http.createServer((req, res) => {
     void (async () => {
@@ -125,6 +136,17 @@ export function createWebServer(
 
       if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
         await handleAdminRequest(req, res, { db, config, subscriptions, loginLimiter });
+        return;
+      }
+
+      if (url.pathname === '/app' || url.pathname.startsWith('/app/')) {
+        await handleAppRequest(req, res, {
+          db,
+          config,
+          mailer,
+          loginLimiter: appLoginLimiter,
+          meterLimiter: appMeterLimiter,
+        });
         return;
       }
 

@@ -4,7 +4,9 @@ import { AlertAction, AlertLevel } from '../core/alert-machine';
 import { smsPerMonthFor } from '../core/plans';
 import { renderAlert, MeterContext } from './telegram-templates';
 import { smsAlertText } from './sms-templates';
+import { emailAlert } from './email-templates';
 import { SmsGateway } from './sms';
+import { Mailer } from '../services/mailer';
 
 export interface TelegramSender {
   sendTelegram(chatId: number, text: string): Promise<void>;
@@ -12,15 +14,16 @@ export interface TelegramSender {
 
 /**
  * Fans an alert out to every channel the user has: Telegram always (free),
- * SMS only for low/critical alerts, only on plans with an SMS budget, and
- * only while this month's budget holds. Every delivery attempt is logged
- * to alerts_log with its channel and status.
+ * email to verified addresses (free, so reminders/recovery go too), and SMS
+ * only for low/critical, only on plans with an SMS budget, and only while this
+ * month's budget holds. Every delivery attempt is logged to alerts_log.
  */
 export class Dispatcher {
   constructor(
     private db: Db,
     private telegram: TelegramSender,
-    private sms: SmsGateway | null
+    private sms: SmsGateway | null,
+    private mailer: Mailer | null = null
   ) {}
 
   async dispatchAlert(
@@ -31,7 +34,53 @@ export class Dispatcher {
     ctx: MeterContext
   ): Promise<void> {
     await this.sendTelegramAlert(user, meter, action, level, ctx);
+    await this.sendEmailAlert(user, meter, action, level, ctx);
     await this.sendSmsAlert(user, meter, action, level, ctx);
+  }
+
+  private async sendEmailAlert(
+    user: schema.User,
+    meter: schema.Meter,
+    action: AlertAction,
+    level: AlertLevel,
+    ctx: MeterContext
+  ): Promise<void> {
+    if (!this.mailer) {
+      return;
+    }
+    const content = emailAlert(action, ctx);
+    if (!content) {
+      return;
+    }
+    // verified=true means the address is confirmed (web magic-link sign-in or
+    // an explicit opt-in); unverified/disabled channels never receive mail
+    const emailChannels = await this.db
+      .select()
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.userId, user.id),
+          eq(schema.channels.type, 'email'),
+          eq(schema.channels.enabled, true),
+          eq(schema.channels.verified, true)
+        )
+      );
+    for (const channel of emailChannels) {
+      let deliveryStatus = 'sent';
+      try {
+        await this.mailer.send(channel.address, content.subject, content.text, content.html);
+      } catch (error) {
+        deliveryStatus = 'failed';
+        console.error(`Email alert failed for meter ${meter.id} to ${channel.address}:`, error);
+      }
+      await this.db.insert(schema.alertsLog).values({
+        meterId: meter.id,
+        channelId: channel.id,
+        level,
+        action,
+        deliveryStatus,
+      });
+    }
   }
 
   private async sendTelegramAlert(

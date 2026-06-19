@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { fetchWithTimeout } from '../core/http';
 import { CheckoutSession, PaymentProvider, PaymentStatus } from './types';
 
 export interface BkashConfig {
@@ -107,7 +107,7 @@ export class BkashProvider implements PaymentProvider {
     if (this.token && Date.now() < this.token.expiresAt - TOKEN_SKEW_MS) {
       return this.token.value;
     }
-    const res = await fetch(`${this.config.baseUrl}/tokenized/checkout/token/grant`, {
+    const res = await fetchWithTimeout(`${this.config.baseUrl}/tokenized/checkout/token/grant`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -130,7 +130,7 @@ export class BkashProvider implements PaymentProvider {
 
   private async authedPost<T>(path: string, payload: Record<string, unknown>): Promise<T> {
     const token = await this.ensureToken();
-    const res = await fetch(`${this.config.baseUrl}${path}`, {
+    const res = await fetchWithTimeout(`${this.config.baseUrl}${path}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -36,6 +36,10 @@ export interface ServerConfig {
   publicBaseUrl: string;
   /** signs dashboard links; falls back to a hash of the bot token */
   dashboardSecret: string;
+  /** operator admin-panel password; null disables the /admin dashboard entirely */
+  adminPassword: string | null;
+  /** signs admin session cookies; derived from the password so rotating it logs everyone out */
+  adminSessionSecret: string;
   defaultThresholds: {
     low: number;
     critical: number;
@@ -151,6 +155,19 @@ export function getServerConfig(): ServerConfig {
   const publicBaseUrl =
     process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || '3000'}`;
 
+  const dashboardSecret =
+    process.env.DASHBOARD_SECRET ||
+    crypto.createHash('sha256').update(`dash:${process.env.TELEGRAM_BOT_TOKEN}`).digest('hex');
+
+  const adminPassword = process.env.ADMIN_PASSWORD || null;
+  // Bind the session secret to the current password: change the password and
+  // every issued cookie stops verifying. Falls back to a constant when the
+  // panel is disabled (the secret is never used in that case).
+  const adminSessionSecret = crypto
+    .createHash('sha256')
+    .update(`admin-session:${adminPassword ?? ''}:${dashboardSecret}`)
+    .digest('hex');
+
   return {
     databaseUrl: process.env.DATABASE_URL!,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
@@ -161,9 +178,9 @@ export function getServerConfig(): ServerConfig {
     jitterMaxMs: parseInt(process.env.JITTER_MAX_MS || '4000'),
     adminChatId: process.env.ADMIN_CHAT_ID ? parseInt(process.env.ADMIN_CHAT_ID) : null,
     publicBaseUrl,
-    dashboardSecret:
-      process.env.DASHBOARD_SECRET ||
-      crypto.createHash('sha256').update(`dash:${process.env.TELEGRAM_BOT_TOKEN}`).digest('hex'),
+    dashboardSecret,
+    adminPassword,
+    adminSessionSecret,
     defaultThresholds: {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),

@@ -1,15 +1,18 @@
 import http from 'http';
-import { eq, and, gte, desc, inArray } from 'drizzle-orm';
-import { Db, schema } from '../db';
+import { Db } from '../db';
 import { Scheduler } from '../core/scheduler';
 import { SubscriptionService } from '../billing';
-import { predictRunOut } from '../core/prediction';
 import { ServerConfig } from '../config';
 import { verifyDashboardToken } from './token';
 import { dashboardHtml } from './dashboard-html';
+import { dashboardData } from './queries';
+import { handleAdminRequest } from './admin';
+import { RateLimiter } from '../core/rate-limiter';
 
-const HISTORY_DAYS = 30;
 const MAX_BODY_BYTES = 64 * 1024;
+// Blunt brute-forcing the admin password without locking out a fat-fingered operator.
+const ADMIN_LOGIN_ATTEMPTS = 10;
+const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -107,70 +110,6 @@ async function settlePayment(
   }
 }
 
-async function dashboardData(db: Db, userId: number) {
-  const meters = await db
-    .select()
-    .from(schema.meters)
-    .where(and(eq(schema.meters.userId, userId), eq(schema.meters.active, true)));
-  if (meters.length === 0) {
-    return { meters: [] };
-  }
-  const meterIds = meters.map(m => m.id);
-  const since = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
-
-  const readings = await db
-    .select({
-      meterId: schema.readings.meterId,
-      balance: schema.readings.balance,
-      fetchedAt: schema.readings.fetchedAt,
-    })
-    .from(schema.readings)
-    .where(and(inArray(schema.readings.meterId, meterIds), gte(schema.readings.fetchedAt, since)))
-    .orderBy(schema.readings.fetchedAt);
-
-  const alerts = await db
-    .select({
-      meterId: schema.alertsLog.meterId,
-      level: schema.alertsLog.level,
-      action: schema.alertsLog.action,
-      sentAt: schema.alertsLog.sentAt,
-    })
-    .from(schema.alertsLog)
-    .where(inArray(schema.alertsLog.meterId, meterIds))
-    .orderBy(desc(schema.alertsLog.sentAt))
-    .limit(10);
-
-  return {
-    meters: meters.map(meter => {
-      const series = readings.filter(r => r.meterId === meter.id);
-      const latest = series.length > 0 ? series[series.length - 1].balance : null;
-      const prediction =
-        latest !== null
-          ? predictRunOut(
-              series.map(r => ({ balance: r.balance, at: r.fetchedAt })),
-              latest
-            )
-          : null;
-      return {
-        id: meter.id,
-        label: meter.nickname ?? `Meter ${meter.meterNo}`,
-        meterNo: meter.meterNo,
-        lowThreshold: meter.lowThreshold,
-        criticalThreshold: meter.criticalThreshold,
-        balance: latest,
-        prediction,
-        readings: series.map(r => ({ t: r.fetchedAt.toISOString(), balance: r.balance })),
-      };
-    }),
-    alerts: alerts.map(a => ({
-      meterId: a.meterId,
-      level: a.level,
-      action: a.action,
-      sentAt: a.sentAt.toISOString(),
-    })),
-  };
-}
-
 export function createWebServer(
   db: Db,
   scheduler: Scheduler,
@@ -178,10 +117,16 @@ export function createWebServer(
   subscriptions: SubscriptionService
 ): http.Server {
   const startedAt = Date.now();
+  const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
 
   return http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
+
+      if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+        await handleAdminRequest(req, res, { db, config, subscriptions, loginLimiter });
+        return;
+      }
 
       if (url.pathname === '/health') {
         const intervalMs = config.pollIntervalHours * 60 * 60 * 1000;

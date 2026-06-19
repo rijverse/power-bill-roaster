@@ -115,10 +115,19 @@ export class Dispatcher {
       return;
     }
 
+    // The budget is the hard cap on billable segments. Decrement per successful
+    // send so a user with several verified numbers can't overshoot it in a
+    // single fan-out (failed sends don't burn budget, matching usedThisMonth).
+    let remaining = budget - usedThisMonth;
     for (const channel of smsChannels) {
+      if (remaining <= 0) {
+        console.warn(`User ${user.id} reached the SMS budget (${budget}) mid-alert, stopping`);
+        break;
+      }
       let deliveryStatus = 'sent';
       try {
         await this.sms.send(channel.address, text);
+        remaining--;
       } catch (error) {
         deliveryStatus = 'failed';
         console.error(`SMS alert failed for meter ${meter.id} via ${this.sms.name}:`, error);

@@ -16,6 +16,10 @@ export class EmailService {
         user: config.smtp.user,
         pass: config.smtp.pass,
       },
+      // don't let a stalled SMTP connection hang the (CLI/GitHub Actions) run
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 20_000,
     });
   }
 

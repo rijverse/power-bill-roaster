@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { fetchWithTimeout } from '../../core/http';
 import { SmsGateway } from './types';
 
 export interface BulkSmsBdConfig {
@@ -24,7 +24,7 @@ export class BulkSmsBdGateway implements SmsGateway {
       `&senderid=${encodeURIComponent(this.config.senderId)}` +
       `&message=${encodeURIComponent(text)}`;
 
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
     const body: unknown = await response.json();
     const code =
       typeof body === 'object' && body !== null

@@ -1,5 +1,5 @@
-import fetch from 'node-fetch';
 import https from 'https';
+import { fetchWithTimeout } from '../core/http';
 import { ApiResponse, BalanceData } from '../types';
 
 // Overridable for tests (point at a mock server)
@@ -31,9 +31,11 @@ function validateApiResponse(response: unknown): response is ApiResponse {
 
 export class DescoApiClient {
   async getBalance(accountNo: string, meterNo: string): Promise<BalanceData> {
-    const url = `${API_BASE_URL}/getBalance?accountNo=${accountNo}&meterNo=${meterNo}`;
+    const url =
+      `${API_BASE_URL}/getBalance?accountNo=${encodeURIComponent(accountNo)}` +
+      `&meterNo=${encodeURIComponent(meterNo)}`;
 
-    const response = await fetch(url, { agent: httpsAgent });
+    const response = await fetchWithTimeout(url, { agent: httpsAgent });
     const apiResponse: unknown = await response.json();
 
     if (!validateApiResponse(apiResponse)) {

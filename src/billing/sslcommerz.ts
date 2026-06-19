@@ -1,4 +1,4 @@
-import fetch from 'node-fetch';
+import { fetchWithTimeout } from '../core/http';
 import { CheckoutSession, PaymentProvider, PaymentStatus } from './types';
 
 export interface SslcommerzConfig {
@@ -67,7 +67,7 @@ export class SslcommerzProvider implements PaymentProvider {
       num_of_item: '1',
     });
 
-    const res = await fetch(`${this.config.baseUrl}/gwprocess/v4/api.php`, {
+    const res = await fetchWithTimeout(`${this.config.baseUrl}/gwprocess/v4/api.php`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
@@ -86,7 +86,7 @@ export class SslcommerzProvider implements PaymentProvider {
       `&store_id=${encodeURIComponent(this.config.storeId)}` +
       `&store_passwd=${encodeURIComponent(this.config.storePassword)}` +
       `&v=1&format=json`;
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url);
     const body = (await res.json()) as ValidationResponse;
     const status = body.element?.[0]?.status;
     return mapSslcommerzStatus(status);

@@ -7,7 +7,10 @@ import crypto from 'crypto';
 // password and every outstanding cookie stops verifying.
 
 export const ADMIN_COOKIE = 'pr_admin';
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Short TTL for a panel that exposes customer PII: the session is stateless, so
+// logout can't revoke a stolen cookie - a tight window is the next best thing.
+// Operators re-authenticate daily.
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 function hmac(payload: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(payload).digest('base64url');

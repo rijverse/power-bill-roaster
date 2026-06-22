@@ -146,6 +146,18 @@ export const payments = pgTable(
   table => [uniqueIndex('payments_external_ref_idx').on(table.externalRef)]
 );
 
+// Append-only trail of destructive operator actions (grant / pause / erase).
+// target_user_id is a plain column, not a foreign key, so the audit row outlives
+// the very account an erase deletes.
+export const adminAudit = pgTable('admin_audit', {
+  id: serial('id').primaryKey(),
+  action: text('action').notNull(), // grant | pause | erase
+  targetUserId: integer('target_user_id'),
+  detail: text('detail'),
+  ip: text('ip'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type Meter = typeof meters.$inferSelect;
 export type Reading = typeof readings.$inferSelect;
@@ -153,3 +165,4 @@ export type AlertStateRow = typeof alertState.$inferSelect;
 export type Channel = typeof channels.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
+export type AdminAudit = typeof adminAudit.$inferSelect;

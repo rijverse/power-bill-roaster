@@ -40,6 +40,8 @@ services:
     restart: on-failure
     environment:
       DATABASE_URL: postgres://powerroast:powerroast@postgres-test:5432/powerroast
+      # sidecar Postgres on the compose network speaks no TLS; allow the plaintext link
+      ALLOW_INSECURE_DB: '1'
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_API_ROOT: http://mockoon:8080
       DESCO_API_BASE_URL: http://mockoon:8080/api/tkdes/customer

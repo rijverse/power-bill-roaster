@@ -22,12 +22,16 @@ import {
 const MAX_BODY_BYTES = 16 * 1024;
 const PAGE_SIZE = 25;
 const PAYMENTS_SHOWN = 20;
+const AUDIT_SHOWN = 50;
 
 export interface AdminDeps {
   db: Db;
   config: ServerConfig;
   subscriptions: SubscriptionService;
+  /** per-IP login throttle */
   loginLimiter: RateLimiter;
+  /** aggregate login throttle (backstop against IP-rotating brute force) */
+  loginGlobalLimiter: RateLimiter;
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
@@ -264,6 +268,39 @@ async function erase(db: Db, userId: number): Promise<{ status: number; body: un
   return { status: 200, body: { ok: true } };
 }
 
+/** Append a row to the operator action trail. Best-effort: a failed write is
+ *  logged but never blocks the action it records. */
+async function recordAudit(
+  db: Db,
+  action: string,
+  targetUserId: number,
+  ip: string,
+  detail: string | null
+): Promise<void> {
+  try {
+    await db.insert(schema.adminAudit).values({ action, targetUserId, ip, detail });
+  } catch (error) {
+    console.error('admin audit write failed:', error);
+  }
+}
+
+async function auditList(db: Db) {
+  const rows = await db
+    .select()
+    .from(schema.adminAudit)
+    .orderBy(desc(schema.adminAudit.createdAt))
+    .limit(AUDIT_SHOWN);
+  return {
+    entries: rows.map(r => ({
+      action: r.action,
+      targetUserId: r.targetUserId,
+      detail: r.detail,
+      ip: r.ip,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  };
+}
+
 // ---- router --------------------------------------------------------------
 
 /**
@@ -276,7 +313,7 @@ export async function handleAdminRequest(
   res: http.ServerResponse,
   deps: AdminDeps
 ): Promise<boolean> {
-  const { db, config, subscriptions, loginLimiter } = deps;
+  const { db, config, subscriptions, loginLimiter, loginGlobalLimiter } = deps;
   const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
   const path = url.pathname;
 
@@ -306,7 +343,11 @@ export async function handleAdminRequest(
   }
 
   if (path === '/admin/login' && method === 'POST') {
-    if (!loginLimiter.allow(clientIp(req))) {
+    // per-IP throttle, plus an aggregate cap so an attacker rotating IPs can't
+    // get a fresh budget per address
+    const ipOk = loginLimiter.allow(clientIp(req));
+    const globalOk = loginGlobalLimiter.allow('admin-login');
+    if (!ipOk || !globalOk) {
       html(res, 429, adminLoginHtml(true, 'Too many attempts. Wait a few minutes and try again.'));
       return true;
     }
@@ -333,6 +374,11 @@ export async function handleAdminRequest(
 
     if (path === '/admin/api/overview' && method === 'GET') {
       json(res, 200, await overview(db));
+      return true;
+    }
+
+    if (path === '/admin/api/audit' && method === 'GET') {
+      json(res, 200, await auditList(db));
       return true;
     }
 
@@ -366,12 +412,22 @@ export async function handleAdminRequest(
           json(res, 403, { error: 'Bad or missing CSRF token.' });
           return true;
         }
-        const result =
-          action === 'grant'
-            ? await grant(db, subscriptions, userId, await readBody(req))
-            : action === 'pause'
-              ? await pause(db, userId)
-              : await erase(db, userId);
+        let result: { status: number; body: unknown };
+        let detail: string | null = null;
+        if (action === 'grant') {
+          // read the stream once: grant validates it, the audit row records it
+          const bodyText = await readBody(req);
+          detail = bodyText.slice(0, 200);
+          result = await grant(db, subscriptions, userId, bodyText);
+        } else if (action === 'pause') {
+          result = await pause(db, userId);
+        } else {
+          result = await erase(db, userId);
+        }
+        // only record actions that actually took effect
+        if (result.status === 200) {
+          await recordAudit(db, action, userId, clientIp(req), detail);
+        }
         json(res, result.status, result.body);
         return true;
       }

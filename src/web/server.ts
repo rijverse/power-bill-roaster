@@ -15,6 +15,9 @@ const MAX_BODY_BYTES = 64 * 1024;
 // Blunt brute-forcing the admin password without locking out a fat-fingered operator.
 const ADMIN_LOGIN_ATTEMPTS = 10;
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+// Aggregate cap across all IPs. With a single operator this only trips under a
+// distributed / IP-rotating brute force, never legitimate use.
+const ADMIN_LOGIN_GLOBAL_ATTEMPTS = 50;
 // Customer web app: cap magic-link emails (anti email-bombing) and DESCO
 // lookups on add-meter (politeness to the upstream API).
 const APP_LOGIN_SENDS = 5;
@@ -32,6 +35,39 @@ function escapeHtml(s: string): string {
     /[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c
   );
+}
+
+/**
+ * Defense-in-depth headers on every response, set before routing so the admin
+ * panel (customer PII), the customer app, and the token-bearing dashboard links
+ * all get them. The CSP allows inline script/style and the jsdelivr Chart.js CDN
+ * because every dashboard page relies on both; everything else is same-origin
+ * only, framing is denied (clickjacking), and X-Robots-Tag keeps these pages -
+ * and the auth tokens in their URLs - out of search engines.
+ */
+function applySecurityHeaders(res: http.ServerResponse, secure: boolean): void {
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self'",
+      "font-src 'self'",
+      "base-uri 'none'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+    ].join('; ')
+  );
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  if (secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
 }
 
 /** Minimal user-facing page shown after a payment redirect. */
@@ -127,15 +163,24 @@ export function createWebServer(
 ): http.Server {
   const startedAt = Date.now();
   const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
+  const loginGlobalLimiter = new RateLimiter(ADMIN_LOGIN_GLOBAL_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const appLoginLimiter = new RateLimiter(APP_LOGIN_SENDS, APP_LOGIN_WINDOW_MS);
   const appMeterLimiter = new RateLimiter(APP_METER_LOOKUPS, APP_METER_WINDOW_MS);
+  const secure = (config.publicBaseUrl ?? '').startsWith('https');
 
   return http.createServer((req, res) => {
     void (async () => {
+      applySecurityHeaders(res, secure);
       const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
 
       if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
-        await handleAdminRequest(req, res, { db, config, subscriptions, loginLimiter });
+        await handleAdminRequest(req, res, {
+          db,
+          config,
+          subscriptions,
+          loginLimiter,
+          loginGlobalLimiter,
+        });
         return;
       }
 

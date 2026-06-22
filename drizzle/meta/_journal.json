@@ -6,35 +6,42 @@
       "idx": 0,
       "version": "7",
       "when": 1781246529205,
-      "tag": "0000_bumpy_sumo",
+      "tag": "0000_init_core_schema",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
       "when": 1781269978038,
-      "tag": "0001_abandoned_next_avengers",
+      "tag": "0001_add_subscriptions",
       "breakpoints": true
     },
     {
       "idx": 2,
       "version": "7",
       "when": 1781284180821,
-      "tag": "0002_complete_khan",
+      "tag": "0002_add_payments",
       "breakpoints": true
     },
     {
       "idx": 3,
       "version": "7",
       "when": 1781432493282,
-      "tag": "0003_spicy_vermin",
+      "tag": "0003_payments_external_ref_unique",
       "breakpoints": true
     },
     {
       "idx": 4,
       "version": "7",
       "when": 1781867237464,
-      "tag": "0004_warm_nova",
+      "tag": "0004_users_email_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782025844195,
+      "tag": "0005_add_admin_audit",
       "breakpoints": true
     }
   ]

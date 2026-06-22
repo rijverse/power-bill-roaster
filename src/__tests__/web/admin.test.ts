@@ -30,9 +30,11 @@ function startServer(opts: Opts = {}) {
   } as unknown as SubscriptionService;
 
   const user = opts.user === undefined ? { id: 7 } : opts.user;
+  const insert = jest.fn(() => ({ values: jest.fn(async () => undefined) }));
   const db = {
     select: () => ({ from: () => ({ where: async () => (user ? [user] : []) }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
+    insert,
   } as unknown as Db;
 
   const scheduler = { lastCycleCompletedAt: new Date() } as unknown as Scheduler;
@@ -44,14 +46,17 @@ function startServer(opts: Opts = {}) {
   } as unknown as ServerConfig;
 
   const server = createWebServer(db, scheduler, config, subscriptions);
-  return new Promise<{ server: http.Server; base: string; subscriptions: SubscriptionService }>(
-    resolve => {
-      server.listen(0, () => {
-        const { port } = server.address() as AddressInfo;
-        resolve({ server, base: `http://127.0.0.1:${port}`, subscriptions });
-      });
-    }
-  );
+  return new Promise<{
+    server: http.Server;
+    base: string;
+    subscriptions: SubscriptionService;
+    insert: jest.Mock;
+  }>(resolve => {
+    server.listen(0, () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({ server, base: `http://127.0.0.1:${port}`, subscriptions, insert });
+    });
+  });
 }
 
 afterEach(() => jest.clearAllMocks());
@@ -197,6 +202,28 @@ describe('admin panel - actions', () => {
     });
     expect(res.status).toBe(200);
     expect(eraseUser as jest.Mock).toHaveBeenCalledWith(expect.anything(), 7);
+    server.close();
+  });
+
+  it('writes an audit row when an action succeeds', async () => {
+    const { server, base, insert } = await startServer();
+    const res = await fetch(`${base}/admin/api/users/7/pause`, {
+      method: 'POST',
+      headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF },
+    });
+    expect(res.status).toBe(200);
+    expect(insert).toHaveBeenCalled();
+    server.close();
+  });
+
+  it('writes no audit row when the CSRF check fails', async () => {
+    const { server, base, insert } = await startServer();
+    const res = await fetch(`${base}/admin/api/users/7/pause`, {
+      method: 'POST',
+      headers: { Cookie: COOKIE },
+    });
+    expect(res.status).toBe(403);
+    expect(insert).not.toHaveBeenCalled();
     server.close();
   });
 });

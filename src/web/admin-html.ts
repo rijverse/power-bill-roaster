@@ -291,8 +291,8 @@ async function openDetail(id) {
 
 // ---- screen: delivery logs ----------------------------------------------
 const SAMPLE_LOGS = [
-  ['07:42:11', '41021094', 'rafi@example.com', 'Email', 'CRITICAL', 'Delivered', 'ok'],
-  ['07:42:09', '41021094', '@rafi_ahmed', 'Telegram', 'CRITICAL', 'Delivered', 'ok'],
+  ['07:42:11', '41021094', 'rijoanul.shanto@gmail.com', 'Email', 'CRITICAL', 'Delivered', 'ok'],
+  ['07:42:09', '41021094', '@rijoanul_shanto', 'Telegram', 'CRITICAL', 'Delivered', 'ok'],
   ['06:15:03', '37755210', '+880 17xx-xxx', 'SMS', 'WARNING', 'Failed', 'crit'],
   ['06:15:01', '37755210', 'nadia@example.com', 'Email', 'WARNING', 'Delivered', 'ok'],
   ['01:30:55', '50183377', 't.rahman@old.co', 'Email', 'WARNING', 'Bounced', 'low'],

@@ -1,94 +1,169 @@
-// Customer web app: login screen + the signed-in app shell. Same dark,
-// roast-branded look as dashboard-html.ts / admin-html.ts, Chart.js from the
-// same CDN, vanilla JS against /app/api/*.
+// Customer web app: the passwordless login screen and the signed-in shell.
+// Both share the Power·Roast design system (see theme.ts). The shell is a single
+// document that fetches /app/api/me once, then renders four client-routed screens
+// (Dashboard, Meter, Alerts & thresholds, Billing) with vanilla JS. Real data
+// drives everything that the backend supports; surfaces the API can't back yet
+// (in-app recharge, paid plans, roast intensity, quiet hours) are reproduced
+// faithfully but clearly marked as previews. Mutations echo the CSRF token.
 
-const HEAD = `<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: #0d0d0d; color: #eee; font-family: 'Segoe UI', system-ui, sans-serif; }
-  a { color: #f59e0b; }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px; border-bottom: 1px solid #2a2a2a; }
-  h1 { margin: 0; font-size: 20px; } h1 span { color: #f59e0b; }
-  main { max-width: 760px; margin: 0 auto; padding: 16px; }
-  .card { background: #161616; border: 1px solid #2a2a2a; border-radius: 14px; padding: 18px; margin-top: 16px; }
-  .tagline { color: #888; font-size: 13px; }
-  input, button, label { font: inherit; }
-  input[type=text], input[type=email], input[type=number] { background: #0d0d0d; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 9px 11px; }
-  button { background: #f59e0b; color: #111; border: 0; border-radius: 8px; padding: 9px 14px; font-weight: 600; cursor: pointer; }
-  button.ghost { background: transparent; color: #ccc; border: 1px solid #333; }
-  button.danger { background: #b91c1c; color: #fff; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .spacer { flex: 1; }
-  .muted { color: #888; } .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid #333; }
-  .ok { color: #4ade80; } .low { color: #facc15; } .critical { color: #f87171; }
-  .balance { font-size: 26px; font-weight: 800; }
-  .meter-name { font-size: 17px; font-weight: 600; }
-  .empty { color: #888; text-align: center; padding: 28px 0; }
-  .err { color: #f87171; font-size: 13px; min-height: 16px; }
-  .good { color: #4ade80; font-size: 13px; min-height: 16px; }
-  canvas { margin-top: 12px; }
-  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
-  .controls input { width: 90px; }
-  footer { text-align: center; color: #555; font-size: 12px; padding: 24px; }
-</style>`;
-
-function page(title: string, body: string): string {
-  return `<!DOCTYPE html><html lang="en"><head>${HEAD}<title>${title}</title></head><body>${body}</body></html>`;
-}
+import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
 const LOGIN_STATUS: Record<string, { cls: string; msg: string }> = {
   sent: {
-    cls: 'good',
-    msg: '✅ Check your inbox - we emailed you a sign-in link (good for 20 minutes).',
+    cls: 'pr-good',
+    msg: '✅ Check your inbox — we emailed you a sign-in link (good for 20 minutes).',
   },
-  bademail: { cls: 'err', msg: "That doesn't look like an email address." },
-  ratelimited: { cls: 'err', msg: 'Too many requests. Wait a few minutes and try again.' },
-  sendfailed: { cls: 'err', msg: "Couldn't send the email just now. Try again in a bit." },
-  badlink: { cls: 'err', msg: 'That sign-in link is invalid or expired. Request a new one.' },
-  disabled: { cls: 'err', msg: 'Email sign-in is not configured on this server yet.' },
+  bademail: { cls: 'pr-err', msg: "That doesn't look like an email address." },
+  ratelimited: { cls: 'pr-err', msg: 'Too many requests. Wait a few minutes and try again.' },
+  sendfailed: { cls: 'pr-err', msg: "Couldn't send the email just now. Try again in a bit." },
+  badlink: { cls: 'pr-err', msg: 'That sign-in link is invalid or expired. Request a new one.' },
+  disabled: { cls: 'pr-err', msg: 'Email sign-in is not configured on this server yet.' },
 };
 
 export function loginHtml(mailEnabled: boolean, status: string | null): string {
   const s = status ? LOGIN_STATUS[status] : undefined;
-  const notice = s ? `<p class="${s.cls}" style="margin:0 0 12px">${s.msg}</p>` : '';
-  const form = mailEnabled
-    ? `<form class="card" method="POST" action="/app/login">
-    <p class="muted" style="margin:0 0 12px">Enter your email and we'll send you a one-tap sign-in link. No password needed.</p>
-    ${notice}
-    <div class="row">
-      <input type="email" name="email" placeholder="you@example.com" autofocus required style="flex:1;min-width:200px">
-      <button type="submit">Send link</button>
+  const notice = s ? `<p class="${s.cls}" style="margin:0 0 14px">${s.msg}</p>` : '';
+
+  const emailPane = mailEnabled
+    ? `<form method="POST" action="/app/login">
+        ${notice}
+        <label class="pr-label" for="email">Email</label>
+        <input class="pr-input" id="email" type="email" name="email" placeholder="you@example.com" required style="margin-bottom:18px">
+        <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember — we email you a one-tap link.</p>
+        <button class="pr-btn gold block" type="submit">Send sign-in link &amp; brace yourself</button>
+      </form>`
+    : `<div class="pr-err" style="background:rgba(255,82,71,0.08); border:1px solid rgba(255,82,71,0.28); border-radius:11px; padding:14px 16px; min-height:0">Email sign-in is not configured on this server yet. Use the Telegram bot instead.</div>`;
+
+  // Default to the Telegram tab (matches the design); if there's an email status
+  // message to show, open the Email tab so the user sees it.
+  const initialTab = status ? 'email' : 'telegram';
+
+  const body = `<div class="pr-loginwrap">
+  <div class="pr-loginbrand">
+    ${logo(true)}
+    <h1>Welcome back.<br>Your meter <span>missed you.</span></h1>
+    <p>It's been quietly judging your recharge habits while you were gone. Sign in and face the numbers.</p>
+    <div class="pr-peek">
+      <span style="display:grid; place-items:center; width:42px; height:42px; border-radius:10px; background:rgba(255,82,71,0.14); flex:none;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF5247" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg>
+      </span>
+      <div>
+        <div class="mono" style="font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:3px;">A low balance, somewhere</div>
+        <div style="display:flex; align-items:baseline; gap:9px;"><span style="font-size:24px; font-weight:800; color:var(--red-soft); letter-spacing:-0.02em;">৳42.50</span><span class="mono" style="font-size:12px; color:var(--faint);">~3 days left</span></div>
+      </div>
     </div>
-  </form>`
-    : `<div class="card"><p class="err" style="margin:0">Email sign-in is not configured on this server yet.</p></div>`;
-  return page(
-    'Power Roast',
-    `<main style="max-width:440px;margin-top:10vh">
-  <h1>⚡ Power <span>Roast</span></h1>
-  <p class="tagline">Watch your prepaid balance. Get roasted before the lights go out.</p>
-  ${form}
-</main>`
-  );
+  </div>
+
+  <div class="pr-formcard">
+    <div style="margin-bottom:24px">
+      <div style="font-size:22px; font-weight:800; color:var(--text); letter-spacing:-0.02em; margin-bottom:5px;">Sign in to Power·Roast</div>
+      <div style="font-size:14px; color:var(--muted);">Pick your poison. Both lead to the same uncomfortable truth.</div>
+    </div>
+
+    <div class="pr-tabs" style="margin-bottom:24px">
+      <button class="pr-tab" type="button" data-tab="telegram">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>
+        Telegram
+      </button>
+      <button class="pr-tab" type="button" data-tab="email">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 6 10-6"></path></svg>
+        Email
+      </button>
+    </div>
+
+    <div data-pane="telegram">
+      <div style="text-align:center; padding:8px 0 18px;">
+        <div style="position:relative; display:inline-grid; place-items:center; width:84px; height:84px; margin-bottom:18px;">
+          <span style="position:absolute; inset:0; border-radius:24px; background:rgba(94,131,255,0.18); animation:prPulse 2.4s ease-out infinite;"></span>
+          <span style="position:relative; display:grid; place-items:center; width:64px; height:64px; border-radius:18px; background:linear-gradient(135deg,#5E83FF,#2A6FDB);">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>
+          </span>
+        </div>
+        <div style="font-size:16px; font-weight:700; color:var(--text); margin-bottom:6px;">Open the bot to sign in</div>
+        <p class="muted" style="margin:0 auto; max-width:300px; font-size:14px; line-height:1.55;">No password to forget. Open the bot, send <b style="color:var(--text-2)">/start</b>, and it'll watch your meters and roast you right there.</p>
+      </div>
+      <a href="https://t.me/" target="_blank" rel="noopener" class="pr-btn blue block" style="text-decoration:none">Open Telegram
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </a>
+    </div>
+
+    <div data-pane="email" style="display:none">${emailPane}</div>
+
+    <div style="margin-top:22px; padding-top:18px; border-top:1px solid var(--border-soft); text-align:center; font-size:13px; color:var(--faint);">Not affiliated with DESCO · alerts keep running even when this page is closed.</div>
+  </div>
+</div>
+<script>
+(function () {
+  var tabs = document.querySelectorAll('[data-tab]');
+  var panes = document.querySelectorAll('[data-pane]');
+  function show(name) {
+    tabs.forEach(function (t) { t.classList.toggle('on', t.getAttribute('data-tab') === name); });
+    panes.forEach(function (p) { p.style.display = p.getAttribute('data-pane') === name ? '' : 'none'; });
+  }
+  tabs.forEach(function (t) { t.onclick = function () { show(t.getAttribute('data-tab')); }; });
+  show('${mailEnabled ? initialTab : 'telegram'}');
+})();
+</script>`;
+
+  return pageDoc('Power Roast', body);
 }
 
+// SVG icons used in the sidebar / topbar, kept as named constants for clarity.
+const IC = {
+  dashboard:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>',
+  meter:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 12 8.5 8.5"></path><path d="M12 3v2M21 12h-2M12 21v-2M3 12h2"></path></svg>',
+  alerts:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>',
+  billing:
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path></svg>',
+};
+
 export function appShellHtml(csrf: string): string {
-  return page(
-    'Power Roast',
-    `<header>
-  <h1>⚡ Power <span>Roast</span></h1>
-  <form method="POST" action="/app/logout" style="margin:0"><button class="ghost" type="submit">Sign out</button></form>
-</header>
-<main id="app"><div class="card empty">Loading…</div></main>
-<footer>not affiliated with DESCO · alerts keep running even when this page is closed</footer>
+  const body = `<div class="pr-shell">
+  <div id="pr-scrim"></div>
+  <aside class="pr-sidebar" id="pr-sidebar">
+    ${logo()}
+    <nav class="pr-nav">
+      <div class="pr-nav-label">Workspace</div>
+      <button class="pr-navbtn active" type="button" data-screen="dashboard">${IC.dashboard}Dashboard</button>
+      <button class="pr-navbtn" type="button" data-screen="meter">${IC.meter}Meters</button>
+      <button class="pr-navbtn" type="button" data-screen="alerts">${IC.alerts}Alerts &amp; thresholds</button>
+      <button class="pr-navbtn" type="button" data-screen="billing">${IC.billing}Billing &amp; recharge</button>
+    </nav>
+    <div class="pr-side-foot">
+      <a class="pr-navbtn" href="/admin" style="border:1px solid var(--border);background:rgba(255,255,255,0.03);font-size:13px;gap:11px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6z"></path></svg>Switch to admin</a>
+      <div class="pr-user">
+        <span class="pr-avatar" id="navAvatar">·</span>
+        <div class="who"><div class="n" id="navName">…</div><div class="m" id="navPlan"></div></div>
+        <form method="POST" action="/app/logout" style="margin:0"><button class="pr-iconbtn" type="submit" title="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></form>
+      </div>
+    </div>
+  </aside>
+
+  <div class="pr-main">
+    <header class="pr-topbar">
+      <button id="pr-hamburger" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
+      <div class="titles"><div class="t" id="topTitle">Dashboard</div><div class="s" id="topSub">loading…</div></div>
+      <div class="pr-mselwrap" id="mselWrap" style="display:none"></div>
+      <button class="pr-btn gold" id="refreshBtn" type="button" title="Re-fetch the latest balances"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B1020" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span id="refreshLabel">Force check</span></button>
+    </header>
+    <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading…</div></div></main>
+  </div>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
 const CSRF = ${JSON.stringify(csrf)};
-const fmt = n => n === null ? '—' : '\\u09F3' + Number(n).toFixed(2);
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+${CLIENT_HELPERS}
+${CHART_SCRIPT}
 
+// ---- state ---------------------------------------------------------------
+let DATA = null, SEL = 0, SCREEN = 'dashboard', ROAST = 'savage';
+let CHARTS = [];
+const host = document.getElementById('host');
+
+// ---- api -----------------------------------------------------------------
 async function api(path, opts) {
   const res = await fetch('/app/api' + path, opts);
   if (res.status === 401) { location.href = '/app'; throw new Error('signed out'); }
@@ -106,112 +181,430 @@ async function post(path, body) {
   return data;
 }
 
-function cls(m) {
-  if (m.balance === null) return 'ok';
-  return m.balance < m.criticalThreshold ? 'critical' : m.balance < m.lowThreshold ? 'low' : 'ok';
+// ---- helpers -------------------------------------------------------------
+function statusOf(m) {
+  if (!m || m.balance === null) return { label: 'NO DATA', key: 'nodata', pill: 'pr-pill', color: '#6E7790' };
+  if (m.balance < m.criticalThreshold) return { label: 'CRITICAL', key: 'crit', pill: 'pr-pill crit siren', color: '#FF5247' };
+  if (m.balance < m.lowThreshold) return { label: 'LOW', key: 'low', pill: 'pr-pill low', color: '#FBB024' };
+  return { label: 'HEALTHY', key: 'ok', pill: 'pr-pill ok', color: '#34D399' };
 }
-
-function meterCard(m) {
-  const card = document.createElement('div');
-  card.className = 'card';
-  card.innerHTML =
-    '<div class="row"><span class="meter-name">📟 ' + esc(m.label) + '</span><div class="spacer"></div>' +
-    '<span class="balance ' + cls(m) + '">' + fmt(m.balance) + '</span></div>' +
-    '<div class="muted" style="font-size:13px">acct ' + esc(m.accountNo) + ' · meter ' + esc(m.meterNo) + '</div>' +
-    (m.prediction ? '<div style="color:#c4b5fd;font-size:13px;margin-top:4px">🔮 ~' + m.prediction.daysLeft.toFixed(1) + ' days left at ' + fmt(m.prediction.burnPerDay) + '/day</div>' : '') +
-    '<canvas height="100"></canvas>' +
-    '<div class="controls">' +
-      '<label class="muted">Warn under</label><input type="number" class="low" value="' + m.lowThreshold + '">' +
-      '<label class="muted">Panic under</label><input type="number" class="crit" value="' + m.criticalThreshold + '">' +
-      '<button class="setThresh">Save</button>' +
-    '</div>' +
-    '<div class="controls">' +
-      '<input type="text" class="nick" placeholder="Nickname (e.g. Flat 3B)" style="width:auto;flex:1">' +
-      '<button class="setNick ghost">Rename</button>' +
-      '<button class="pause ghost">Pause</button>' +
-    '</div>' +
-    '<p class="err meterErr"></p>';
-  const err = card.querySelector('.meterErr');
-  const guard = fn => async () => { err.textContent = ''; try { await fn(); await render(); } catch (e) { err.textContent = e.message; } };
-  card.querySelector('.setThresh').onclick = guard(() =>
-    post('/meters/' + m.id + '/threshold', { low: Number(card.querySelector('.low').value), critical: Number(card.querySelector('.crit').value) }));
-  card.querySelector('.setNick').onclick = guard(() =>
-    post('/meters/' + m.id + '/nickname', { name: card.querySelector('.nick').value }));
-  card.querySelector('.pause').onclick = guard(async () => {
-    if (!confirm('Pause monitoring for this meter?')) throw new Error('');
-    await post('/meters/' + m.id + '/pause');
-  });
-  setTimeout(() => new Chart(card.querySelector('canvas'), {
-    type: 'line',
-    data: {
-      labels: m.readings.map(r => new Date(r.t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })),
-      datasets: [{ data: m.readings.map(r => r.balance), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.12)', fill: true, pointRadius: 0, tension: .3, borderWidth: 2 }],
-    },
-    options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { maxTicksLimit: 7, color: '#777' }, grid: { display: false } }, y: { ticks: { color: '#777' }, grid: { color: '#222' } } } },
-  }), 0);
-  return card;
+function days(m) { return m && m.prediction ? m.prediction.daysLeft : null; }
+function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function rel(t) {
+  if (!t) return '—';
+  const d = Date.now() - new Date(t).getTime();
+  if (d < 60000) return 'just now';
+  if (d < 3600000) return Math.floor(d / 60000) + 'm ago';
+  if (d < 86400000) return Math.floor(d / 3600000) + 'h ago';
+  return Math.floor(d / 86400000) + 'd ago';
 }
-
-async function render() {
-  const d = await getMe();
-  const app = document.getElementById('app');
-  app.innerHTML = '';
-
-  const head = document.createElement('div');
-  head.className = 'card';
-  head.innerHTML =
-    '<div class="row"><span class="pill">' + esc(d.plan) + '</span>' +
-    '<span class="muted">' + esc(d.email) + ' · up to ' + esc(d.limits.maxMeters) + ' meter(s)</span></div>' +
-    '<label class="row" style="margin-top:10px;cursor:pointer"><input type="checkbox" id="emailToggle"' + (d.emailAlerts ? ' checked' : '') + '> Email me low/critical alerts</label>' +
-    '<p class="err" id="headErr"></p>';
-  app.appendChild(head);
-  head.querySelector('#emailToggle').onchange = async (e) => {
-    document.getElementById('headErr').textContent = '';
-    try { await post('/alerts/email', { enabled: e.target.checked }); } catch (err) { document.getElementById('headErr').textContent = err.message; }
-  };
-
-  if (!d.meters.length) {
-    const empty = document.createElement('div');
-    empty.className = 'card empty';
-    empty.textContent = 'No meters yet. Add one below to start watching it.';
-    app.appendChild(empty);
-  } else {
-    for (const m of d.meters) app.appendChild(meterCard(m));
+function shortDate(ms) { return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+function lastCheck() {
+  let t = 0;
+  for (const m of DATA.meters) for (const r of m.readings) { const v = new Date(r.t).getTime(); if (v > t) t = v; }
+  return t || null;
+}
+function pctChange(readings) {
+  if (!readings || readings.length < 2) return null;
+  const a = readings[0].balance, b = readings[readings.length - 1].balance;
+  if (!a) return null;
+  return Math.round(((b - a) / a) * 100);
+}
+function lastRecharge(m) {
+  let best = null;
+  for (let i = 1; i < m.readings.length; i++) {
+    const d = m.readings[i].balance - m.readings[i - 1].balance;
+    if (d > 1 && (!best || d > best.amount)) best = { amount: d, t: m.readings[i].t };
   }
+  return best;
+}
+function meterAlerts(m) { return DATA.alerts.filter(a => a.meterId === m.id); }
+function levelColor(l) { return l === 'critical' ? '#FF5247' : l === 'low' ? '#FBB024' : '#34D399'; }
+function clearCharts() { CHARTS.forEach(c => { try { c.destroy(); } catch (e) {} }); CHARTS = []; }
+function drawCharts() {
+  host.querySelectorAll('canvas[data-mi]').forEach(cv => {
+    const m = DATA.meters[+cv.getAttribute('data-mi')];
+    if (m) CHARTS.push(window.prChart(cv, m.readings, { low: m.lowThreshold, critical: m.criticalThreshold }));
+  });
+}
+function gauge(m, size) {
+  size = size || 96;
+  const C = 314, st = statusOf(m);
+  let frac = 0;
+  if (m && m.balance !== null) {
+    let max = m.balance;
+    for (const r of m.readings) if (r.balance > max) max = r.balance;
+    frac = max > 0 ? Math.max(0, Math.min(1, m.balance / max)) : 0;
+  }
+  const off = Math.round(C * (1 - frac));
+  return '<div class="pr-gauge" style="width:' + size + 'px;height:' + size + 'px">' +
+    '<svg width="' + size + '" height="' + size + '" viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="11"></circle>' +
+    '<circle cx="60" cy="60" r="50" fill="none" stroke="' + st.color + '" stroke-width="11" stroke-linecap="round" stroke-dasharray="' + C + '" stroke-dashoffset="' + off + '" transform="rotate(-90 60 60)"></circle></svg>' +
+    '<div class="v"><div><div style="font-size:' + (size > 80 ? 19 : 15) + 'px;font-weight:800;color:var(--text);letter-spacing:-0.02em">' + fmt(m ? m.balance : null) + '</div><div class="mono" style="font-size:9px;color:var(--faint);text-transform:uppercase">balance</div></div></div></div>';
+}
 
-  const add = document.createElement('div');
-  add.className = 'card';
-  add.innerHTML =
-    '<div class="meter-name">Add a meter</div>' +
-    '<p class="muted" style="font-size:13px;margin:4px 0 10px">Find these on your DESCO bill or the DESCO prepaid portal.</p>' +
-    '<div class="controls">' +
-      '<input type="text" id="acct" placeholder="Account number" style="width:auto;flex:1">' +
-      '<input type="text" id="meter" placeholder="Meter number" style="width:auto;flex:1">' +
-      '<button id="addBtn">Add</button>' +
-    '</div><p class="err" id="addErr"></p>';
-  app.appendChild(add);
-  add.querySelector('#addBtn').onclick = async () => {
-    const errEl = document.getElementById('addErr');
-    errEl.textContent = '';
+// reusable add-meter card (markup + wiring)
+function addMeterCard() {
+  return '<div class="pr-card" style="margin-top:18px"><div class="pr-card-title">Add a meter</div>' +
+    '<div class="pr-card-sub" style="margin-bottom:16px">Find these on your DESCO bill or the DESCO prepaid portal.</div>' +
+    '<div class="row" style="gap:10px">' +
+      '<input type="text" id="acct" class="pr-input mono" placeholder="Account number" style="flex:1;min-width:160px">' +
+      '<input type="text" id="meter" class="pr-input mono" placeholder="Meter number" style="flex:1;min-width:160px">' +
+      '<button class="pr-btn gold" id="addBtn" type="button">Add</button>' +
+    '</div><p class="pr-err" id="addErr" style="margin-top:8px"></p></div>';
+}
+function wireAddMeter() {
+  const btn = host.querySelector('#addBtn'); if (!btn) return;
+  btn.onclick = async () => {
+    const err = host.querySelector('#addErr'); err.textContent = '';
     try {
-      await post('/meters', { accountNo: document.getElementById('acct').value.trim(), meterNo: document.getElementById('meter').value.trim() });
-      await render();
-    } catch (e) { errEl.textContent = e.message; }
-  };
-
-  const danger = document.createElement('div');
-  danger.className = 'card';
-  danger.innerHTML = '<div class="row"><span class="muted">Delete your account and all data, permanently.</span><div class="spacer"></div><button class="danger" id="del">Delete account</button></div>';
-  app.appendChild(danger);
-  danger.querySelector('#del').onclick = async () => {
-    if (prompt('This erases your account and ALL data. Type DELETE to confirm.') !== 'DELETE') return;
-    try { await post('/account/delete'); location.href = '/app'; } catch (e) { alert(e.message); }
+      await post('/meters', { accountNo: host.querySelector('#acct').value.trim(), meterNo: host.querySelector('#meter').value.trim() });
+      await load();
+    } catch (e) { err.textContent = e.message; }
   };
 }
 
-render().catch(() => {
-  document.getElementById('app').innerHTML = '<div class="card empty">Something broke. Reload the page.</div>';
+// ---- chrome (topbar + sidebar) ------------------------------------------
+const TITLES = {
+  dashboard: ['Dashboard', null],
+  meter: [null, null],
+  alerts: ['Alerts & thresholds', 'decide how loudly the bot judges you'],
+  billing: ['Billing & recharge', 'plans, history, and the recharge you keep forgetting'],
+};
+function renderChrome() {
+  const name = DATA.email || 'You';
+  document.getElementById('navName').textContent = name;
+  document.getElementById('navAvatar').textContent = name.charAt(0).toUpperCase();
+  document.getElementById('navPlan').textContent = DATA.plan + ' · ' + DATA.meters.length + ' meter' + (DATA.meters.length === 1 ? '' : 's');
+
+  document.querySelectorAll('.pr-navbtn[data-screen]').forEach(b => b.classList.toggle('active', b.getAttribute('data-screen') === SCREEN));
+
+  // meter selector
+  const wrap = document.getElementById('mselWrap');
+  if (DATA.meters.length) {
+    wrap.style.display = '';
+    wrap.innerHTML = DATA.meters.map((m, i) =>
+      '<button class="pr-mselbtn' + (i === SEL ? ' on' : '') + '" type="button" data-sel="' + i + '"><span class="dot" style="background:' + statusOf(m).color + '"></span>' + esc(clip(m.label, 14)) + '</button>'
+    ).join('');
+    wrap.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => { SEL = +b.dataset.sel; renderChrome(); renderScreen(); });
+  } else { wrap.style.display = 'none'; }
+
+  // topbar title/sub
+  let title = TITLES[SCREEN][0], sub = TITLES[SCREEN][1];
+  if (SCREEN === 'dashboard') {
+    sub = DATA.meters.length ? (DATA.meters.length + ' meter' + (DATA.meters.length === 1 ? '' : 's') + ' watched · checked ' + rel(lastCheck())) : 'no meters yet — add one to begin';
+  } else if (SCREEN === 'meter') {
+    const m = DATA.meters[SEL];
+    title = m ? m.label : 'Meters';
+    sub = m ? ('meter ' + m.meterNo + ' · checked ' + rel(m.readings.length ? m.readings[m.readings.length - 1].t : null)) : 'no meters yet';
+  } else if (SCREEN === 'billing') {
+    sub = DATA.plan + ' plan · free-only launch';
+  }
+  document.getElementById('topTitle').textContent = title;
+  document.getElementById('topSub').textContent = sub;
+}
+
+// ---- screen: dashboard ---------------------------------------------------
+function dashBanner() {
+  const ms = DATA.meters;
+  const crit = ms.filter(m => m.balance !== null && m.balance < m.criticalThreshold);
+  const low = ms.filter(m => m.balance !== null && m.balance < m.lowThreshold && m.balance >= m.criticalThreshold);
+  if (crit.length) {
+    const m = crit[0];
+    return '<div class="pr-banner" style="margin-bottom:22px"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF5247" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg></span>' +
+      '<div class="bd"><div class="h">' + esc(m.label) + ' is one warm fridge from darkness</div><div class="p">' + fmt(m.balance) + ' left' + (crit.length + low.length > 1 ? ' · ' + (crit.length + low.length) + ' meters need attention' : '') + '. Recharge before the lights file a complaint.</div></div>' +
+      '<button class="pr-btn red" type="button" data-go="billing" style="flex:none">Recharge now →</button></div>';
+  }
+  if (low.length) {
+    const m = low[0];
+    return '<div class="pr-banner warn" style="margin-bottom:22px"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg></span>' +
+      '<div class="bd"><div class="h">' + esc(m.label) + ' is getting low</div><div class="p">' + fmt(m.balance) + ' left. A top-up now saves you a panicked midnight recharge later.</div></div>' +
+      '<button class="pr-btn gold" type="button" data-go="billing" style="flex:none">Recharge →</button></div>';
+  }
+  if (!ms.length) return '';
+  return '<div class="pr-banner" style="margin-bottom:22px;background:linear-gradient(135deg,rgba(52,211,153,0.12),rgba(52,211,153,0.04));border-color:rgba(52,211,153,0.3)"><span class="ic" style="background:rgba(52,211,153,0.16)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>' +
+    '<div class="bd"><div class="h">Every meter is healthy</div><div class="p">Nothing to roast you about right now. Enjoy it while it lasts.</div></div></div>';
+}
+function renderDashboard() {
+  if (!DATA.meters.length) {
+    host.innerHTML = '<div class="pr-card pr-empty" style="margin-bottom:18px">No meters yet. Add one below to start watching it.</div>' + addMeterCard();
+    wireAddMeter();
+    return;
+  }
+  const ms = DATA.meters;
+  const total = ms.reduce((a, m) => a + (m.balance ?? 0), 0);
+  const atRisk = ms.filter(m => m.balance !== null && m.balance < m.lowThreshold);
+  const crit = ms.filter(m => m.balance !== null && m.balance < m.criticalThreshold);
+  const preds = ms.map(m => days(m)).filter(d => typeof d === 'number');
+  const soon = preds.length ? Math.min.apply(null, preds) : null;
+  const soonM = soon === null ? null : ms.find(m => days(m) === soon);
+  const sel = ms[SEL], st = statusOf(sel), pc = pctChange(sel.readings);
+
+  let h = dashBanner();
+  h += '<div class="pr-statrow" style="margin-bottom:18px">' +
+    '<div class="pr-stat"><div class="k">Total balance · ' + ms.length + ' meter' + (ms.length === 1 ? '' : 's') + '</div><div class="n">' + fmt(total) + '</div></div>' +
+    '<div class="pr-stat"><div class="k">Meters at risk</div><div style="display:flex;align-items:baseline;gap:8px"><span class="n ' + (atRisk.length ? 'red' : 'green') + '">' + atRisk.length + '</span><span class="muted" style="font-size:14px">of ' + ms.length + '</span></div><div class="d ' + (crit.length ? 'down' : 'warn') + '">' + crit.length + ' critical · ' + (atRisk.length - crit.length) + ' low</div></div>' +
+    '<div class="pr-stat"><div class="k">Next blackout</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? '—' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div><div class="d">' + (soonM ? esc(clip(soonM.label, 22)) + ' leads the race' : 'all steady') + '</div></div>' +
+  '</div>';
+
+  // chart + meters/prediction
+  h += '<div class="pr-grid pr-2col">' +
+    '<div class="pr-card">' +
+      '<div class="pr-section-head" style="align-items:flex-start;margin-bottom:0"><div>' +
+        '<div class="mono" style="font-size:13px;color:var(--faint);margin-bottom:5px">' + esc(sel.label) + ' · last 30 days</div>' +
+        '<div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:30px;font-weight:800;color:var(--text);letter-spacing:-0.03em">' + fmt(sel.balance) + '</span>' + (pc !== null ? '<span class="mono" style="font-size:12px;font-weight:700;color:' + (pc < 0 ? '#FF8077' : '#34D399') + '">' + (pc < 0 ? '▼ ' : '▲ ') + Math.abs(pc) + '%</span>' : '') + '</div>' +
+      '</div><span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span></div>' +
+      '<div class="pr-chart lg"><canvas data-mi="' + SEL + '"></canvas></div>' +
+    '</div>' +
+    '<div class="pr-stack">' +
+      '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span style="font-size:14px;font-weight:700;color:var(--text)">Your meters</span><span class="mono muted" style="font-size:12px">' + ms.length + ' active</span></div><div class="pr-list">' +
+        ms.map((m, i) => {
+          const s = statusOf(m), d = days(m);
+          return '<div class="pr-rowitem" style="cursor:pointer" data-i="' + i + '"><span class="pr-dot" style="background:' + s.color + '"></span>' +
+            '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text)">' + esc(m.label) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(m.meterNo) + '</div></div>' +
+            '<div style="text-align:right"><div style="font-size:14px;font-weight:800;color:' + s.color + '">' + fmt(m.balance) + '</div><div class="mono" style="font-size:10px;color:var(--faint)">' + (d === null ? '—' : '~' + d.toFixed(d < 10 ? 1 : 0) + 'd') + '</div></div></div>';
+        }).join('') +
+      '</div></div>';
+  if (soonM && soon !== null) {
+    h += '<div style="background:linear-gradient(135deg,rgba(251,176,36,0.12),rgba(255,82,71,0.1));border:1px solid rgba(251,176,36,0.25);border-radius:16px;padding:20px">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg><span style="font-size:13px;font-weight:700;color:var(--text)">Run-out prediction</span></div>' +
+      '<p style="margin:0;font-size:14px;line-height:1.55;color:var(--text-2)">At the current burn rate, <b style="color:var(--gold)">' + esc(soonM.label) + '</b> goes dark in <b style="color:var(--red-soft)">~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days</b>. Maybe set a reminder, since the alerts clearly aren\\'t landing.</p></div>';
+  }
+  h += '</div></div>';
+
+  host.innerHTML = h;
+  host.querySelectorAll('[data-i]').forEach(el => el.onclick = () => { SEL = +el.dataset.i; go('meter'); });
+  host.querySelectorAll('[data-go]').forEach(el => el.onclick = () => go(el.dataset.go));
+  drawCharts();
+}
+
+// ---- screen: meter detail ------------------------------------------------
+function renderMeter() {
+  if (!DATA.meters.length) {
+    host.innerHTML = '<div class="pr-card pr-empty" style="margin-bottom:18px">No meters yet. Add one below.</div>' + addMeterCard();
+    wireAddMeter();
+    return;
+  }
+  const m = DATA.meters[SEL], st = statusOf(m), d = days(m), lr = lastRecharge(m), als = meterAlerts(m);
+  const proj = (m.prediction && m.balance !== null) ? shortDate(Date.now() + m.prediction.daysLeft * 86400000) : '—';
+
+  let h = '<div style="display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid ' + (st.key === 'crit' ? 'rgba(255,82,71,0.28)' : 'var(--border)') + ';border-radius:16px;padding:22px;margin-bottom:18px">' +
+    gauge(m, 96) +
+    '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap"><span style="font-size:20px;font-weight:800;color:var(--text);letter-spacing:-0.02em">' + esc(m.label) + '</span><span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span></div>' +
+      '<div class="mono" style="font-size:12.5px;color:var(--faint)">Account ' + esc(m.accountNo) + ' · Meter ' + esc(m.meterNo) + ' · DESCO prepaid</div>' +
+      '<div style="font-size:14px;color:var(--text-2);margin-top:8px">' + (d === null ? 'Not enough history to predict a run-out yet.' : 'Goes dark in <b style="color:' + st.color + '">~' + d.toFixed(d < 10 ? 1 : 0) + ' days</b>. It deserves better and so do you.') + '</div></div>' +
+    '<button class="pr-btn gold" type="button" data-go="billing" style="flex:none">Recharge →</button></div>';
+
+  h += '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
+    statCard('Daily burn', m.prediction ? fmt(m.prediction.burnPerDay) : '—', m.prediction ? 'per day' : 'need more data', '') +
+    statCard('Projected zero', proj, d === null ? '—' : '~' + d.toFixed(d < 10 ? 1 : 0) + ' days from now', 'gold') +
+    statCard('Last recharge', lr ? fmt(lr.amount) : '—', lr ? rel(lr.t) : 'none detected', '') +
+    statCard('Alerts sent', String(als.length), als.length ? 'in the last 30 days' : 'all quiet', als.length ? 'red' : '') +
+  '</div>';
+
+  h += '<div class="pr-grid pr-2col">' +
+    '<div class="pr-card"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">Balance history</div><div class="mono" style="font-size:12px;color:var(--faint);margin-bottom:6px">Last 30 days · ৳ remaining</div><div class="pr-chart lg"><canvas data-mi="' + SEL + '"></canvas></div></div>' +
+    '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">Recent alerts</div>' +
+      (als.length ? '<div class="pr-list">' + als.slice(0, 6).map(a =>
+        '<div class="pr-rowitem" style="align-items:flex-start"><span class="pr-dot" style="margin-top:5px;background:' + levelColor(a.level) + '"></span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(a.action) + '</div><div class="mono" style="font-size:11px;color:var(--faint);margin-top:2px">' + esc(a.level) + ' · ' + rel(a.sentAt) + '</div></div></div>'
+      ).join('') + '</div>' : '<div class="pr-empty" style="padding:20px 0">No alerts for this meter yet.</div>') +
+    '</div></div>';
+
+  // meter settings (rename / pause) — real mutations
+  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-card-title">Meter settings</div><div class="pr-card-sub" style="margin-bottom:14px">Rename it something you\\'ll recognise, or pause monitoring if you\\'ve moved out.</div>' +
+    '<div class="row" style="gap:10px"><input type="text" id="nick" class="pr-input" placeholder="Nickname (e.g. Flat 3B)" value="' + esc(m.nickname || '') + '" style="flex:1;min-width:160px"><button class="pr-btn ghost" id="nickBtn" type="button">Rename</button><button class="pr-btn ghost" id="pauseBtn" type="button">Pause monitoring</button></div>' +
+    '<p class="pr-err" id="mErr" style="margin-top:8px"></p></div>';
+
+  h += addMeterCard();
+
+  host.innerHTML = h;
+  host.querySelectorAll('[data-go]').forEach(el => el.onclick = () => go(el.dataset.go));
+  const err = host.querySelector('#mErr');
+  host.querySelector('#nickBtn').onclick = async () => {
+    err.textContent = '';
+    try { await post('/meters/' + m.id + '/nickname', { name: host.querySelector('#nick').value }); await load(); } catch (e) { err.textContent = e.message; }
+  };
+  host.querySelector('#pauseBtn').onclick = async () => {
+    if (!confirm('Pause monitoring for this meter?')) return;
+    err.textContent = '';
+    try { await post('/meters/' + m.id + '/pause'); SEL = 0; await load(); } catch (e) { err.textContent = e.message; }
+  };
+  wireAddMeter();
+  drawCharts();
+}
+function statCard(k, n, d, cls) {
+  return '<div class="pr-stat" style="padding:18px"><div class="k">' + k + '</div><div class="n ' + cls + '" style="font-size:22px">' + esc(n) + '</div><div class="d">' + esc(d) + '</div></div>';
+}
+
+// ---- screen: alerts & thresholds ----------------------------------------
+const ROASTS = {
+  savage: { accent: '#FF5247', subject: '⚡ Your electricity is about to ghost you', body: 'Bro. {bal} is your line in the sand and you sprinted past it. Recharge now, or start rationing fridge openings like it\\'s a survival show.' },
+  mild: { accent: '#34D399', subject: 'Heads-up: your balance is getting low', body: 'Friendly nudge — your meter is at {bal}. Might be a good time to top up before it runs out.' },
+};
+function renderAlerts() {
+  if (!DATA.meters.length) {
+    host.innerHTML = '<div class="pr-card pr-empty">Add a meter first — thresholds are set per meter.</div>';
+    return;
+  }
+  const m = DATA.meters[SEL];
+  const smsOn = DATA.limits.smsPerMonth > 0;
+
+  let h = '<div class="pr-grid pr-2col-even">';
+  // left: channels + thresholds
+  h += '<div class="pr-stack">';
+  h += '<div class="pr-card"><div class="pr-card-title">Where it roasts you</div><div class="pr-card-sub" style="margin-bottom:14px">Turn off a channel and you\\'re just choosing which way to be surprised by darkness.</div><div class="pr-list">' +
+    channelRow('rgba(251,176,36,0.13)', emailIcon(), 'Email', esc(DATA.email || 'no email on file'), 'email', DATA.emailAlerts, false, '') +
+    channelRow('rgba(94,131,255,0.13)', tgIcon(), 'Telegram', 'instant · managed in the bot', 'telegram', true, true, '') +
+    channelRow('rgba(52,211,153,0.13)', smsIcon(), 'SMS', '+880 1XXX-XXXXXX', 'sms', smsOn, true, 'PAID PLANS') +
+  '</div><p class="pr-err" id="chErr" style="margin-top:8px"></p></div>';
+
+  h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Thresholds</span><span class="mono muted" style="font-size:12px">' + esc(clip(m.label, 18)) + '</span></div><div class="pr-card-sub" style="margin-bottom:22px">Defaults are ৳150 / ৳100. Higher if you like a buffer, lower if you like danger.</div>' +
+    '<div style="margin-bottom:24px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--gold)"><span style="width:9px;height:9px;border-radius:50%;background:var(--gold)"></span>Warning shot</span><span class="mono" id="loVal" style="font-size:18px;font-weight:700;color:var(--text)">৳' + m.lowThreshold + '</span></div><input type="range" class="pr-range" id="loRange" min="50" max="400" step="10" value="' + m.lowThreshold + '"></div>' +
+    '<div><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--red-soft)"><span style="width:9px;height:9px;border-radius:50%;background:var(--red)"></span>DEFCON 1</span><span class="mono" id="crVal" style="font-size:18px;font-weight:700;color:var(--text)">৳' + m.criticalThreshold + '</span></div><input type="range" class="pr-range" id="crRange" min="30" max="300" step="10" value="' + m.criticalThreshold + '"></div>' +
+  '</div>';
+  h += '</div>';
+
+  // right: roast intensity (preview) + schedule + save
+  h += '<div class="pr-stack">';
+  h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><span class="pr-card-title">Roast intensity</span><span class="pr-sample">preview</span></div>' +
+    '<div class="pr-seg" style="margin-bottom:18px"><button type="button" class="' + (ROAST === 'savage' ? 'on' : '') + '" data-roast="savage">🔥 Savage</button><button type="button" class="' + (ROAST === 'mild' ? 'on' : '') + '" data-roast="mild">😌 Mild</button></div>' +
+    '<div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Live preview · critical email</div>' +
+    '<div id="roastPrev" style="border-left:3px solid ' + ROASTS[ROAST].accent + ';padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:0 10px 10px 0"></div></div>';
+  h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:16px">Schedule</div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--border-soft)"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Check frequency</div><div class="mono" style="font-size:11.5px;color:var(--faint)">balance polled automatically</div></div><span class="mono" style="font-size:13px;font-weight:700;color:var(--gold)">every ~6h</span></div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding-top:14px"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Quiet hours</div><div class="mono" style="font-size:11.5px;color:var(--faint)">no roasts while you sleep</div></div><span class="pr-sample">soon</span></div></div>';
+  h += '<button class="pr-btn gold block" id="saveBtn" type="button" style="padding:14px">Save settings</button><p class="pr-good" id="saveMsg" style="text-align:center"></p>';
+  h += '</div>';
+  h += '</div>';
+
+  host.innerHTML = h;
+  // email toggle (real)
+  const chErr = host.querySelector('#chErr');
+  const et = host.querySelector('#tg-email');
+  if (et) et.onchange = async e => { chErr.textContent = ''; try { await post('/alerts/email', { enabled: e.target.checked }); DATA.emailAlerts = e.target.checked; } catch (err) { chErr.textContent = err.message; e.target.checked = !e.target.checked; } };
+  // roast preview (client-only)
+  function paintRoast() {
+    const r = ROASTS[ROAST];
+    host.querySelector('#roastPrev').innerHTML = '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">' + esc(r.subject) + '</div><div style="font-size:13px;line-height:1.6;color:var(--text-2)">' + esc(r.body.replace('{bal}', fmt(m.balance))) + '</div>';
+    host.querySelector('#roastPrev').style.borderLeftColor = r.accent;
+    host.querySelectorAll('[data-roast]').forEach(b => b.classList.toggle('on', b.dataset.roast === ROAST));
+  }
+  host.querySelectorAll('[data-roast]').forEach(b => b.onclick = () => { ROAST = b.dataset.roast; paintRoast(); });
+  paintRoast();
+  // threshold sliders + save (real)
+  const lo = host.querySelector('#loRange'), cr = host.querySelector('#crRange');
+  lo.oninput = () => host.querySelector('#loVal').textContent = '৳' + lo.value;
+  cr.oninput = () => host.querySelector('#crVal').textContent = '৳' + cr.value;
+  host.querySelector('#saveBtn').onclick = async () => {
+    const msg = host.querySelector('#saveMsg'); msg.textContent = ''; msg.className = 'pr-good'; msg.style.textAlign = 'center';
+    try {
+      await post('/meters/' + m.id + '/threshold', { low: Number(lo.value), critical: Number(cr.value) });
+      m.lowThreshold = Number(lo.value); m.criticalThreshold = Number(cr.value);
+      msg.textContent = 'Saved ✓';
+    } catch (e) { msg.className = 'pr-err'; msg.textContent = e.message; }
+  };
+}
+function channelRow(bg, icon, name, meta, key, on, locked, badge) {
+  const badgeHtml = badge ? '<span class="mono" style="font-size:10px;font-weight:700;color:var(--gold);background:rgba(251,176,36,0.13);padding:2px 7px;border-radius:999px">' + badge + '</span>' : '';
+  return '<div class="pr-rowitem"><span class="pr-chan-ic" style="background:' + bg + '">' + icon + '</span>' +
+    '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px;font-weight:600;color:var(--text)">' + name + '</span>' + badgeHtml + '</div><div class="mono" style="font-size:11.5px;color:var(--faint)">' + meta + '</div></div>' +
+    '<label class="pr-switch"' + (locked ? ' title="Managed elsewhere" style="opacity:0.6;pointer-events:none"' : '') + '><input type="checkbox" id="tg-' + key + '"' + (on ? ' checked' : '') + (locked ? ' disabled' : '') + '><span class="track"></span><span class="knob"></span></label></div>';
+}
+function emailIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 6 10-6"></path></svg>'; }
+function tgIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="#5E83FF"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>'; }
+function smsIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"></rect><path d="M11 18h2"></path></svg>'; }
+
+// ---- screen: billing & recharge -----------------------------------------
+function renderBilling() {
+  const unlimited = DATA.limits.maxMeters >= 99;
+  const planTitle = DATA.plan.charAt(0).toUpperCase() + DATA.plan.slice(1);
+  const isFree = DATA.plan === 'free';
+
+  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Power·Roast watches your balance — it doesn\\'t recharge meters. In-app recharge and self-serve paid plans aren\\'t live yet — this is a preview of what\\'s coming.</div></div>';
+
+  h += '<div class="pr-grid pr-2col-even">';
+  // left: recharge (preview) + history
+  h += '<div class="pr-stack">';
+  h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Recharge a meter</span><span class="pr-sample">preview</span></div><div class="pr-card-sub" style="margin-bottom:18px">When this goes live, you\\'ll top up straight from here. For now, recharge through your usual DESCO channel.</div>' +
+    '<div class="pr-faux"><div class="row" style="gap:10px;margin-bottom:18px">' +
+      '<button class="pr-chip" type="button">৳200</button><button class="pr-chip on" type="button">৳500</button><button class="pr-chip" type="button">৳1000</button><button class="pr-chip" type="button">Custom</button></div>' +
+      '<div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:11px">Pay with</div>' +
+      '<div class="row" style="gap:10px;margin-bottom:20px"><button class="pr-paybtn on" type="button">bKash</button><button class="pr-paybtn" type="button">SSLCommerz</button><button class="pr-paybtn" type="button">Card</button></div>' +
+      '<button class="pr-btn gold block" type="button" disabled style="padding:15px">Recharge ৳500 via bKash →</button></div></div>';
+  h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div><div class="pr-empty" style="padding:24px 0">No payments yet — you\\'re on the free plan.</div></div>';
+  h += '</div>';
+
+  // right: plan + manage
+  h += '<div class="pr-stack">';
+  h += '<div class="pr-plan"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><span class="mono" style="font-size:11px;font-weight:700;color:var(--gold);letter-spacing:0.04em">CURRENT PLAN</span><span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>Active</span></div>' +
+    '<div style="font-size:26px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin-bottom:4px">' + esc(planTitle) + '</div>' +
+    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">' + (isFree ? '৳0' : '—') + '</span><span style="font-size:13px;color:var(--faint)">' + (isFree ? '/ month · free forever' : '/ month') + '</span></div>' +
+    '<div style="display:flex;flex-direction:column;gap:9px">' +
+      featRow((unlimited ? 'Unlimited' : DATA.limits.maxMeters) + ' meter' + (DATA.limits.maxMeters === 1 ? '' : 's')) +
+      featRow(DATA.limits.smsPerMonth > 0 ? DATA.limits.smsPerMonth + ' SMS alerts / month' : 'Email + Telegram alerts') +
+      featRow('Run-out predictions + history') +
+    '</div></div>';
+  h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">Manage plan</div><p class="muted" style="font-size:13px;line-height:1.5;margin-bottom:16px">More meters and SMS alerts are coming. For now, talk to the bot with <b style="color:var(--text-2)">/upgrade</b> to register interest.</p>' +
+    '<div style="display:flex;flex-direction:column;gap:9px"><button class="pr-btn ghost" type="button" disabled>Upgrade — coming soon</button>' +
+    '<button class="pr-btn danger" id="delBtn" type="button">Delete account</button></div><p class="pr-err" id="billErr" style="margin-top:8px"></p></div>';
+  h += '</div>';
+  h += '</div>';
+
+  host.innerHTML = h;
+  host.querySelector('#delBtn').onclick = async () => {
+    if (prompt('This erases your account and ALL data. Type DELETE to confirm.') !== 'DELETE') return;
+    try { await post('/account/delete'); location.href = '/app'; } catch (e) { host.querySelector('#billErr').textContent = e.message; }
+  };
+}
+function featRow(t) { return '<div class="pr-feat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>' + esc(t) + '</div>'; }
+
+// ---- router --------------------------------------------------------------
+function renderScreen() {
+  clearCharts();
+  if (SCREEN === 'meter') renderMeter();
+  else if (SCREEN === 'alerts') renderAlerts();
+  else if (SCREEN === 'billing') renderBilling();
+  else renderDashboard();
+}
+function go(screen) {
+  SCREEN = screen;
+  if (location.hash !== '#' + screen) location.hash = screen;
+  renderChrome();
+  renderScreen();
+  window.scrollTo(0, 0);
+  setSidebar(false);
+}
+async function load() {
+  DATA = await getMe();
+  if (SEL >= DATA.meters.length) SEL = 0;
+  renderChrome();
+  renderScreen();
+}
+
+// ---- chrome wiring -------------------------------------------------------
+const sidebar = document.getElementById('pr-sidebar');
+const scrim = document.getElementById('pr-scrim');
+function setSidebar(open) { sidebar.dataset.open = open ? 'true' : 'false'; scrim.dataset.open = open ? 'true' : 'false'; }
+document.getElementById('pr-hamburger').onclick = () => setSidebar(sidebar.dataset.open !== 'true');
+scrim.onclick = () => setSidebar(false);
+document.querySelectorAll('.pr-navbtn[data-screen]').forEach(btn => btn.onclick = () => go(btn.getAttribute('data-screen')));
+window.addEventListener('hashchange', () => {
+  const s = location.hash.slice(1);
+  if (['dashboard', 'meter', 'alerts', 'billing'].includes(s) && s !== SCREEN) { SCREEN = s; renderChrome(); renderScreen(); }
 });
-</script>`
-  );
+const refreshBtn = document.getElementById('refreshBtn');
+refreshBtn.onclick = async () => {
+  const icon = document.getElementById('refreshIcon');
+  icon.classList.add('pr-spin');
+  document.getElementById('refreshLabel').textContent = 'Checking…';
+  try { await load(); } finally { icon.classList.remove('pr-spin'); document.getElementById('refreshLabel').textContent = 'Force check'; }
+};
+
+// initial screen from hash
+const initial = location.hash.slice(1);
+if (['meter', 'alerts', 'billing'].includes(initial)) SCREEN = initial;
+load().catch(() => { host.innerHTML = '<div class="pr-card pr-empty">Something broke. Reload the page.</div>'; });
+</script>`;
+
+  return pageDoc('Power Roast', body);
 }

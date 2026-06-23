@@ -5,6 +5,7 @@ import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
 import { verifyDashboardToken } from './token';
 import { dashboardHtml } from './dashboard-html';
+import { pageDoc, logo } from './theme';
 import { dashboardData } from './queries';
 import { handleAdminRequest } from './admin';
 import { handleAppRequest } from './app';
@@ -40,8 +41,9 @@ function escapeHtml(s: string): string {
 /**
  * Defense-in-depth headers on every response, set before routing so the admin
  * panel (customer PII), the customer app, and the token-bearing dashboard links
- * all get them. The CSP allows inline script/style and the jsdelivr Chart.js CDN
- * because every dashboard page relies on both; everything else is same-origin
+ * all get them. The CSP allows inline script/style, the jsdelivr Chart.js CDN,
+ * and Google Fonts (Inter + JetBrains Mono) because every page relies on them;
+ * everything else is same-origin
  * only, framing is denied (clickjacking), and X-Robots-Tag keeps these pages -
  * and the auth tokens in their URLs - out of search engines.
  */
@@ -51,10 +53,10 @@ function applySecurityHeaders(res: http.ServerResponse, secure: boolean): void {
     [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-      "style-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data:",
       "connect-src 'self'",
-      "font-src 'self'",
+      "font-src 'self' https://fonts.gstatic.com",
       "base-uri 'none'",
       "form-action 'self'",
       "frame-ancestors 'none'",
@@ -70,18 +72,18 @@ function applySecurityHeaders(res: http.ServerResponse, secure: boolean): void {
   }
 }
 
-/** Minimal user-facing page shown after a payment redirect. */
+/** Branded user-facing page shown after a payment redirect. */
 function payPage(res: http.ServerResponse, status: number, title: string, message: string): void {
+  const body =
+    `<div style="position:relative;z-index:1;min-height:100vh;display:grid;place-items:center;padding:32px 20px;">` +
+    `<div class="pr-card" style="max-width:440px;width:100%;text-align:center;">` +
+    `<div style="display:flex;justify-content:center;margin-bottom:18px">${logo(true)}</div>` +
+    `<h1 style="font-size:22px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin:0 0 8px">${escapeHtml(title)}</h1>` +
+    `<p style="color:var(--text-2);line-height:1.55;margin:0">${escapeHtml(message)}</p>` +
+    `<p class="muted" style="font-size:13px;margin:14px 0 0">You can close this tab and head back to Telegram.</p>` +
+    `</div></div>`;
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(
-    `<!doctype html><html><head><meta charset="utf-8">` +
-      `<meta name="viewport" content="width=device-width,initial-scale=1">` +
-      `<title>${escapeHtml(title)}</title>` +
-      `<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;text-align:center}` +
-      `h1{font-size:1.4rem}p{color:#444;line-height:1.5}</style></head>` +
-      `<body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p>` +
-      `<p>You can close this tab and head back to Telegram.</p></body></html>`
-  );
+  res.end(pageDoc(title, body));
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {

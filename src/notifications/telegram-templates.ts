@@ -1,5 +1,6 @@
 import { AlertAction } from '../core/alert-machine';
 import { RunOutPrediction, formatDaysLeft } from '../core/prediction';
+import { Tone } from '../core/tone';
 
 export interface MeterContext {
   nickname: string | null;
@@ -30,21 +31,42 @@ function predictionLine(ctx: MeterContext): string[] {
   ];
 }
 
-export function lowAlertMessage(ctx: MeterContext): string {
+export function lowAlertMessage(ctx: MeterContext, tone: Tone = 'savage'): string {
+  const head =
+    tone === 'mild'
+      ? [`⚡ *Heads-up: your balance is running low*`]
+      : [`⚡ *Your Electricity Is About to Ghost You*`];
+  const body =
+    tone === 'mild'
+      ? `You're under ৳${ctx.lowThreshold}. A good time to top up before it runs out.`
+      : `You're under ৳${ctx.lowThreshold}. The fridge is nervous. The WiFi router is writing its will.`;
   return [
-    `⚡ *Your Electricity Is About to Ghost You*`,
+    ...head,
     ``,
     balanceLine(ctx),
     `📟 ${meterLabel(ctx)}`,
     ``,
-    `You're under ৳${ctx.lowThreshold}. The fridge is nervous. The WiFi router is writing its will.`,
+    body,
     ...predictionLine(ctx),
     ``,
-    `Recharge before this becomes a candle-lit situation: ${RECHARGE_URL}`,
+    `Recharge: ${RECHARGE_URL}`,
   ].join('\n');
 }
 
-export function criticalAlertMessage(ctx: MeterContext): string {
+export function criticalAlertMessage(ctx: MeterContext, tone: Tone = 'savage'): string {
+  if (tone === 'mild') {
+    return [
+      `🔴 *Balance critically low*`,
+      ``,
+      balanceLine(ctx),
+      `📟 ${meterLabel(ctx)}`,
+      ``,
+      `You're under ৳${ctx.criticalThreshold} — power may be cut soon. Please recharge when you can.`,
+      ...predictionLine(ctx),
+      ``,
+      `Recharge: ${RECHARGE_URL}`,
+    ].join('\n');
+  }
   return [
     `💀 *EMERGENCY: Stone Age Imminent*`,
     ``,
@@ -60,41 +82,52 @@ export function criticalAlertMessage(ctx: MeterContext): string {
   ].join('\n');
 }
 
-export function reminderMessage(ctx: MeterContext): string {
+export function reminderMessage(ctx: MeterContext, tone: Tone = 'savage'): string {
+  const head =
+    tone === 'mild'
+      ? `🔔 *Reminder: balance still low*`
+      : `🔁 *Still Low. Still Waiting. Still Judging.*`;
+  const body =
+    tone === 'mild'
+      ? `Just a gentle nudge — the balance is still low.`
+      : `Yesterday's warning apparently didn't land. The balance didn't recharge itself overnight - shocking, I know.`;
   return [
-    `🔁 *Still Low. Still Waiting. Still Judging.*`,
+    head,
     ``,
     balanceLine(ctx),
     `📟 ${meterLabel(ctx)}`,
     ``,
-    `Yesterday's warning apparently didn't land. The balance didn't recharge itself overnight - shocking, I know.`,
+    body,
     ...predictionLine(ctx),
     ``,
     `${RECHARGE_URL}`,
   ].join('\n');
 }
 
-export function recoveryMessage(ctx: MeterContext): string {
-  return [
-    `✅ *Look Who Remembered How Money Works*`,
-    ``,
-    balanceLine(ctx),
-    `📟 ${meterLabel(ctx)}`,
-    ``,
-    `Balance is healthy again. The lights live to shine another day. I'll be watching.`,
-  ].join('\n');
+export function recoveryMessage(ctx: MeterContext, tone: Tone = 'savage'): string {
+  const head =
+    tone === 'mild' ? `✅ *Balance topped up*` : `✅ *Look Who Remembered How Money Works*`;
+  const body =
+    tone === 'mild'
+      ? `Your balance is healthy again. Thanks for keeping it topped up.`
+      : `Balance is healthy again. The lights live to shine another day. I'll be watching.`;
+  return [head, ``, balanceLine(ctx), `📟 ${meterLabel(ctx)}`, ``, body].join('\n');
 }
 
-export function renderAlert(action: AlertAction, ctx: MeterContext): string | null {
+export function renderAlert(
+  action: AlertAction,
+  ctx: MeterContext,
+  tone: Tone = 'savage'
+): string | null {
   switch (action) {
     case 'low-alert':
-      return lowAlertMessage(ctx);
+      return lowAlertMessage(ctx, tone);
     case 'critical-alert':
-      return criticalAlertMessage(ctx);
+      return criticalAlertMessage(ctx, tone);
     case 'reminder':
-      return reminderMessage(ctx);
+      return reminderMessage(ctx, tone);
     case 'recovery':
-      return recoveryMessage(ctx);
+      return recoveryMessage(ctx, tone);
     case 'none':
       return null;
   }

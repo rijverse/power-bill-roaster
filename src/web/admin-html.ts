@@ -121,37 +121,57 @@ function healthRow(label, meta, val, color) {
     '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(label) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(meta) + '</div></div>' +
     '<span class="mono" style="font-size:12.5px;font-weight:700;color:' + color + '">' + esc(val) + '</span></div>';
 }
+function mrrSvg(series) {
+  if (!series.length) return '<div class="pr-empty" style="padding:48px 0">No payments recorded yet.</div>';
+  const W = 600, H = 200, n = series.length;
+  const max = Math.max.apply(null, series.map(s => s.total).concat([1]));
+  const x = i => (n === 1 ? W / 2 : (i / (n - 1)) * W);
+  const y = v => H - 10 - (v / max) * (H - 24);
+  const pts = series.map((s, i) => x(i).toFixed(0) + ',' + y(s.total).toFixed(0));
+  const line = 'M' + pts.join(' L');
+  const last = series[n - 1];
+  return '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="display:block"><defs><linearGradient id="prRev" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34D399" stop-opacity="0.3"></stop><stop offset="100%" stop-color="#34D399" stop-opacity="0"></stop></linearGradient></defs>' +
+    '<path d="' + line + ' L' + W + ',' + H + ' L0,' + H + ' Z" fill="url(#prRev)"></path>' +
+    '<path d="' + line + '" fill="none" stroke="#34D399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>' +
+    '<circle cx="' + x(n - 1).toFixed(0) + '" cy="' + y(last.total).toFixed(0) + '" r="5" fill="#34D399" stroke="#11162A" stroke-width="2"></circle></svg>' +
+    '<div style="display:flex;justify-content:space-between;margin-top:8px" class="mono"><span style="font-size:11px;color:var(--faint)">' + esc(series[0].month) + '</span><span style="font-size:11px;color:var(--green)">' + esc(last.month) + '</span></div>';
+}
+function revPayments(payments) {
+  if (!payments.length) return '<div class="pr-empty" style="padding:18px 0">No payments yet.</div>';
+  return '<div class="pr-list">' + payments.map(p =>
+    '<div class="pr-rowitem"><span class="pr-chan-ic" style="background:rgba(255,255,255,0.05);font-family:var(--mono);font-size:10px;font-weight:700;color:var(--muted)">' + esc(String(p.provider).slice(0, 4)) + '</span>' +
+    '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(p.user) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(p.plan) + ' · ' + when(p.createdAt) + '</div></div>' +
+    '<div style="font-size:14px;font-weight:800;color:var(--green)">' + fmt(p.amountBdt) + '</div></div>'
+  ).join('') + '</div>';
+}
 function renderRevenue() {
   const o = OVERVIEW || {};
   const free = Math.max(0, (o.users || 0) - (o.activeSubscriptions || 0));
   let h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
-    statCard('MRR', '—', 'not tracked yet', '', true) +
+    statCard('MRR', fmt(o.mrr ?? 0), 'monthly recurring', '') +
     statCard('Paid subscribers', String(o.activeSubscriptions ?? 0), free.toLocaleString() + ' on free / self-host', '') +
-    statCard('ARPU', '—', 'not tracked yet', '', true) +
-    statCard('Churn', '—', 'not tracked yet', '', true) +
+    statCard('ARPU', fmt(o.arpu ?? 0), 'per paid / month', '') +
+    statCard('Churn', (o.churnPct ?? 0) + '%', 'last 30 days', (o.churnPct ?? 0) > 5 ? 'red' : 'gold') +
   '</div>';
 
-  // MRR chart (sample) + system health (real)
   h += '<div class="pr-grid pr-2col">' +
-    '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Monthly recurring revenue</div><div class="mono" style="font-size:12px;color:var(--faint)">last 12 months · BDT</div></div><span class="pr-sample">sample</span></div>' +
-      '<svg width="100%" viewBox="0 0 600 220" preserveAspectRatio="none" style="display:block"><defs><linearGradient id="prRev" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34D399" stop-opacity="0.3"></stop><stop offset="100%" stop-color="#34D399" stop-opacity="0"></stop></linearGradient></defs>' +
-      '<path d="M0,185 L55,178 L109,168 L164,158 L218,150 L273,132 L327,120 L382,98 L436,86 L491,64 L545,48 L600,32 L600,220 L0,220 Z" fill="url(#prRev)"></path>' +
-      '<path d="M0,185 L55,178 L109,168 L164,158 L218,150 L273,132 L327,120 L382,98 L436,86 L491,64 L545,48 L600,32" fill="none" stroke="#34D399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>' +
-      '<circle cx="600" cy="32" r="5" fill="#34D399" stroke="#11162A" stroke-width="2"></circle></svg>' +
-      '<div style="display:flex;justify-content:space-between;margin-top:8px" class="mono"><span style="font-size:11px;color:var(--faint)">Jul</span><span style="font-size:11px;color:var(--faint)">Oct</span><span style="font-size:11px;color:var(--faint)">Jan</span><span style="font-size:11px;color:var(--faint)">Apr</span><span style="font-size:11px;color:var(--green)">now</span></div></div>' +
+    '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Monthly recurring revenue</div><div class="mono" style="font-size:12px;color:var(--faint)">last 12 months · collected, BDT</div></div><span class="mono" style="font-size:12px;font-weight:700;color:var(--green)">' + fmt(o.totalPaidBdt ?? 0) + ' all-time</span></div>' +
+      '<div id="mrrChart"><div class="pr-empty" style="padding:48px 0">Loading…</div></div></div>' +
     '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px">System health</div><div class="pr-list">' +
       healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : '—', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#6E7790') +
       healthRow('Alerts sent', 'rolling 24 hours', (o.alerts24h ?? 0) + ' / 24h', '#34D399') +
       healthRow('Readings stored', 'all-time data points', (o.readings ?? 0).toLocaleString(), '#8FA8FF') +
-      healthRow('SMS gateway', 'per-send status not wired', 'sample', '#6E7790') +
+      healthRow('Past-due subscriptions', 'active but period ended', String(o.pastDue ?? 0), (o.pastDue ?? 0) > 0 ? '#FF8077' : '#34D399') +
     '</div></div></div>';
 
-  // recent payments — real collected total, per-payment list not exposed
-  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:6px"><span class="pr-card-title">Payments</span><span class="mono muted" style="font-size:12px">collected all-time</span></div>' +
-    '<div style="font-size:28px;font-weight:800;color:var(--green);letter-spacing:-0.02em">' + fmt(o.totalPaidBdt ?? 0) + '</div>' +
-    '<div class="pr-empty" style="padding:18px 0 4px">A per-payment feed lands here once billing goes live. Individual payments are visible per user under Users &amp; meters.</div></div>';
+  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:8px"><span class="pr-card-title">Recent payments</span><span class="mono muted" style="font-size:12px">latest first</span></div>' +
+    '<div id="payFeed"><div class="pr-empty" style="padding:18px 0">Loading…</div></div></div>';
 
   host.innerHTML = h;
+  getJSON('/revenue').then(rev => {
+    const c = host.querySelector('#mrrChart'); if (c) c.innerHTML = mrrSvg(rev.mrrSeries);
+    const f = host.querySelector('#payFeed'); if (f) f.innerHTML = revPayments(rev.payments);
+  }).catch(() => {});
 }
 function relWhen(t) {
   if (!t) return 'never';
@@ -290,40 +310,54 @@ async function openDetail(id) {
 }
 
 // ---- screen: delivery logs ----------------------------------------------
-const SAMPLE_LOGS = [
-  ['07:42:11', '41021094', 'rijoanul.shanto@gmail.com', 'Email', 'CRITICAL', 'Delivered', 'ok'],
-  ['07:42:09', '41021094', '@rijoanul_shanto', 'Telegram', 'CRITICAL', 'Delivered', 'ok'],
-  ['06:15:03', '37755210', '+880 17xx-xxx', 'SMS', 'WARNING', 'Failed', 'crit'],
-  ['06:15:01', '37755210', 'nadia@example.com', 'Email', 'WARNING', 'Delivered', 'ok'],
-  ['01:30:55', '50183377', 't.rahman@old.co', 'Email', 'WARNING', 'Bounced', 'low'],
-  ['00:12:40', '66201145', '@shuvo99', 'Telegram', 'CRITICAL', 'Queued', 'info'],
-];
+const LEVEL_LABEL = { critical: 'CRITICAL', low: 'WARNING', ok: 'OK' };
+function deliveryRow(l) {
+  const t = new Date(l.sentAt);
+  const time = t.toLocaleTimeString('en-GB');
+  const date = t.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  const typePill = '<span class="pr-pill ' + (l.level === 'critical' ? 'crit' : l.level === 'low' ? 'low' : 'ok') + '">' + (LEVEL_LABEL[l.level] || esc(l.level)) + '</span>';
+  const statusPill = l.status === 'sent'
+    ? '<span class="pr-pill ok">Delivered</span>'
+    : '<span class="pr-pill crit">Failed</span>';
+  const chan = l.channel.charAt(0).toUpperCase() + l.channel.slice(1);
+  return '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;align-items:center;padding:13px 22px;border-bottom:1px solid var(--border-soft)">' +
+    '<span class="mono" style="font-size:12px;color:var(--muted)">' + date + ' ' + time + '</span>' +
+    '<span class="mono" style="font-size:12px;color:var(--text-2)">' + esc(l.meterNo) + '</span>' +
+    '<span style="font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(l.recipient) + '</span>' +
+    '<span style="font-size:12.5px;color:var(--muted)">' + esc(chan) + '</span>' + typePill + statusPill + '</div>';
+}
 function renderLogs() {
-  const o = OVERVIEW || {};
-  let h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
-    statCard('Alerts sent · 24h', (o.alerts24h ?? 0).toLocaleString(), 'across all channels', 'green') +
-    statCard('Failed', '—', 'per-send status not wired', 'red', true) +
-    statCard('Bounced', '—', 'per-send status not wired', 'gold', true) +
-    statCard('Queued', '—', 'per-send status not wired', '', true) +
+  let h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px" id="logStats">' +
+    statCard('Delivered · 24h', '…', 'across all channels', 'green') +
+    statCard('Failed · 24h', '…', 'send errors', 'red') +
+    statCard('Attempts · 24h', '…', 'total sends', '') +
+    statCard('Success rate', '…', 'last 24 hours', 'gold') +
   '</div>';
 
-  // sample delivery attempts table (faithful to the design, clearly marked)
-  h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="pr-sample">sample data</span></div>' +
+  h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">latest 40 · real</span></div>' +
     '<div class="pr-tableshell" style="overflow-x:auto"><div style="min-width:760px">' +
-    '<div style="display:grid;grid-template-columns:0.9fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;padding:11px 22px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)" class="mono">' +
+    '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;padding:11px 22px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)" class="mono">' +
     ['Time', 'Meter', 'Recipient', 'Channel', 'Type', 'Status'].map(c => '<span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">' + c + '</span>').join('') + '</div>' +
-    SAMPLE_LOGS.map(l =>
-      '<div style="display:grid;grid-template-columns:0.9fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;align-items:center;padding:13px 22px;border-bottom:1px solid var(--border-soft)">' +
-      '<span class="mono" style="font-size:12px;color:var(--muted)">' + l[0] + '</span><span class="mono" style="font-size:12px;color:var(--text-2)">' + l[1] + '</span>' +
-      '<span style="font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(l[2]) + '</span><span style="font-size:12.5px;color:var(--muted)">' + l[3] + '</span>' +
-      '<span class="pr-pill ' + (l[4] === 'CRITICAL' ? 'crit' : 'low') + '">' + l[4] + '</span>' +
-      '<span class="pr-pill ' + l[6] + '">' + l[5] + '</span></div>'
-    ).join('') + '</div></div></div>';
+    '<div id="logRows"><div class="pr-empty" style="padding:24px 0">Loading…</div></div></div></div></div>';
 
   // real admin audit log
-  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head"><span class="pr-card-title">Admin audit log</span><span class="mono muted" style="font-size:12px">real · operator actions</span></div><div id="auditBody"><div class="pr-empty">Loading…</div></div></div>';
+  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head"><span class="pr-card-title">Admin audit log</span><span class="mono muted" style="font-size:12px">operator actions</span></div><div id="auditBody"><div class="pr-empty">Loading…</div></div></div>';
 
   host.innerHTML = h;
+  getJSON('/deliveries').then(d => {
+    const total = d.delivered24h + d.failed24h;
+    const rate = total > 0 ? Math.round((d.delivered24h / total) * 1000) / 10 + '%' : '—';
+    const stats = host.querySelector('#logStats');
+    if (stats) stats.innerHTML =
+      statCard('Delivered · 24h', d.delivered24h.toLocaleString(), 'across all channels', 'green') +
+      statCard('Failed · 24h', d.failed24h.toLocaleString(), 'send errors', d.failed24h > 0 ? 'red' : '') +
+      statCard('Attempts · 24h', total.toLocaleString(), 'total sends', '') +
+      statCard('Success rate', rate, 'last 24 hours', 'gold');
+    const rows = host.querySelector('#logRows');
+    if (rows) rows.innerHTML = d.rows.length ? d.rows.map(deliveryRow).join('') : '<div class="pr-empty" style="padding:24px 0">No alert deliveries yet.</div>';
+  }).catch(() => {
+    const rows = host.querySelector('#logRows'); if (rows) rows.innerHTML = '<div class="pr-empty" style="padding:24px 0">Could not load deliveries.</div>';
+  });
   loadAudit();
 }
 async function loadAudit() {

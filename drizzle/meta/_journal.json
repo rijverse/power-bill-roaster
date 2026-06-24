@@ -43,6 +43,13 @@
       "when": 1782025844195,
       "tag": "0005_add_admin_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782223489796,
+      "tag": "0006_user_quiet_hours",
+      "breakpoints": true
     }
   ]
 }

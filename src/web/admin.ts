@@ -1,12 +1,12 @@
 import http from 'http';
 import crypto from 'crypto';
-import { eq, and, gte, or, ilike, desc, inArray, count, max, sum } from 'drizzle-orm';
+import { eq, and, gte, lt, or, ilike, desc, inArray, count, max, sum, sql } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { SubscriptionService } from '../billing';
 import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
-import { isPurchasablePlan, maxMetersFor, smsPerMonthFor } from '../core/plans';
+import { isPurchasablePlan, maxMetersFor, smsPerMonthFor, priceBdtFor } from '../core/plans';
 import { dashboardData } from './queries';
 import { adminAppHtml, adminLoginHtml } from './admin-html';
 import {
@@ -85,17 +85,44 @@ function clientIp(req: http.IncomingMessage): string {
 // ---- data assembly -------------------------------------------------------
 
 async function overview(db: Db) {
-  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const [users, activeMeters, readings, alerts24h, activeSubs] = await Promise.all([
-    db.$count(schema.users),
-    db.$count(schema.meters, eq(schema.meters.active, true)),
-    db.$count(schema.readings),
-    db.$count(schema.alertsLog, gte(schema.alertsLog.sentAt, dayAgo)),
-    db.$count(schema.subscriptions, eq(schema.subscriptions.status, 'active')),
-  ]);
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const [users, activeMeters, readings, alerts24h, activeSubs, churned, pastDue] =
+    await Promise.all([
+      db.$count(schema.users),
+      db.$count(schema.meters, eq(schema.meters.active, true)),
+      db.$count(schema.readings),
+      db.$count(schema.alertsLog, gte(schema.alertsLog.sentAt, dayAgo)),
+      db.$count(schema.subscriptions, eq(schema.subscriptions.status, 'active')),
+      db.$count(
+        schema.subscriptions,
+        and(
+          inArray(schema.subscriptions.status, ['expired', 'cancelled']),
+          gte(schema.subscriptions.updatedAt, monthAgo)
+        )
+      ),
+      db.$count(
+        schema.subscriptions,
+        and(
+          eq(schema.subscriptions.status, 'active'),
+          lt(schema.subscriptions.currentPeriodEnd, now)
+        )
+      ),
+    ]);
   const [revenue] = await db
     .select({ total: sum(schema.payments.amountBdt) })
     .from(schema.payments);
+
+  // MRR is the sum of the monthly price of every active plan.
+  const byPlan = await db
+    .select({ plan: schema.subscriptions.plan, n: count() })
+    .from(schema.subscriptions)
+    .where(eq(schema.subscriptions.status, 'active'))
+    .groupBy(schema.subscriptions.plan);
+  const mrr = byPlan.reduce((sum, r) => sum + priceBdtFor(r.plan) * Number(r.n), 0);
+  const churnBase = activeSubs + churned;
+
   return {
     users,
     activeMeters,
@@ -103,6 +130,91 @@ async function overview(db: Db) {
     alerts24h,
     activeSubscriptions: activeSubs,
     totalPaidBdt: Number(revenue?.total ?? 0),
+    mrr,
+    arpu: activeSubs > 0 ? Math.round((mrr / activeSubs) * 10) / 10 : 0,
+    churnPct: churnBase > 0 ? Math.round((churned / churnBase) * 1000) / 10 : 0,
+    pastDue,
+  };
+}
+
+/** Revenue screen: a 12-month payment series + the most recent payments feed. */
+async function revenue(db: Db) {
+  const yearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+  const monthExpr = sql<string>`to_char(date_trunc('month', ${schema.payments.createdAt}), 'YYYY-MM')`;
+  const series = await db
+    .select({ month: monthExpr, total: sum(schema.payments.amountBdt) })
+    .from(schema.payments)
+    .where(gte(schema.payments.createdAt, yearAgo))
+    .groupBy(monthExpr)
+    .orderBy(monthExpr);
+  const recent = await db
+    .select({
+      email: schema.users.email,
+      plan: schema.users.plan,
+      amountBdt: schema.payments.amountBdt,
+      provider: schema.payments.provider,
+      status: schema.payments.status,
+      createdAt: schema.payments.createdAt,
+    })
+    .from(schema.payments)
+    .innerJoin(schema.users, eq(schema.payments.userId, schema.users.id))
+    .orderBy(desc(schema.payments.createdAt))
+    .limit(PAYMENTS_SHOWN);
+  return {
+    mrrSeries: series.map(r => ({ month: r.month, total: Number(r.total ?? 0) })),
+    payments: recent.map(p => ({
+      user: p.email ?? 'telegram user',
+      plan: p.plan,
+      amountBdt: p.amountBdt,
+      provider: p.provider,
+      status: p.status,
+      createdAt: p.createdAt.toISOString(),
+    })),
+  };
+}
+
+/** Delivery logs: real per-send rows from alerts_log + 24h delivery counts. */
+async function deliveries(db: Db) {
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [delivered24h, failed24h] = await Promise.all([
+    db.$count(
+      schema.alertsLog,
+      and(gte(schema.alertsLog.sentAt, dayAgo), eq(schema.alertsLog.deliveryStatus, 'sent'))
+    ),
+    db.$count(
+      schema.alertsLog,
+      and(gte(schema.alertsLog.sentAt, dayAgo), eq(schema.alertsLog.deliveryStatus, 'failed'))
+    ),
+  ]);
+  const rows = await db
+    .select({
+      sentAt: schema.alertsLog.sentAt,
+      level: schema.alertsLog.level,
+      action: schema.alertsLog.action,
+      deliveryStatus: schema.alertsLog.deliveryStatus,
+      meterNo: schema.meters.meterNo,
+      chType: schema.channels.type,
+      chAddr: schema.channels.address,
+      tgChat: schema.users.telegramChatId,
+    })
+    .from(schema.alertsLog)
+    .innerJoin(schema.meters, eq(schema.alertsLog.meterId, schema.meters.id))
+    .innerJoin(schema.users, eq(schema.meters.userId, schema.users.id))
+    .leftJoin(schema.channels, eq(schema.alertsLog.channelId, schema.channels.id))
+    .orderBy(desc(schema.alertsLog.sentAt))
+    .limit(40);
+  return {
+    delivered24h,
+    failed24h,
+    rows: rows.map(r => ({
+      sentAt: r.sentAt.toISOString(),
+      meterNo: r.meterNo,
+      channel: r.chType ?? 'telegram',
+      recipient: r.chAddr ?? (r.tgChat !== null ? `chat ${r.tgChat}` : '—'),
+      level: r.level,
+      action: r.action,
+      status: r.deliveryStatus,
+    })),
   };
 }
 
@@ -379,6 +491,16 @@ export async function handleAdminRequest(
 
     if (path === '/admin/api/audit' && method === 'GET') {
       json(res, 200, await auditList(db));
+      return true;
+    }
+
+    if (path === '/admin/api/revenue' && method === 'GET') {
+      json(res, 200, await revenue(db));
+      return true;
+    }
+
+    if (path === '/admin/api/deliveries' && method === 'GET') {
+      json(res, 200, await deliveries(db));
       return true;
     }
 

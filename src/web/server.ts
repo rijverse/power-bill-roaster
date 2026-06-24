@@ -191,6 +191,7 @@ export function createWebServer(
           db,
           config,
           mailer,
+          subscriptions,
           loginLimiter: appLoginLimiter,
           meterLimiter: appMeterLimiter,
         });

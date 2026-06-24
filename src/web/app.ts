@@ -1,12 +1,20 @@
 import http from 'http';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, desc } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
-import { maxMetersFor, smsPerMonthFor } from '../core/plans';
+import {
+  maxMetersFor,
+  smsPerMonthFor,
+  priceBdtFor,
+  isPurchasablePlan,
+  PURCHASABLE_PLANS,
+} from '../core/plans';
+import { normalizeTone, TONES } from '../core/tone';
+import { SubscriptionService } from '../billing';
 import { getProvider } from '../providers';
 import { dashboardData } from './queries';
 import { readCookie } from './admin-session';
@@ -31,10 +39,24 @@ export interface AppDeps {
   db: Db;
   config: ServerConfig;
   mailer: Mailer | null;
+  subscriptions: SubscriptionService;
   /** magic-link email sends, keyed by email+ip */
   loginLimiter: RateLimiter;
   /** DESCO lookups on add-meter, keyed by user id */
   meterLimiter: RateLimiter;
+}
+
+const PLAN_NAMES: Record<string, string> = { free: 'Free', plus: 'Plus', business: 'Business' };
+
+/** Plan catalogue (free + purchasable) for the billing screen. */
+function planCatalog() {
+  return ['free', ...PURCHASABLE_PLANS].map(id => ({
+    id,
+    name: PLAN_NAMES[id] ?? id,
+    priceBdt: priceBdtFor(id),
+    maxMeters: maxMetersFor(id),
+    smsPerMonth: smsPerMonthFor(id),
+  }));
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
@@ -140,22 +162,198 @@ async function ownedMeter(db: Db, userId: number, meterId: number): Promise<sche
 
 // ---- account data + actions ----------------------------------------------
 
-async function me(db: Db, userId: number) {
+async function me(db: Db, userId: number, billingLive = false) {
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
   if (!user) {
     return null;
   }
-  const emailChannels = await db
-    .select()
-    .from(schema.channels)
-    .where(and(eq(schema.channels.userId, userId), eq(schema.channels.type, 'email')));
+  const chans = await db.select().from(schema.channels).where(eq(schema.channels.userId, userId));
+  const email = chans.find(c => c.type === 'email');
+  const tg = chans.find(c => c.type === 'telegram');
+  const sms = chans.find(c => c.type === 'sms' && c.verified);
+  const emailAlerts = !!(email && email.verified && email.enabled);
   return {
     email: user.email,
     plan: user.plan,
     limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
-    emailAlerts: emailChannels.some(c => c.verified && c.enabled),
+    tone: normalizeTone(user.tonePref),
+    quietStart: user.quietStart,
+    quietEnd: user.quietEnd,
+    emailAlerts,
+    channels: {
+      email: { address: user.email, verified: !!(email && email.verified), enabled: emailAlerts },
+      telegram: { available: user.telegramChatId !== null, enabled: !tg || tg.enabled },
+      sms: {
+        available: smsPerMonthFor(user.plan) > 0,
+        hasPhone: !!sms,
+        enabled: !!(sms && sms.enabled),
+        address: sms?.address ?? null,
+      },
+    },
+    billingLive,
     ...(await dashboardData(db, userId)),
   };
+}
+
+/** Persist roast tone + quiet hours from the Alerts screen. */
+async function setSettings(
+  db: Db,
+  userId: number,
+  body: Record<string, unknown>
+): Promise<{ status: number; body: unknown }> {
+  const patch: { tonePref?: string; quietStart?: number | null; quietEnd?: number | null } = {};
+  if (body.tone !== undefined) {
+    if (typeof body.tone !== 'string' || !TONES.includes(body.tone as never)) {
+      return { status: 400, body: { error: 'Tone must be savage or mild.' } };
+    }
+    patch.tonePref = body.tone;
+  }
+  if (body.quietStart !== undefined || body.quietEnd !== undefined) {
+    const start = body.quietStart;
+    const end = body.quietEnd;
+    const off = start === null && end === null;
+    const valid = (v: unknown) => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 23;
+    if (!off && (!valid(start) || !valid(end))) {
+      return {
+        status: 400,
+        body: { error: 'Quiet hours must be whole hours 0-23, or both null.' },
+      };
+    }
+    patch.quietStart = off ? null : (start as number);
+    patch.quietEnd = off ? null : (end as number);
+  }
+  if (Object.keys(patch).length === 0) {
+    return { status: 400, body: { error: 'Nothing to update.' } };
+  }
+  await db.update(schema.users).set(patch).where(eq(schema.users.id, userId));
+  return { status: 200, body: { ok: true } };
+}
+
+/** Enable/disable an alert channel (email | telegram | sms) for a user. */
+async function setChannel(
+  db: Db,
+  user: schema.User,
+  type: 'email' | 'telegram' | 'sms',
+  enabled: boolean
+): Promise<{ status: number; body: unknown }> {
+  if (type === 'telegram') {
+    if (user.telegramChatId === null) {
+      return {
+        status: 400,
+        body: { error: 'No Telegram account linked. Open the bot and /start.' },
+      };
+    }
+    const [existing] = await db
+      .select()
+      .from(schema.channels)
+      .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'telegram')));
+    if (existing) {
+      await db.update(schema.channels).set({ enabled }).where(eq(schema.channels.id, existing.id));
+    } else {
+      await db.insert(schema.channels).values({
+        userId: user.id,
+        type: 'telegram',
+        address: String(user.telegramChatId),
+        verified: true,
+        enabled,
+      });
+    }
+    return { status: 200, body: { ok: true, enabled } };
+  }
+  // email / sms: only a verified channel can be toggled (you can't enable alerts
+  // to an address you never confirmed). SMS numbers are added via the bot's /sms.
+  const [channel] = await db
+    .select()
+    .from(schema.channels)
+    .where(
+      and(
+        eq(schema.channels.userId, user.id),
+        eq(schema.channels.type, type),
+        eq(schema.channels.verified, true)
+      )
+    );
+  if (!channel) {
+    const hint =
+      type === 'sms'
+        ? 'Add a phone number first with the bot: /sms <number>.'
+        : 'No verified email on file.';
+    return { status: 400, body: { error: hint } };
+  }
+  await db.update(schema.channels).set({ enabled }).where(eq(schema.channels.id, channel.id));
+  return { status: 200, body: { ok: true, enabled } };
+}
+
+// ---- billing --------------------------------------------------------------
+
+async function billing(
+  db: Db,
+  subscriptions: SubscriptionService,
+  userId: number,
+  billingLive: boolean
+) {
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!user) {
+    return null;
+  }
+  const subscription = await subscriptions.activeFor(userId);
+  const payments = await db
+    .select()
+    .from(schema.payments)
+    .where(eq(schema.payments.userId, userId))
+    .orderBy(desc(schema.payments.createdAt))
+    .limit(20);
+  return {
+    live: billingLive,
+    plan: user.plan,
+    priceBdt: priceBdtFor(user.plan),
+    limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
+    catalog: planCatalog(),
+    subscription: subscription
+      ? {
+          plan: subscription.plan,
+          status: subscription.status,
+          provider: subscription.provider,
+          currentPeriodEnd: subscription.currentPeriodEnd?.toISOString() ?? null,
+        }
+      : null,
+    payments: payments.map(p => ({
+      amountBdt: p.amountBdt,
+      provider: p.provider,
+      status: p.status,
+      createdAt: p.createdAt.toISOString(),
+    })),
+  };
+}
+
+/** Start a plan upgrade. Mirrors the bot's /upgrade: returns a redirect URL for
+ * real providers, or activates immediately for the auto-confirming sandbox. */
+async function checkout(
+  deps: AppDeps,
+  userId: number,
+  body: Record<string, unknown>
+): Promise<{ status: number; body: unknown }> {
+  const { db, subscriptions, config } = deps;
+  if (config.billing.provider === 'none') {
+    return { status: 400, body: { error: "Paid plans aren't switched on yet." } };
+  }
+  const plan = typeof body.plan === 'string' ? body.plan : '';
+  if (!isPurchasablePlan(plan)) {
+    return { status: 400, body: { error: 'Unknown plan.' } };
+  }
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!user) {
+    return { status: 404, body: { error: 'No such account.' } };
+  }
+  if (user.plan === plan) {
+    return { status: 400, body: { error: `You're already on ${plan}.` } };
+  }
+  try {
+    const result = await subscriptions.startUpgrade(user, plan);
+    return { status: 200, body: { ...result, plan } };
+  } catch (error) {
+    console.error('Checkout failed:', error);
+    return { status: 502, body: { error: "Couldn't start checkout. Try again in a bit." } };
+  }
 }
 
 async function addMeter(
@@ -367,7 +565,22 @@ export async function handleAppRequest(
     }
 
     if (path === '/app/api/me' && method === 'GET') {
-      const data = await me(db, userId);
+      const data = await me(db, userId, config.billing.provider !== 'none');
+      if (!data) {
+        json(res, 404, { error: 'Account not found.' });
+      } else {
+        json(res, 200, data);
+      }
+      return true;
+    }
+
+    if (path === '/app/api/billing' && method === 'GET') {
+      const data = await billing(
+        db,
+        deps.subscriptions,
+        userId,
+        config.billing.provider !== 'none'
+      );
       if (!data) {
         json(res, 404, { error: 'Account not found.' });
       } else {
@@ -397,14 +610,44 @@ export async function handleAppRequest(
       return true;
     }
 
-    if (path === '/app/api/alerts/email' && method === 'POST') {
+    if (path === '/app/api/settings' && method === 'POST') {
+      const body = await parseJson(req);
+      if (!body) {
+        json(res, 400, { error: 'Invalid body.' });
+        return true;
+      }
+      const result = await setSettings(db, userId, body);
+      json(res, result.status, result.body);
+      return true;
+    }
+
+    const chanMatch = /^\/app\/api\/alerts\/(email|telegram|sms)$/.exec(path);
+    if (chanMatch && method === 'POST') {
       const body = await parseJson(req);
       const enabled = body?.enabled === true;
-      await db
-        .update(schema.channels)
-        .set({ enabled })
-        .where(and(eq(schema.channels.userId, userId), eq(schema.channels.type, 'email')));
-      json(res, 200, { ok: true, enabled });
+      const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+      if (!user) {
+        json(res, 404, { error: 'Account not found.' });
+        return true;
+      }
+      const result = await setChannel(
+        db,
+        user,
+        chanMatch[1] as 'email' | 'telegram' | 'sms',
+        enabled
+      );
+      json(res, result.status, result.body);
+      return true;
+    }
+
+    if (path === '/app/api/checkout' && method === 'POST') {
+      const body = await parseJson(req);
+      if (!body) {
+        json(res, 400, { error: 'Invalid body.' });
+        return true;
+      }
+      const result = await checkout(deps, userId, body);
+      json(res, result.status, result.body);
       return true;
     }
 

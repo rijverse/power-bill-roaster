@@ -441,21 +441,32 @@ const ROASTS = {
   savage: { accent: '#FF5247', subject: '⚡ Your electricity is about to ghost you', body: 'Bro. {bal} is your line in the sand and you sprinted past it. Recharge now, or start rationing fridge openings like it\\'s a survival show.' },
   mild: { accent: '#34D399', subject: 'Heads-up: your balance is getting low', body: 'Friendly nudge — your meter is at {bal}. Might be a good time to top up before it runs out.' },
 };
+function hourLabel(h) { const ap = h < 12 ? 'am' : 'pm'; const hr = h % 12 === 0 ? 12 : h % 12; return hr + ap; }
+function hourOpts(sel) { let o = ''; for (let h = 0; h < 24; h++) o += '<option value="' + h + '"' + (h === sel ? ' selected' : '') + '>' + hourLabel(h) + '</option>'; return o; }
+
 function renderAlerts() {
   if (!DATA.meters.length) {
     host.innerHTML = '<div class="pr-card pr-empty">Add a meter first — thresholds are set per meter.</div>';
     return;
   }
   const m = DATA.meters[SEL];
-  const smsOn = DATA.limits.smsPerMonth > 0;
+  ROAST = DATA.tone || 'savage';
+  const ch = DATA.channels;
+  const qhOn = DATA.quietStart !== null && DATA.quietStart !== undefined;
+  const qhStart = qhOn ? DATA.quietStart : 23;
+  const qhEnd = qhOn ? DATA.quietEnd : 7;
+
+  // channel rows reflect real state; disabled when the channel can't be toggled here
+  const emailRow = channelRow('rgba(251,176,36,0.13)', emailIcon(), 'Email', esc(ch.email.address || 'no email on file'), 'email', ch.email.enabled, !ch.email.verified, '', 'No verified email');
+  const tgRow = channelRow('rgba(94,131,255,0.13)', tgIcon(), 'Telegram', ch.telegram.available ? 'instant' : 'link via the bot', 'telegram', ch.telegram.enabled, !ch.telegram.available, '', 'Open the bot and /start');
+  const smsBadge = ch.sms.available ? '' : 'PAID';
+  const smsMeta = ch.sms.hasPhone ? esc(ch.sms.address) : ch.sms.available ? 'add a number via the bot' : 'on paid plans';
+  const smsRow = channelRow('rgba(52,211,153,0.13)', smsIcon(), 'SMS', smsMeta, 'sms', ch.sms.enabled, !ch.sms.available || !ch.sms.hasPhone, smsBadge, ch.sms.available ? 'Add a phone with /sms in the bot' : 'Upgrade for SMS alerts');
 
   let h = '<div class="pr-grid pr-2col-even">';
-  // left: channels + thresholds
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title">Where it roasts you</div><div class="pr-card-sub" style="margin-bottom:14px">Turn off a channel and you\\'re just choosing which way to be surprised by darkness.</div><div class="pr-list">' +
-    channelRow('rgba(251,176,36,0.13)', emailIcon(), 'Email', esc(DATA.email || 'no email on file'), 'email', DATA.emailAlerts, false, '') +
-    channelRow('rgba(94,131,255,0.13)', tgIcon(), 'Telegram', 'instant · managed in the bot', 'telegram', true, true, '') +
-    channelRow('rgba(52,211,153,0.13)', smsIcon(), 'SMS', '+880 1XXX-XXXXXX', 'sms', smsOn, true, 'PAID PLANS') +
+    emailRow + tgRow + smsRow +
   '</div><p class="pr-err" id="chErr" style="margin-top:8px"></p></div>';
 
   h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Thresholds</span><span class="mono muted" style="font-size:12px">' + esc(clip(m.label, 18)) + '</span></div><div class="pr-card-sub" style="margin-bottom:22px">Defaults are ৳150 / ৳100. Higher if you like a buffer, lower if you like danger.</div>' +
@@ -464,25 +475,33 @@ function renderAlerts() {
   '</div>';
   h += '</div>';
 
-  // right: roast intensity (preview) + schedule + save
+  // right: roast intensity (real) + schedule (real quiet hours) + save
   h += '<div class="pr-stack">';
-  h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><span class="pr-card-title">Roast intensity</span><span class="pr-sample">preview</span></div>' +
+  h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:14px">Roast intensity</div>' +
     '<div class="pr-seg" style="margin-bottom:18px"><button type="button" class="' + (ROAST === 'savage' ? 'on' : '') + '" data-roast="savage">🔥 Savage</button><button type="button" class="' + (ROAST === 'mild' ? 'on' : '') + '" data-roast="mild">😌 Mild</button></div>' +
-    '<div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Live preview · critical email</div>' +
+    '<div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Preview · critical email</div>' +
     '<div id="roastPrev" style="border-left:3px solid ' + ROASTS[ROAST].accent + ';padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:0 10px 10px 0"></div></div>';
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:16px">Schedule</div>' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--border-soft)"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Check frequency</div><div class="mono" style="font-size:11.5px;color:var(--faint)">balance polled automatically</div></div><span class="mono" style="font-size:13px;font-weight:700;color:var(--gold)">every ~6h</span></div>' +
-    '<div style="display:flex;align-items:center;justify-content:space-between;padding-top:14px"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Quiet hours</div><div class="mono" style="font-size:11.5px;color:var(--faint)">no roasts while you sleep</div></div><span class="pr-sample">soon</span></div></div>';
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--border-soft)"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Check frequency</div><div class="mono" style="font-size:11.5px;color:var(--faint)">balance polled automatically</div></div><span class="mono" style="font-size:13px;font-weight:700;color:var(--gold)">automatic</span></div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding-top:14px"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Quiet hours</div><div class="mono" style="font-size:11.5px;color:var(--faint)">pause nudges overnight</div></div>' +
+      '<label class="pr-switch"><input type="checkbox" id="qhToggle"' + (qhOn ? ' checked' : '') + '><span class="track"></span><span class="knob"></span></label></div>' +
+    '<div id="qhRow" style="display:' + (qhOn ? 'flex' : 'none') + ';align-items:center;gap:10px;margin-top:12px"><span class="mono muted" style="font-size:12px">from</span><select id="qhStart" class="pr-input" style="width:auto;padding:8px 10px">' + hourOpts(qhStart) + '</select><span class="mono muted" style="font-size:12px">to</span><select id="qhEnd" class="pr-input" style="width:auto;padding:8px 10px">' + hourOpts(qhEnd) + '</select></div>' +
+    '<div class="mono" style="font-size:11px;color:var(--faint);margin-top:10px">Critical alerts always come through.</div></div>';
   h += '<button class="pr-btn gold block" id="saveBtn" type="button" style="padding:14px">Save settings</button><p class="pr-good" id="saveMsg" style="text-align:center"></p>';
   h += '</div>';
   h += '</div>';
 
   host.innerHTML = h;
-  // email toggle (real)
+  // channel toggles (real) — email/telegram/sms
   const chErr = host.querySelector('#chErr');
-  const et = host.querySelector('#tg-email');
-  if (et) et.onchange = async e => { chErr.textContent = ''; try { await post('/alerts/email', { enabled: e.target.checked }); DATA.emailAlerts = e.target.checked; } catch (err) { chErr.textContent = err.message; e.target.checked = !e.target.checked; } };
-  // roast preview (client-only)
+  ['email', 'telegram', 'sms'].forEach(key => {
+    const el = host.querySelector('#tg-' + key);
+    if (el && !el.disabled) el.onchange = async e => {
+      chErr.textContent = '';
+      try { await post('/alerts/' + key, { enabled: e.target.checked }); } catch (err) { chErr.textContent = err.message; e.target.checked = !e.target.checked; }
+    };
+  });
+  // roast preview reflects the selected (savable) tone
   function paintRoast() {
     const r = ROASTS[ROAST];
     host.querySelector('#roastPrev').innerHTML = '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">' + esc(r.subject) + '</div><div style="font-size:13px;line-height:1.6;color:var(--text-2)">' + esc(r.body.replace('{bal}', fmt(m.balance))) + '</div>';
@@ -491,66 +510,104 @@ function renderAlerts() {
   }
   host.querySelectorAll('[data-roast]').forEach(b => b.onclick = () => { ROAST = b.dataset.roast; paintRoast(); });
   paintRoast();
-  // threshold sliders + save (real)
+  // quiet-hours toggle reveals the range
+  const qhToggle = host.querySelector('#qhToggle');
+  qhToggle.onchange = () => host.querySelector('#qhRow').style.display = qhToggle.checked ? 'flex' : 'none';
+  // threshold sliders
   const lo = host.querySelector('#loRange'), cr = host.querySelector('#crRange');
   lo.oninput = () => host.querySelector('#loVal').textContent = '৳' + lo.value;
   cr.oninput = () => host.querySelector('#crVal').textContent = '৳' + cr.value;
+  // Save settings: tone + quiet hours + thresholds in one go (channels save instantly)
   host.querySelector('#saveBtn').onclick = async () => {
     const msg = host.querySelector('#saveMsg'); msg.textContent = ''; msg.className = 'pr-good'; msg.style.textAlign = 'center';
+    const on = qhToggle.checked;
     try {
+      await post('/settings', { tone: ROAST, quietStart: on ? Number(host.querySelector('#qhStart').value) : null, quietEnd: on ? Number(host.querySelector('#qhEnd').value) : null });
       await post('/meters/' + m.id + '/threshold', { low: Number(lo.value), critical: Number(cr.value) });
-      m.lowThreshold = Number(lo.value); m.criticalThreshold = Number(cr.value);
       msg.textContent = 'Saved ✓';
+      await load();
     } catch (e) { msg.className = 'pr-err'; msg.textContent = e.message; }
   };
 }
-function channelRow(bg, icon, name, meta, key, on, locked, badge) {
+function channelRow(bg, icon, name, meta, key, on, disabled, badge, lockTitle) {
   const badgeHtml = badge ? '<span class="mono" style="font-size:10px;font-weight:700;color:var(--gold);background:rgba(251,176,36,0.13);padding:2px 7px;border-radius:999px">' + badge + '</span>' : '';
   return '<div class="pr-rowitem"><span class="pr-chan-ic" style="background:' + bg + '">' + icon + '</span>' +
     '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px;font-weight:600;color:var(--text)">' + name + '</span>' + badgeHtml + '</div><div class="mono" style="font-size:11.5px;color:var(--faint)">' + meta + '</div></div>' +
-    '<label class="pr-switch"' + (locked ? ' title="Managed elsewhere" style="opacity:0.6;pointer-events:none"' : '') + '><input type="checkbox" id="tg-' + key + '"' + (on ? ' checked' : '') + (locked ? ' disabled' : '') + '><span class="track"></span><span class="knob"></span></label></div>';
+    '<label class="pr-switch"' + (disabled ? ' title="' + (lockTitle || '') + '" style="opacity:0.5;pointer-events:none"' : '') + '><input type="checkbox" id="tg-' + key + '"' + (on ? ' checked' : '') + (disabled ? ' disabled' : '') + '><span class="track"></span><span class="knob"></span></label></div>';
 }
 function emailIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 6 10-6"></path></svg>'; }
 function tgIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="#5E83FF"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>'; }
 function smsIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"></rect><path d="M11 18h2"></path></svg>'; }
 
 // ---- screen: billing & recharge -----------------------------------------
-function renderBilling() {
-  const unlimited = DATA.limits.maxMeters >= 99;
-  const planTitle = DATA.plan.charAt(0).toUpperCase() + DATA.plan.slice(1);
-  const isFree = DATA.plan === 'free';
+const DESCO_RECHARGE = 'https://prepaid.desco.org.bd/';
+const PROVIDER_LABEL = { bkash: 'bKash', sslcommerz: 'SSLCommerz', sandbox: 'Sandbox', manual: 'Manual', card: 'Card' };
 
-  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Power·Roast watches your balance — it doesn\\'t recharge meters. In-app recharge and self-serve paid plans aren\\'t live yet — this is a preview of what\\'s coming.</div></div>';
+function renderBilling() {
+  host.innerHTML = '<div class="pr-card pr-empty">Loading…</div>';
+  api('/billing').then(r => r.ok ? r.json() : Promise.reject()).then(paintBilling)
+    .catch(() => { host.innerHTML = '<div class="pr-card pr-empty">Could not load billing.</div>'; });
+}
+function planFeatures(p) {
+  const meters = p.maxMeters >= 99 ? 'Unlimited meters' : p.maxMeters + ' meter' + (p.maxMeters === 1 ? '' : 's');
+  const sms = p.smsPerMonth > 0 ? p.smsPerMonth + ' SMS alerts / month' : 'Email + Telegram alerts';
+  return featRow(meters) + featRow(sms) + featRow('Run-out predictions + history');
+}
+function paintBilling(b) {
+  const cur = b.catalog.find(p => p.id === b.plan) || { name: b.plan, priceBdt: b.priceBdt, maxMeters: b.limits.maxMeters, smsPerMonth: b.limits.smsPerMonth };
+  const upgrades = b.catalog.filter(p => p.id !== 'free' && p.priceBdt > (cur.priceBdt || 0));
+  const m = DATA.meters[SEL];
+
+  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on DESCO\\'s prepaid portal — Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Self-serve plan upgrades are switched off on this server.') + '</div></div>';
 
   h += '<div class="pr-grid pr-2col-even">';
-  // left: recharge (preview) + history
+  // left: recharge deep-link + history
   h += '<div class="pr-stack">';
-  h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Recharge a meter</span><span class="pr-sample">preview</span></div><div class="pr-card-sub" style="margin-bottom:18px">When this goes live, you\\'ll top up straight from here. For now, recharge through your usual DESCO channel.</div>' +
-    '<div class="pr-faux"><div class="row" style="gap:10px;margin-bottom:18px">' +
-      '<button class="pr-chip" type="button">৳200</button><button class="pr-chip on" type="button">৳500</button><button class="pr-chip" type="button">৳1000</button><button class="pr-chip" type="button">Custom</button></div>' +
-      '<div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:11px">Pay with</div>' +
-      '<div class="row" style="gap:10px;margin-bottom:20px"><button class="pr-paybtn on" type="button">bKash</button><button class="pr-paybtn" type="button">SSLCommerz</button><button class="pr-paybtn" type="button">Card</button></div>' +
-      '<button class="pr-btn gold block" type="button" disabled style="padding:15px">Recharge ৳500 via bKash →</button></div></div>';
-  h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div><div class="pr-empty" style="padding:24px 0">No payments yet — you\\'re on the free plan.</div></div>';
+  h += '<div class="pr-card"><div class="pr-card-title">Recharge a meter</div><div class="pr-card-sub" style="margin-bottom:16px">' +
+    (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official DESCO portal — your meter and account are below.</div>' +
+    (m ? '<div class="pr-list" style="margin-bottom:16px"><div class="pr-rowitem"><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Account</div><div style="font-weight:600;color:var(--text)">' + esc(m.accountNo) + '</div></div><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Meter</div><div style="font-weight:600;color:var(--text)">' + esc(m.meterNo) + '</div></div></div></div>' : '') +
+    '<a class="pr-btn gold block" href="' + DESCO_RECHARGE + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open DESCO recharge →</a></div>';
+  h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div>' +
+    (b.payments.length
+      ? '<div class="pr-list">' + b.payments.map(p =>
+          '<div class="pr-rowitem"><span class="pr-chan-ic" style="background:rgba(255,255,255,0.05);font-family:var(--mono);font-size:10px;font-weight:700;color:var(--muted)">' + esc((PROVIDER_LABEL[p.provider] || p.provider).slice(0, 4)) + '</span>' +
+          '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text)">' + esc(PROVIDER_LABEL[p.provider] || p.provider) + ' payment</div><div class="mono" style="font-size:11px;color:var(--faint)">' + when(p.createdAt) + '</div></div>' +
+          '<div style="text-align:right"><div style="font-size:14px;font-weight:800;color:var(--text)">' + fmt(p.amountBdt) + '</div><div class="mono ' + (p.status === 'completed' ? 'ok' : 'low') + '" style="font-size:11px">' + esc(p.status) + '</div></div></div>'
+        ).join('') + '</div>'
+      : '<div class="pr-empty" style="padding:24px 0">No payments yet.</div>') + '</div>';
   h += '</div>';
 
-  // right: plan + manage
+  // right: current plan + manage/upgrade
   h += '<div class="pr-stack">';
-  h += '<div class="pr-plan"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><span class="mono" style="font-size:11px;font-weight:700;color:var(--gold);letter-spacing:0.04em">CURRENT PLAN</span><span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>Active</span></div>' +
-    '<div style="font-size:26px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin-bottom:4px">' + esc(planTitle) + '</div>' +
-    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">' + (isFree ? '৳0' : '—') + '</span><span style="font-size:13px;color:var(--faint)">' + (isFree ? '/ month · free forever' : '/ month') + '</span></div>' +
-    '<div style="display:flex;flex-direction:column;gap:9px">' +
-      featRow((unlimited ? 'Unlimited' : DATA.limits.maxMeters) + ' meter' + (DATA.limits.maxMeters === 1 ? '' : 's')) +
-      featRow(DATA.limits.smsPerMonth > 0 ? DATA.limits.smsPerMonth + ' SMS alerts / month' : 'Email + Telegram alerts') +
-      featRow('Run-out predictions + history') +
-    '</div></div>';
-  h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">Manage plan</div><p class="muted" style="font-size:13px;line-height:1.5;margin-bottom:16px">More meters and SMS alerts are coming. For now, talk to the bot with <b style="color:var(--text-2)">/upgrade</b> to register interest.</p>' +
-    '<div style="display:flex;flex-direction:column;gap:9px"><button class="pr-btn ghost" type="button" disabled>Upgrade — coming soon</button>' +
-    '<button class="pr-btn danger" id="delBtn" type="button">Delete account</button></div><p class="pr-err" id="billErr" style="margin-top:8px"></p></div>';
+  h += '<div class="pr-plan"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><span class="mono" style="font-size:11px;font-weight:700;color:var(--gold);letter-spacing:0.04em">CURRENT PLAN</span>' +
+    (b.subscription ? '<span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>' + esc(b.subscription.status) + (b.subscription.currentPeriodEnd ? ' · renews ' + when(b.subscription.currentPeriodEnd).split(',')[0] : '') + '</span>' : '<span class="mono muted" style="font-size:11px">free plan</span>') + '</div>' +
+    '<div style="font-size:26px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin-bottom:4px">' + esc(cur.name) + '</div>' +
+    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">৳' + cur.priceBdt + '</span><span style="font-size:13px;color:var(--faint)">/ month' + (cur.priceBdt === 0 ? ' · free forever' : '') + '</span></div>' +
+    '<div style="display:flex;flex-direction:column;gap:9px">' + planFeatures(cur) + '</div></div>';
+
+  h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">' + (upgrades.length ? 'Upgrade' : 'Manage plan') + '</div>';
+  if (upgrades.length) {
+    h += '<p class="muted" style="font-size:13px;line-height:1.5;margin-bottom:14px">More meters and SMS alerts when you need them.</p><div style="display:flex;flex-direction:column;gap:9px">' +
+      upgrades.map(p => '<button class="pr-btn ' + (b.live ? 'gold' : 'ghost') + '" type="button" data-plan="' + p.id + '"' + (b.live ? '' : ' disabled') + '>Upgrade to ' + esc(p.name) + ' · ৳' + p.priceBdt + '/mo' + (b.live ? '' : ' (soon)') + '</button>').join('') + '</div>';
+    if (!b.live) h += '<p class="mono" style="font-size:11px;color:var(--faint);margin-top:10px">Upgrades are disabled on this server. Ask in the bot: /upgrade.</p>';
+  } else {
+    h += '<p class="muted" style="font-size:13px;line-height:1.5">You\\'re on the top plan. Nothing left to sell you.</p>';
+  }
+  h += '<div style="border-top:1px solid var(--border-soft);margin-top:16px;padding-top:14px"><button class="pr-btn danger block" id="delBtn" type="button">Delete account</button></div>' +
+    '<p class="pr-err" id="billErr" style="margin-top:8px"></p></div>';
   h += '</div>';
   h += '</div>';
 
   host.innerHTML = h;
+  host.querySelectorAll('[data-plan]').forEach(btn => btn.onclick = async () => {
+    const err = host.querySelector('#billErr'); err.textContent = '';
+    btn.disabled = true;
+    try {
+      const res = await post('/checkout', { plan: btn.dataset.plan });
+      if (res.paymentUrl) { location.href = res.paymentUrl; return; }
+      await load(); go('billing'); // sandbox / manual: activated immediately
+    } catch (e) { err.textContent = e.message; btn.disabled = false; }
+  });
   host.querySelector('#delBtn').onclick = async () => {
     if (prompt('This erases your account and ALL data. Type DELETE to confirm.') !== 'DELETE') return;
     try { await post('/account/delete'); location.href = '/app'; } catch (e) { host.querySelector('#billErr').textContent = e.message; }

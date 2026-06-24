@@ -19,6 +19,10 @@ export const users = pgTable(
     telegramChatId: bigint('telegram_chat_id', { mode: 'number' }).unique(),
     email: text('email'),
     tonePref: text('tone_pref').notNull().default('roast'),
+    // Quiet hours (local Asia/Dhaka, 0-23). Both null = always-on. During quiet
+    // hours non-critical alerts are held back; critical alerts always go through.
+    quietStart: integer('quiet_start'),
+    quietEnd: integer('quiet_end'),
     plan: text('plan').notNull().default('free'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -2,6 +2,8 @@ import { eq, and, gte, inArray } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { AlertAction, AlertLevel } from '../core/alert-machine';
 import { smsPerMonthFor } from '../core/plans';
+import { normalizeTone, Tone } from '../core/tone';
+import { inQuietHours } from '../core/quiet-hours';
 import { renderAlert, MeterContext } from './telegram-templates';
 import { smsAlertText } from './sms-templates';
 import { emailAlert } from './email-templates';
@@ -33,9 +35,15 @@ export class Dispatcher {
     level: AlertLevel,
     ctx: MeterContext
   ): Promise<void> {
-    await this.sendTelegramAlert(user, meter, action, level, ctx);
-    await this.sendEmailAlert(user, meter, action, level, ctx);
-    await this.sendSmsAlert(user, meter, action, level, ctx);
+    // Quiet hours hold back the nags (low / reminder / recovery), but a critical
+    // alert - power about to be cut - always goes through.
+    if (action !== 'critical-alert' && inQuietHours(new Date(), user.quietStart, user.quietEnd)) {
+      return;
+    }
+    const tone = normalizeTone(user.tonePref);
+    await this.sendTelegramAlert(user, meter, action, level, ctx, tone);
+    await this.sendEmailAlert(user, meter, action, level, ctx, tone);
+    await this.sendSmsAlert(user, meter, action, level, ctx, tone);
   }
 
   private async sendEmailAlert(
@@ -43,12 +51,13 @@ export class Dispatcher {
     meter: schema.Meter,
     action: AlertAction,
     level: AlertLevel,
-    ctx: MeterContext
+    ctx: MeterContext,
+    tone: Tone
   ): Promise<void> {
     if (!this.mailer) {
       return;
     }
-    const content = emailAlert(action, ctx);
+    const content = emailAlert(action, ctx, tone);
     if (!content) {
       return;
     }
@@ -88,10 +97,20 @@ export class Dispatcher {
     meter: schema.Meter,
     action: AlertAction,
     level: AlertLevel,
-    ctx: MeterContext
+    ctx: MeterContext,
+    tone: Tone
   ): Promise<void> {
-    const message = renderAlert(action, ctx);
+    const message = renderAlert(action, ctx, tone);
     if (!message || user.telegramChatId === null) {
+      return;
+    }
+    // Telegram has no per-address row by default (it rides user.telegramChatId);
+    // a 'telegram' channel row exists only once the user toggles it. Respect it.
+    const [tgChannel] = await this.db
+      .select()
+      .from(schema.channels)
+      .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'telegram')));
+    if (tgChannel && !tgChannel.enabled) {
       return;
     }
     let deliveryStatus = 'sent';
@@ -114,12 +133,13 @@ export class Dispatcher {
     meter: schema.Meter,
     action: AlertAction,
     level: AlertLevel,
-    ctx: MeterContext
+    ctx: MeterContext,
+    tone: Tone
   ): Promise<void> {
     if (!this.sms) {
       return;
     }
-    const text = smsAlertText(action, ctx);
+    const text = smsAlertText(action, ctx, tone);
     if (!text) {
       return; // reminders/recovery don't burn paid segments
     }

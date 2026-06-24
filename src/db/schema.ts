@@ -162,6 +162,38 @@ export const adminAudit = pgTable('admin_audit', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Outbox for alerts: written in the same transaction as alert_state, drained
+// by AlertDispatcherWorker. status flips to 'sent' only after a channel
+// confirms delivery, so a crash mid-dispatch never loses or duplicates an
+// alert. payload is the MeterContext snapshot at decision time.
+export const pendingAlerts = pgTable(
+  'pending_alerts',
+  {
+    id: serial('id').primaryKey(),
+    meterId: integer('meter_id')
+      .notNull()
+      .references(() => meters.id),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    action: text('action').notNull(),
+    level: text('level').notNull(),
+    // Snapshot of the MeterContext at decision time so the worker doesn't have
+    // to re-fetch the meter / predictions to render the message.
+    payload: text('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttempt: timestamp('next_attempt', { withTimezone: true }).notNull().defaultNow(),
+    status: text('status').notNull().default('pending'), // pending | sent | failed
+    lastError: text('last_error'),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+  },
+  table => [
+    index('pending_alerts_status_next_idx').on(table.status, table.nextAttempt),
+    index('pending_alerts_meter_idx').on(table.meterId),
+  ]
+);
+
 export type User = typeof users.$inferSelect;
 export type Meter = typeof meters.$inferSelect;
 export type Reading = typeof readings.$inferSelect;
@@ -170,3 +202,4 @@ export type Channel = typeof channels.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
 export type AdminAudit = typeof adminAudit.$inferSelect;
+export type PendingAlert = typeof pendingAlerts.$inferSelect;

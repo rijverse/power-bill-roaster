@@ -9,6 +9,7 @@ import { smsAlertText } from './sms-templates';
 import { emailAlert } from './email-templates';
 import { SmsGateway } from './sms';
 import { Mailer } from '../services/mailer';
+import { logger, maskEmail, maskPhone } from '../logger';
 
 export interface TelegramSender {
   sendTelegram(chatId: number, text: string): Promise<void>;
@@ -80,7 +81,10 @@ export class Dispatcher {
         await this.mailer.send(channel.address, content.subject, content.text, content.html);
       } catch (error) {
         deliveryStatus = 'failed';
-        console.error(`Email alert failed for meter ${meter.id} to ${channel.address}:`, error);
+        logger.error(
+          `Email alert failed for meter ${meter.id} to ${maskEmail(channel.address)}`,
+          error instanceof Error ? error.message : error
+        );
       }
       await this.db.insert(schema.alertsLog).values({
         meterId: meter.id,
@@ -118,7 +122,10 @@ export class Dispatcher {
       await this.telegram.sendTelegram(user.telegramChatId, message);
     } catch (error) {
       deliveryStatus = 'failed';
-      console.error(`Telegram alert failed for meter ${meter.id}:`, error);
+      logger.error(
+        `Telegram alert failed for meter ${meter.id}`,
+        error instanceof Error ? error.message : error
+      );
     }
     await this.db.insert(schema.alertsLog).values({
       meterId: meter.id,
@@ -180,7 +187,7 @@ export class Dispatcher {
       )
     );
     if (usedThisMonth >= budget) {
-      console.warn(`User ${user.id} hit the monthly SMS budget (${budget}), skipping SMS`);
+      logger.warn(`User ${user.id} hit the monthly SMS budget (${budget}), skipping SMS`);
       return;
     }
 
@@ -190,7 +197,7 @@ export class Dispatcher {
     let remaining = budget - usedThisMonth;
     for (const channel of smsChannels) {
       if (remaining <= 0) {
-        console.warn(`User ${user.id} reached the SMS budget (${budget}) mid-alert, stopping`);
+        logger.warn(`User ${user.id} reached the SMS budget (${budget}) mid-alert, stopping`);
         break;
       }
       let deliveryStatus = 'sent';
@@ -199,7 +206,10 @@ export class Dispatcher {
         remaining--;
       } catch (error) {
         deliveryStatus = 'failed';
-        console.error(`SMS alert failed for meter ${meter.id} via ${this.sms.name}:`, error);
+        logger.error(
+          `SMS alert failed for meter ${meter.id} via ${this.sms.name} to ${maskPhone(channel.address)}`,
+          error instanceof Error ? error.message : error
+        );
       }
       await this.db.insert(schema.alertsLog).values({
         meterId: meter.id,

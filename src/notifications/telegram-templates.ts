@@ -10,9 +10,15 @@ export interface MeterContext {
   lowThreshold: number;
   criticalThreshold: number;
   prediction?: RunOutPrediction | null;
+  /** Override the default DESCO recharge URL (default: https://prepaid.desco.org.bd/). */
+  rechargeUrl?: string;
 }
 
-const RECHARGE_URL = 'https://prepaid.desco.org.bd/';
+const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
+
+function rechargeUrl(ctx: MeterContext): string {
+  return ctx.rechargeUrl ?? DEFAULT_RECHARGE_URL;
+}
 
 function meterLabel(ctx: MeterContext): string {
   return ctx.nickname ? `${ctx.nickname} (meter ${ctx.meterNo})` : `meter ${ctx.meterNo}`;
@@ -49,7 +55,7 @@ export function lowAlertMessage(ctx: MeterContext, tone: Tone = 'savage'): strin
     body,
     ...predictionLine(ctx),
     ``,
-    `Recharge: ${RECHARGE_URL}`,
+    `Recharge: ${rechargeUrl(ctx)}`,
   ].join('\n');
 }
 
@@ -64,7 +70,7 @@ export function criticalAlertMessage(ctx: MeterContext, tone: Tone = 'savage'): 
       `You're under ৳${ctx.criticalThreshold} — power may be cut soon. Please recharge when you can.`,
       ...predictionLine(ctx),
       ``,
-      `Recharge: ${RECHARGE_URL}`,
+      `Recharge: ${rechargeUrl(ctx)}`,
     ].join('\n');
   }
   return [
@@ -76,7 +82,7 @@ export function criticalAlertMessage(ctx: MeterContext, tone: Tone = 'savage'): 
     `THIS IS NOT A DRILL. You're under ৳${ctx.criticalThreshold}. DESCO is about to cut you off and you'll be charging your phone at a tea stall like it's 2005.`,
     ...predictionLine(ctx),
     ``,
-    `RECHARGE RIGHT NOW → ${RECHARGE_URL}`,
+    `RECHARGE RIGHT NOW → ${rechargeUrl(ctx)}`,
     ``,
     `P.S. Your neighbors are judging you. Just saying.`,
   ].join('\n');
@@ -100,7 +106,7 @@ export function reminderMessage(ctx: MeterContext, tone: Tone = 'savage'): strin
     body,
     ...predictionLine(ctx),
     ``,
-    `${RECHARGE_URL}`,
+    `${rechargeUrl(ctx)}`,
   ].join('\n');
 }
 

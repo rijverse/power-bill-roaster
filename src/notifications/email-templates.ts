@@ -5,10 +5,14 @@ import { Tone } from '../core/tone';
 import { renderEmail } from '../templates/critical';
 import { EmailContent } from '../types';
 
-const RECHARGE_URL = 'https://prepaid.desco.org.bd/';
+const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
 
 function label(ctx: MeterContext): string {
   return ctx.nickname ? `${ctx.nickname} (meter ${ctx.meterNo})` : `meter ${ctx.meterNo}`;
+}
+
+function rechargeUrl(ctx: MeterContext): string {
+  return ctx.rechargeUrl ?? DEFAULT_RECHARGE_URL;
 }
 
 function prediction(ctx: MeterContext): string {
@@ -32,6 +36,7 @@ export function emailAlert(
   tone: Tone = 'savage'
 ): EmailContent | null {
   const balance = ctx.balance.toFixed(2);
+  const url = rechargeUrl(ctx);
   const foot = `You're getting this because you set up Power Roast alerts for ${label(ctx)}.`;
   const mild = tone === 'mild';
 
@@ -41,7 +46,7 @@ export function emailAlert(
         subject: mild
           ? '⚡ Heads-up: your balance is running low'
           : '⚡ Your Electricity Is About to Ghost You',
-        text: `Balance: ৳${balance} on ${label(ctx)}.\nYou're under ৳${ctx.lowThreshold}.${prediction(ctx)}\nRecharge: ${RECHARGE_URL}`,
+        text: `Balance: ৳${balance} on ${label(ctx)}.\nYou're under ৳${ctx.lowThreshold}.${prediction(ctx)}\nRecharge: ${url}`,
         html: renderEmail({
           accent: '#f59e0b',
           bg: '#1a160a',
@@ -59,6 +64,7 @@ export function emailAlert(
           accountNo: ctx.accountNo,
           meterNo: ctx.meterNo,
           footer: foot,
+          rechargeUrl: url,
         }),
       };
     case 'critical-alert':
@@ -66,7 +72,7 @@ export function emailAlert(
         subject: mild
           ? '🔴 Your balance is critically low'
           : "💀 EMERGENCY: You're About to Live in the Stone Age",
-        text: `CRITICAL: ৳${balance} on ${label(ctx)}.\nUnder ৳${ctx.criticalThreshold} - DESCO is about to cut you off.${prediction(ctx)}\nRecharge NOW: ${RECHARGE_URL}`,
+        text: `CRITICAL: ৳${balance} on ${label(ctx)}.\nUnder ৳${ctx.criticalThreshold} - DESCO is about to cut you off.${prediction(ctx)}\nRecharge NOW: ${url}`,
         html: renderEmail({
           accent: '#dc2626',
           bg: '#1a0a0a',
@@ -86,6 +92,7 @@ export function emailAlert(
           accountNo: ctx.accountNo,
           meterNo: ctx.meterNo,
           footer: foot,
+          rechargeUrl: url,
         }),
       };
     case 'reminder':
@@ -93,7 +100,7 @@ export function emailAlert(
         subject: mild
           ? '🔔 Reminder: balance still low'
           : '🔁 Still Low. Still Waiting. Still Judging.',
-        text: `Still low: ৳${balance} on ${label(ctx)}.\nThe balance didn't recharge itself overnight.${prediction(ctx)}\nRecharge: ${RECHARGE_URL}`,
+        text: `Still low: ৳${balance} on ${label(ctx)}.\nThe balance didn't recharge itself overnight.${prediction(ctx)}\nRecharge: ${url}`,
         html: renderEmail({
           accent: '#f59e0b',
           bg: '#1a160a',
@@ -111,6 +118,7 @@ export function emailAlert(
           accountNo: ctx.accountNo,
           meterNo: ctx.meterNo,
           footer: foot,
+          rechargeUrl: url,
         }),
       };
     case 'recovery':
@@ -130,6 +138,7 @@ export function emailAlert(
           accountNo: ctx.accountNo,
           meterNo: ctx.meterNo,
           footer: foot,
+          rechargeUrl: url,
         }),
       };
     case 'none':

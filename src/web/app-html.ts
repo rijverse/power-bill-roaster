@@ -120,7 +120,10 @@ const IC = {
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path></svg>',
 };
 
-export function appShellHtml(csrf: string): string {
+export function appShellHtml(
+  csrf: string,
+  rechargeUrl: string = 'https://prepaid.desco.org.bd/'
+): string {
   const body = `<div class="pr-shell">
   <div id="pr-scrim"></div>
   <aside class="pr-sidebar" id="pr-sidebar">
@@ -159,6 +162,7 @@ ${CLIENT_HELPERS}
 ${CHART_SCRIPT}
 
 // ---- state ---------------------------------------------------------------
+const RECHARGE_URL = ${JSON.stringify(rechargeUrl)};
 let DATA = null, SEL = 0, SCREEN = 'dashboard', ROAST = 'savage';
 let CHARTS = [];
 const host = document.getElementById('host');
@@ -540,7 +544,6 @@ function tgIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill
 function smsIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"></rect><path d="M11 18h2"></path></svg>'; }
 
 // ---- screen: billing & recharge -----------------------------------------
-const DESCO_RECHARGE = 'https://prepaid.desco.org.bd/';
 const PROVIDER_LABEL = { bkash: 'bKash', sslcommerz: 'SSLCommerz', sandbox: 'Sandbox', manual: 'Manual', card: 'Card' };
 
 function renderBilling() {
@@ -566,7 +569,7 @@ function paintBilling(b) {
   h += '<div class="pr-card"><div class="pr-card-title">Recharge a meter</div><div class="pr-card-sub" style="margin-bottom:16px">' +
     (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official DESCO portal — your meter and account are below.</div>' +
     (m ? '<div class="pr-list" style="margin-bottom:16px"><div class="pr-rowitem"><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Account</div><div style="font-weight:600;color:var(--text)">' + esc(m.accountNo) + '</div></div><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Meter</div><div style="font-weight:600;color:var(--text)">' + esc(m.meterNo) + '</div></div></div></div>' : '') +
-    '<a class="pr-btn gold block" href="' + DESCO_RECHARGE + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open DESCO recharge →</a></div>';
+    '<a class="pr-btn gold block" href="' + RECHARGE_URL + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open DESCO recharge →</a></div>';
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div>' +
     (b.payments.length
       ? '<div class="pr-list">' + b.payments.map(p =>

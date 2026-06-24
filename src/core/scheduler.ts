@@ -1,13 +1,14 @@
-import { eq, and, gte } from 'drizzle-orm';
+import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { Db, schema } from '../db';
 import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
 import { predictRunOut } from './prediction';
 import { getProvider } from '../providers';
 import { MeterContext } from '../notifications/telegram-templates';
-import { Dispatcher, TelegramSender } from '../notifications/dispatcher';
+import { TelegramSender } from '../notifications/dispatcher';
 import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
+import { logger } from '../logger';
 
 export type AlertSender = TelegramSender;
 
@@ -22,6 +23,11 @@ const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // arbitrary app-wide constant identifying "the poll cycle" advisory lock;
 // guarantees only one instance polls even if two processes share the DB
 const POLL_LOCK_KEY = 727274001;
+// the outbox worker polls every 5s and locks rows immediately, so anything
+// still pending after 2min means the worker is wedged. 24h on failed rows
+// surfaces "today's dead letters" so the operator notices.
+const STUCK_PENDING_THRESHOLD_MS = 2 * 60 * 1000;
+const RECENT_FAILED_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -37,7 +43,6 @@ export class Scheduler {
     private db: Db,
     private pool: Pool,
     private sender: AlertSender,
-    private dispatcher: Dispatcher,
     private config: ServerConfig,
     private subscriptions: SubscriptionService
   ) {}
@@ -46,7 +51,7 @@ export class Scheduler {
     const intervalMs = this.config.pollIntervalHours * 60 * 60 * 1000;
     this.timer = setInterval(() => void this.runOnce(), intervalMs);
     void this.runOnce();
-    console.log(`Scheduler started: polling every ${this.config.pollIntervalHours}h`);
+    logger.info(`Scheduler started: polling every ${this.config.pollIntervalHours}h`);
   }
 
   stop(): void {
@@ -58,7 +63,7 @@ export class Scheduler {
 
   async runOnce(): Promise<void> {
     if (this.running) {
-      console.warn('Previous poll cycle still running, skipping');
+      logger.warn('Previous poll cycle still running, skipping');
       return;
     }
     this.running = true;
@@ -77,7 +82,7 @@ export class Scheduler {
       );
       locked = lockResult.rows[0]?.locked === true;
       if (!locked) {
-        console.warn('Another instance holds the poll lock, skipping this cycle');
+        logger.warn('Another instance holds the poll lock, skipping this cycle');
         return;
       }
 
@@ -86,7 +91,7 @@ export class Scheduler {
       try {
         await this.subscriptions.expireOverdue();
       } catch (error) {
-        console.error('Subscription expiry sweep failed:', error);
+        logger.error('Subscription expiry sweep failed', error);
       }
 
       const rows = await this.db
@@ -95,7 +100,7 @@ export class Scheduler {
         .innerJoin(schema.users, eq(schema.meters.userId, schema.users.id))
         .where(eq(schema.meters.active, true));
 
-      console.log(`Poll cycle: checking ${rows.length} meter(s)`);
+      logger.info(`Poll cycle: checking ${rows.length} meter(s)`);
 
       for (const { meter, user } of rows) {
         try {
@@ -103,8 +108,8 @@ export class Scheduler {
           ok++;
         } catch (error) {
           failed++;
-          console.error(
-            `Meter ${meter.id} (${meter.provider}/${meter.meterNo}) check failed:`,
+          logger.error(
+            `Meter ${meter.id} (${meter.provider}/${meter.meterNo}) check failed`,
             error instanceof Error ? error.message : error
           );
         }
@@ -119,7 +124,45 @@ export class Scheduler {
         );
       }
 
-      console.log(
+      // Outbox backlog check: catches a wedged dispatcher worker (rows stuck
+      // pending) and surfaces "today's dead letters" (rows that exhausted
+      // retries) - both would otherwise only be visible via a user complaint.
+      // The check itself is cheap; the alarm goes through the same operator
+      // channel as the error-rate alarm above.
+      try {
+        const [stuck] = await this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(schema.pendingAlerts)
+          .where(
+            and(
+              eq(schema.pendingAlerts.status, 'pending'),
+              lte(schema.pendingAlerts.createdAt, new Date(Date.now() - STUCK_PENDING_THRESHOLD_MS))
+            )
+          );
+        if (stuck && stuck.count > 0) {
+          await this.alarmOperator(
+            `🚨 Outbox worker appears wedged: ${stuck.count} pending alert(s) older than 2 min. The dispatcher should be draining these in seconds.`
+          );
+        }
+        const [failed] = await this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(schema.pendingAlerts)
+          .where(
+            and(
+              eq(schema.pendingAlerts.status, 'failed'),
+              gte(schema.pendingAlerts.createdAt, new Date(Date.now() - RECENT_FAILED_WINDOW_MS))
+            )
+          );
+        if (failed && failed.count > 0) {
+          await this.alarmOperator(
+            `🚨 ${failed.count} alert(s) exhausted retries in the last 24h. Check pending_alerts and the channel health (SMS gateway, mailer, Telegram).`
+          );
+        }
+      } catch (error) {
+        logger.error('Outbox backlog check failed', error);
+      }
+
+      logger.info(
         `Poll cycle done in ${Math.round((Date.now() - startedAt) / 1000)}s: ${ok} ok, ${failed} failed`
       );
       this.lastCycleCompletedAt = new Date();
@@ -128,7 +171,7 @@ export class Scheduler {
         try {
           await lockClient.query('SELECT pg_advisory_unlock($1)', [POLL_LOCK_KEY]);
         } catch (error) {
-          console.error('Failed to release poll lock:', error);
+          logger.error('Failed to release poll lock', error);
         }
       }
       lockClient.release();
@@ -197,15 +240,20 @@ export class Scheduler {
       rechargeDetectedAt: decision.rechargeDetected ? now : (stateRow?.rechargeDetectedAt ?? null),
       updatedAt: now,
     };
-    await this.db
-      .insert(schema.alertState)
-      .values({ meterId: meter.id, ...stateUpdate })
-      .onConflictDoUpdate({ target: schema.alertState.meterId, set: stateUpdate });
 
     if (!alertSent) {
+      // no alert to send - just refresh the level/balance snapshot, no
+      // transaction needed because nothing fans out from here.
+      await this.db
+        .insert(schema.alertState)
+        .values({ meterId: meter.id, ...stateUpdate })
+        .onConflictDoUpdate({ target: schema.alertState.meterId, set: stateUpdate });
       return;
     }
 
+    // wrap alert_state + pending_alerts in one transaction so a crash between
+    // them can't leave lastAlertAt advanced but no row queued (silencing the
+    // user) or vice versa (sending the same alert twice).
     const recentReadings = await this.db
       .select({ balance: schema.readings.balance, fetchedAt: schema.readings.fetchedAt })
       .from(schema.readings)
@@ -227,17 +275,31 @@ export class Scheduler {
         recentReadings.map(r => ({ balance: r.balance, at: r.fetchedAt })),
         balance
       ),
+      rechargeUrl: this.config.rechargeUrl,
     };
-    await this.dispatcher.dispatchAlert(user, meter, decision.action, decision.level, ctx);
+
+    await this.db.transaction(async tx => {
+      await tx
+        .insert(schema.alertState)
+        .values({ meterId: meter.id, ...stateUpdate })
+        .onConflictDoUpdate({ target: schema.alertState.meterId, set: stateUpdate });
+      await tx.insert(schema.pendingAlerts).values({
+        meterId: meter.id,
+        userId: user.id,
+        action: decision.action,
+        level: decision.level,
+        payload: JSON.stringify(ctx),
+      });
+    });
   }
 
   private async alarmOperator(text: string): Promise<void> {
-    console.error(text);
+    logger.error(text);
     if (this.config.adminChatId !== null) {
       try {
         await this.sender.sendTelegram(this.config.adminChatId, text);
       } catch (error) {
-        console.error('Failed to notify admin:', error);
+        logger.error('Failed to notify admin', error);
       }
     }
   }

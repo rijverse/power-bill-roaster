@@ -50,6 +50,13 @@
       "when": 1782223489796,
       "tag": "0006_user_quiet_hours",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782284683756,
+      "tag": "0007_add_pending_alerts",
+      "breakpoints": true
     }
   ]
 }

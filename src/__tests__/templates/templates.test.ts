@@ -36,6 +36,12 @@ describe('Email Templates', () => {
       expect(email.html).toContain('https://prepaid.desco.org.bd/');
     });
 
+    it('should honor a custom rechargeUrl argument', () => {
+      const email = generateCriticalEmail(50, '123', '456', 'https://example.test/recharge');
+      expect(email.text).toContain('https://example.test/recharge');
+      expect(email.html).toContain('https://example.test/recharge');
+    });
+
     it('should generate valid HTML', () => {
       const email = generateCriticalEmail(50, '123', '456');
 

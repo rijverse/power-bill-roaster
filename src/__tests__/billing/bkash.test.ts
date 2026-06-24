@@ -1,9 +1,9 @@
-import fetch from 'node-fetch';
 import { BkashProvider, mapBkashStatus } from '../../billing/bkash';
 
-jest.mock('node-fetch');
-
-const mockFetch = fetch as jest.MockedFunction<typeof fetch>;
+const mockFetch = jest.spyOn(globalThis, 'fetch');
+mockFetch.mockImplementation(async () => {
+  throw new Error('fetch should be replaced per test');
+});
 
 const config = {
   appKey: 'key',

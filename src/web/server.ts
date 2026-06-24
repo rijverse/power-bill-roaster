@@ -1,4 +1,5 @@
 import http from 'http';
+import { sql } from 'drizzle-orm';
 import { Db } from '../db';
 import { Scheduler } from '../core/scheduler';
 import { SubscriptionService } from '../billing';
@@ -13,6 +14,9 @@ import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 
 const MAX_BODY_BYTES = 64 * 1024;
+// cap the db ping so a stalled connection doesn't make /health hang past
+// what an uptime monitor is willing to wait.
+const DB_PING_TIMEOUT_MS = 2_000;
 // Blunt brute-forcing the admin password without locking out a fat-fingered operator.
 const ADMIN_LOGIN_ATTEMPTS = 10;
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
@@ -199,6 +203,22 @@ export function createWebServer(
       }
 
       if (url.pathname === '/health') {
+        // ping the db - a dead postgres should flip the monitor red even if
+        // the node process is otherwise healthy.
+        const dbOk = await Promise.race<boolean>([
+          db
+            .execute(sql`SELECT 1`)
+            .then(() => true)
+            .catch(() => false),
+          new Promise<boolean>(resolve => setTimeout(() => resolve(false), DB_PING_TIMEOUT_MS)),
+        ]);
+        if (!dbOk) {
+          json(res, 503, {
+            status: 'db-down',
+            lastPollCycleAt: scheduler.lastCycleCompletedAt?.toISOString() ?? null,
+          });
+          return;
+        }
         const intervalMs = config.pollIntervalHours * 60 * 60 * 1000;
         const last = scheduler.lastCycleCompletedAt;
         // allow one full interval of grace before the first cycle completes

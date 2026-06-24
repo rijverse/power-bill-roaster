@@ -20,6 +20,8 @@ export interface Config {
     low: number;
     critical: number;
   };
+  /** The DESCO recharge URL embedded in email/SMS templates. */
+  rechargeUrl: string;
 }
 
 export interface ServerConfig {
@@ -46,6 +48,8 @@ export interface ServerConfig {
     low: number;
     critical: number;
   };
+  /** DESCO recharge URL embedded in alert messages. */
+  rechargeUrl: string;
   sms:
     | { gateway: null }
     | { gateway: 'console' }
@@ -205,6 +209,9 @@ export function getServerConfig(): ServerConfig {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
     },
+    // DESCO recharge URL embedded in alert messages. Override only for tests
+    // or a mirror; the default is the public DESCO portal.
+    rechargeUrl: process.env.RECHARGE_URL || 'https://prepaid.desco.org.bd/',
     sms: getSmsConfig(),
     billing: getBillingConfig(publicBaseUrl),
   };
@@ -249,5 +256,6 @@ export function getConfig(): Config {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
     },
+    rechargeUrl: process.env.RECHARGE_URL || 'https://prepaid.desco.org.bd/',
   };
 }

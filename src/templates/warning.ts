@@ -4,16 +4,22 @@ import { renderEmail } from './critical';
 export function generateWarningEmail(
   balance: number,
   accountNo: string,
-  meterNo: string
+  meterNo: string,
+  rechargeUrl: string = 'https://prepaid.desco.org.bd/'
 ): EmailContent {
   return {
     subject: '🚨 Yo, Your Electricity About to Ghost You!',
-    text: generateText(balance, accountNo, meterNo),
-    html: generateHtml(balance, accountNo, meterNo),
+    text: generateText(balance, accountNo, meterNo, rechargeUrl),
+    html: generateHtml(balance, accountNo, meterNo, rechargeUrl),
   };
 }
 
-function generateText(balance: number, accountNo: string, meterNo: string): string {
+function generateText(
+  balance: number,
+  accountNo: string,
+  meterNo: string,
+  rechargeUrl: string
+): string {
   return `🚨 BALANCE RUNNING LOW - Bruh, wake up!
 
 Current Balance: ৳${balance.toFixed(2)}
@@ -28,12 +34,17 @@ You really gonna gamble on it? Ride the meter to empty like a main character,
 then act shocked when the AC dies at 3am and you're sweating through the
 mattress doing the math you should've done today.
 
-RECHARGE NOW → https://prepaid.desco.org.bd/
+RECHARGE NOW → ${rechargeUrl}
 
 Top up now while you still have the dignity. Seriously.`;
 }
 
-function generateHtml(balance: number, accountNo: string, meterNo: string): string {
+function generateHtml(
+  balance: number,
+  accountNo: string,
+  meterNo: string,
+  rechargeUrl: string
+): string {
   return renderEmail({
     accent: '#f59e0b',
     bg: '#1a1625',
@@ -49,5 +60,6 @@ function generateHtml(balance: number, accountNo: string, meterNo: string): stri
     accountNo,
     meterNo,
     footer: 'Top up while you still have the dignity. 💪',
+    rechargeUrl,
   });
 }

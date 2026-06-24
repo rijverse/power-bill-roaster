@@ -3,10 +3,12 @@ import { createDb } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
 import { Dispatcher } from './notifications/dispatcher';
+import { AlertDispatcherWorker } from './core/alert-dispatcher';
 import { createSmsGateway } from './notifications/sms';
 import { createMailer } from './services/mailer';
 import { createPaymentProvider, SubscriptionService } from './billing';
 import { createWebServer } from './web/server';
+import { logger } from './logger';
 
 async function main(): Promise<void> {
   const config = getServerConfig();
@@ -14,11 +16,11 @@ async function main(): Promise<void> {
 
   const smsGateway = createSmsGateway(config);
   if (smsGateway) {
-    console.log(`SMS channel enabled via ${smsGateway.name} gateway`);
+    logger.info(`SMS channel enabled via ${smsGateway.name} gateway`);
   }
   const mailer = createMailer(config);
   if (mailer) {
-    console.log(`Email channel enabled (from ${mailer.from})`);
+    logger.info(`Email channel enabled (from ${mailer.from})`);
   }
   const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
   const bot = createBot(db, config, subscriptions, smsGateway);
@@ -45,27 +47,62 @@ async function main(): Promise<void> {
   };
 
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer);
-  const scheduler = new Scheduler(db, pool, telegramSender, dispatcher, config, subscriptions);
+  // outbox drain worker - flips rows to 'sent' / 'failed' and pings admin on
+  // dead letters. owns dispatch end-to-end.
+  const alertWorker = new AlertDispatcherWorker({
+    db,
+    dispatcher,
+    adminSender: telegramSender,
+    adminChatId: config.adminChatId,
+  });
+  const scheduler = new Scheduler(db, pool, telegramSender, config, subscriptions);
 
   const healthServer = createWebServer(db, scheduler, config, subscriptions, mailer);
   healthServer.listen(config.port, () => {
-    console.log(`Web server on :${config.port} (/health, /dash, /app, /admin, /pay)`);
+    logger.info(`Web server on :${config.port} (/health, /dash, /app, /admin, /pay)`);
   });
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    console.log(`${signal} received, shutting down…`);
+    if (shuttingDown) {
+      logger.warn(`Second ${signal} received; ignoring`);
+      return;
+    }
+    shuttingDown = true;
+    logger.info(`${signal} received, shutting down…`);
     scheduler.stop();
-    healthServer.close();
-    await bot.stop();
-    await pool.end();
+    await alertWorker.stop();
+    // close http first so no new requests come in, then drain the pool.
+    // awaited so we don't lose in-flight requests on a quick restart.
+    await new Promise<void>(resolve => healthServer.close(() => resolve()));
+    try {
+      await bot.stop();
+    } catch (error) {
+      logger.error('Error stopping bot', error);
+    }
+    try {
+      await pool.end();
+    } catch (error) {
+      logger.error('Error closing pool', error);
+    }
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-  scheduler.start();
+  // log and exit non-zero on uncaught errors - docker's restart policy is
+  // better than a wedged process.
+  process.on('unhandledRejection', reason => {
+    logger.error('Unhandled promise rejection', reason);
+  });
+  process.on('uncaughtException', error => {
+    logger.error('Uncaught exception', error);
+  });
 
-  // Telegram's "/" autocomplete menu (user-facing commands only)
+  scheduler.start();
+  alertWorker.start();
+
+  // telegram's "/" autocomplete menu (user-facing commands only)
   try {
     await bot.api.setMyCommands([
       { command: 'register', description: 'Add your DESCO meter' },
@@ -83,14 +120,14 @@ async function main(): Promise<void> {
       { command: 'help', description: 'All commands' },
     ]);
   } catch (error) {
-    console.warn('setMyCommands failed (fine in mock mode):', error);
+    logger.warn('setMyCommands failed (fine in mock mode)', error);
   }
 
-  console.log('Starting Telegram bot (long polling)…');
+  logger.info('Starting Telegram bot (long polling)…');
   await bot.start();
 }
 
 main().catch(error => {
-  console.error('Fatal:', error);
+  logger.error('Fatal', error);
   process.exit(1);
 });

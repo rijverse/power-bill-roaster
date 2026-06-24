@@ -28,6 +28,7 @@ describe('EmailService', () => {
         pass: 'password',
       },
       thresholds: { low: 150, critical: 100 },
+      rechargeUrl: 'https://prepaid.desco.org.bd/',
     };
 
     jest.clearAllMocks();

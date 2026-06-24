@@ -1,4 +1,4 @@
-import https from 'https';
+import { Agent } from 'undici';
 import { fetchWithTimeout } from '../core/http';
 import { ApiResponse, BalanceData } from '../types';
 
@@ -6,13 +6,13 @@ import { ApiResponse, BalanceData } from '../types';
 const API_BASE_URL =
   process.env.DESCO_API_BASE_URL || 'https://prepaid.desco.org.bd/api/tkdes/customer';
 
-// desco api has certificate issues, so we need to disable verification
-// this is a known limitation consider monitoring for certificate updates
-// (only applies to https; http mock servers must not receive a tls agent)
-const httpsAgent = API_BASE_URL.startsWith('https')
-  ? new https.Agent({
-      rejectUnauthorized: false,
-    })
+// DESCO's certificate chain has historically been flaky. We only flip this on
+// when DESCO_TLS_INSECURE=1 is set - and it's scoped to this client alone, so
+// every other outbound call still verifies normally. If real upstream calls
+// start failing with cert errors, set the env var and restart.
+const insecure = process.env.DESCO_TLS_INSECURE === '1';
+const insecureDispatcher = insecure
+  ? new Agent({ connect: { rejectUnauthorized: false } })
   : undefined;
 
 function validateApiResponse(response: unknown): response is ApiResponse {
@@ -35,7 +35,7 @@ export class DescoApiClient {
       `${API_BASE_URL}/getBalance?accountNo=${encodeURIComponent(accountNo)}` +
       `&meterNo=${encodeURIComponent(meterNo)}`;
 
-    const response = await fetchWithTimeout(url, { agent: httpsAgent });
+    const response = await fetchWithTimeout(url, { dispatcher: insecureDispatcher });
     const apiResponse: unknown = await response.json();
 
     if (!validateApiResponse(apiResponse)) {

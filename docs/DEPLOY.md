@@ -16,7 +16,10 @@ $env:DATABASE_URL = '<your postgres connection string>'
 bun run db:migrate
 ```
 
-Repeat this step whenever a new migration lands in `drizzle/`.
+Repeat this step whenever a new migration lands in `drizzle/`. The deploy
+workflow (`.github/workflows/deploy.yml`) does this on every push to `main` as
+a safety net — the image only gets built and pushed to GHCR if the migration
+succeeds.
 
 ## 2. Server setup (once)
 
@@ -43,6 +46,9 @@ POLL_INTERVAL_HOURS=6
 REMINDER_INTERVAL_HOURS=24
 # Where /dashboard links point - your server's public address
 PUBLIC_BASE_URL=http://<server-ip>:3000
+# Recharge link embedded in alert messages. Defaults to the DESCO portal;
+# uncomment only if they change their URL or you point at a mirror.
+#RECHARGE_URL=https://prepaid.desco.org.bd/
 ```
 
 Optional features (see `.env.example` for the full reference):
@@ -52,6 +58,9 @@ Optional features (see `.env.example` for the full reference):
   `/upgrade` replies "coming soon" (the free-only launch default). `bkash` and
   `sslcommerz` are live gateways; `sandbox` auto-approves upgrades for free and is
   for dev only. See [Billing](#7-billing-paid-plans).
+- **DESCO upstream TLS**: `DESCO_TLS_INSECURE=1` skips certificate verification
+  on calls to `prepaid.desco.org.bd` only. Leave unset in production unless
+  DESCO's certificate chain breaks; the bypass is scoped to the DESCO client.
 
 Start it:
 
@@ -69,6 +78,22 @@ ufw enable
 ```
 
 ## 3. Deploying updates
+
+The `.github/workflows/deploy.yml` workflow runs `bun run db:migrate` against
+your production DB and builds + pushes a fresh image to GHCR on every push to
+`main`. To roll out on the server:
+
+```bash
+cd /opt/power-roast
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`docker compose pull` is a no-op if the `:latest` tag hasn't changed since
+your last deploy.
+
+If you skip the GitHub workflow (e.g. testing on a non-main branch), the
+manual flow still works:
 
 ```bash
 cd /opt/power-roast
@@ -105,9 +130,16 @@ app, and point your uptime monitor at `https://app.yourdomain.com/health`.
 
 Point any uptime monitor at `http://<server-ip>:3000/health` and alert on non-200.
 
-The endpoint returns **503 when a poll cycle is overdue** (more than 2x the poll
-interval since the last completed cycle) — so it catches a wedged poller, not
-just a dead process. A 5–15 minute check interval is plenty.
+The endpoint returns **503** in three situations:
+
+- A poll cycle is overdue (more than 2x the poll interval since the last
+  completed cycle) — so it catches a wedged poller, not just a dead process.
+- A `SELECT 1` against the database doesn't respond within 2s — the DB is
+  unreachable from the app even if the process is alive.
+- The app hasn't been up long enough to complete its first cycle (within the
+  first poll interval).
+
+A 5–15 minute check interval is plenty.
 
 You also get in-app alarms: the scheduler messages `ADMIN_CHAT_ID` on Telegram
 if more than half the meters in a cycle fail (likely a provider API change or
@@ -167,3 +199,33 @@ Requirements:
   the browser before the redirect).
 
 Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment.
+
+## 8. Operations runbook
+
+- **App won't start with "Missing required environment variables"**: set
+  `DATABASE_URL` and `TELEGRAM_BOT_TOKEN` (server mode) or the seven
+  `DESCO_*` / `EMAIL_*` / `SMTP_*` vars (self-hosted CLI mode).
+- **`/health` returns 503 `db-down`**: the app can't reach Postgres. Check
+  the `DATABASE_URL`, network ACLs, and that Neon (or your DB) isn't paused.
+- **`/health` returns 503 `stale`**: poll cycle is wedged. Check the app logs
+  for fetch failures — usually DESCO upstream changes; the operator alarm in
+  `ADMIN_CHAT_ID` is your fastest signal.
+- **DESCO certificate errors in logs**: set `DESCO_TLS_INSECURE=1` and restart.
+  The bypass is scoped to the DESCO client.
+- **Alerts firing twice**: shouldn't happen anymore (the outbox pattern
+  serializes dispatch). If you see duplicates after upgrading, check the
+  `pending_alerts` table — anything with `status='sent'` should be terminal.
+- **`/health` is green but alerts aren't going out**: the worker may be
+  wedged. Run `SELECT status, count(*) FROM pending_alerts GROUP BY status`
+  — a growing `pending` count with a recent `created_at` means the
+  dispatcher isn't draining. The scheduler also fires an alarm in
+  `ADMIN_CHAT_ID` when a row is stuck >2 min or a new `failed` row appears
+  in the last 24h.
+- **Backups**: schedule a daily `pg_dump` of the production DB. The outbox,
+  payments, subscriptions, and meter history live in one database; a
+  single accidental `DROP TABLE` is a real cost. Managed providers (Neon,
+  RDS) ship a free daily backup tier — turn it on even if you also run
+  your own.
+- **Need to scrub PII from logs**: stdout is masked by the in-process logger
+  (emails, phones, account/meter numbers). For log shippers (Datadog, etc.),
+  add a redaction processor at the agent level.

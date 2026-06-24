@@ -3,16 +3,22 @@ import { EmailContent } from '../types';
 export function generateCriticalEmail(
   balance: number,
   accountNo: string,
-  meterNo: string
+  meterNo: string,
+  rechargeUrl: string = 'https://prepaid.desco.org.bd/'
 ): EmailContent {
   return {
     subject: "💀 EMERGENCY: You're About to Live in the Stone Age",
-    text: generateText(balance, accountNo, meterNo),
-    html: generateHtml(balance, accountNo, meterNo),
+    text: generateText(balance, accountNo, meterNo, rechargeUrl),
+    html: generateHtml(balance, accountNo, meterNo, rechargeUrl),
   };
 }
 
-function generateText(balance: number, accountNo: string, meterNo: string): string {
+function generateText(
+  balance: number,
+  accountNo: string,
+  meterNo: string,
+  rechargeUrl: string
+): string {
   return `💀 POWER EMERGENCY - THIS IS NOT A DRILL
 
 Current Balance: ৳${balance.toFixed(2)} (CRITICALLY LOW)
@@ -27,12 +33,17 @@ When the lights die you'll be the grown adult charging a phone at McDonald's,
 nursing one cold fry, calling it "working remotely." Your ancestors survived
 famine and war so you could forget to top up a meter.
 
-RECHARGE NOW → https://prepaid.desco.org.bd/
+RECHARGE NOW → ${rechargeUrl}
 
 P.S. The dark is free. The shame is too. Your neighbors already know.`;
 }
 
-function generateHtml(balance: number, accountNo: string, meterNo: string): string {
+function generateHtml(
+  balance: number,
+  accountNo: string,
+  meterNo: string,
+  rechargeUrl: string
+): string {
   return renderEmail({
     accent: '#dc2626',
     bg: '#1a0a0a',
@@ -48,6 +59,7 @@ function generateHtml(balance: number, accountNo: string, meterNo: string): stri
     accountNo,
     meterNo,
     footer: 'P.S. The shame is free too. Your neighbors already know. 👀',
+    rechargeUrl,
   });
 }
 
@@ -64,6 +76,7 @@ interface EmailParts {
   accountNo: string;
   meterNo: string;
   footer: string;
+  rechargeUrl: string;
 }
 
 // Single compact card. Inline styles only, table layout, solid hex colors (no
@@ -112,7 +125,7 @@ export function renderEmail(p: EmailParts): string {
           </tr>
           <tr>
             <td style="padding:24px; text-align:center;">
-              <a href="https://prepaid.desco.org.bd/" style="display:inline-block; background-color:${p.accent}; color:#ffffff; text-decoration:none; padding:14px 36px; border-radius:999px; font-size:16px; font-weight:700; text-transform:uppercase; letter-spacing:1px;">⚡ Recharge Now</a>
+              <a href="${p.rechargeUrl}" style="display:inline-block; background-color:${p.accent}; color:#ffffff; text-decoration:none; padding:14px 36px; border-radius:999px; font-size:16px; font-weight:700; text-transform:uppercase; letter-spacing:1px;">⚡ Recharge Now</a>
             </td>
           </tr>
           <tr>

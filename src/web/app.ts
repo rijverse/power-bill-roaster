@@ -507,7 +507,7 @@ export async function handleAppRequest(
   // --- auth pages & actions ---
   if (path === '/app' && method === 'GET') {
     if (authed) {
-      htmlPage(res, 200, appShellHtml(csrfFor(cookie, secret)));
+      htmlPage(res, 200, appShellHtml(csrfFor(cookie, secret), config.rechargeUrl));
     } else {
       htmlPage(res, 200, loginHtml(mailEnabled, url.searchParams.get('status')));
     }

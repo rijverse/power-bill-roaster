@@ -1,4 +1,5 @@
 import { DescoApiClient } from '../../services/desco-api';
+import { ProviderLookupError, ProviderUnavailableError } from '../../providers/types';
 
 // helper to create mock api response
 function createApiResponse(balance: number) {
@@ -45,15 +46,15 @@ describe('DescoApiClient', () => {
     );
   });
 
-  it('should throw error on invalid API response', async () => {
+  it('should throw a lookup error on an invalid API response', async () => {
     fetchSpy.mockResolvedValueOnce({
       json: async () => ({ invalid: 'response' }),
     });
 
-    await expect(client.getBalance('123', '456')).rejects.toThrow('Invalid API response');
+    await expect(client.getBalance('123', '456')).rejects.toThrow(ProviderLookupError);
   });
 
-  it('should throw error on non-200 code', async () => {
+  it('should throw a lookup error on non-200 code', async () => {
     fetchSpy.mockResolvedValueOnce({
       json: async () => ({
         code: 500,
@@ -62,12 +63,14 @@ describe('DescoApiClient', () => {
       }),
     });
 
-    await expect(client.getBalance('123', '456')).rejects.toThrow('Invalid API response');
+    await expect(client.getBalance('123', '456')).rejects.toThrow(ProviderLookupError);
   });
 
-  it('should handle network errors', async () => {
+  it('should throw an unavailable error on network failure', async () => {
     fetchSpy.mockRejectedValueOnce(new Error('Network error'));
 
-    await expect(client.getBalance('123', '456')).rejects.toThrow('Network error');
+    const promise = client.getBalance('123', '456');
+    await expect(promise).rejects.toThrow(ProviderUnavailableError);
+    await expect(promise).rejects.toThrow('Network error');
   });
 });

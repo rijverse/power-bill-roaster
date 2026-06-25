@@ -1,7 +1,7 @@
-import { Bot } from 'grammy';
+import { Bot, InlineKeyboard, Context } from 'grammy';
 import { eq, and, gte } from 'drizzle-orm';
 import { Db, schema } from '../db';
-import { getProvider } from '../providers';
+import { getProvider, ProviderUnavailableError } from '../providers';
 import { ServerConfig } from '../config';
 import { balanceStatusMessage } from '../notifications/telegram-templates';
 import { RateLimiter } from '../core/rate-limiter';
@@ -12,11 +12,14 @@ import { SubscriptionService } from '../billing';
 import { signDashboardToken } from '../web/token';
 import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
+import { normalizeTone } from '../core/tone';
 import { SmsGateway } from '../notifications/sms';
 import crypto from 'crypto';
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
+// how long an alert-button "snooze" mutes reminders for that meter
+const SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
 
 const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
@@ -54,6 +57,8 @@ const HELP_TEXT = [
   '/plan - your current plan',
   '/upgrade - more meters, SMS alerts',
   '/dashboard - balance history charts in your browser',
+  '/settings - tone, quiet hours, thresholds',
+  '/menu - quick action buttons',
   '/meters - list your registered meters',
   '/stop - pause all monitoring',
   '/delete - erase your account and all data',
@@ -85,6 +90,8 @@ export function createBot(
   const pending = new Map<number, PendingRegistration>();
   const pendingDeletes = new Map<number, number>(); // chatId -> confirm-by timestamp
   const pendingSms = new Map<number, PendingSmsVerification>();
+  // chatId -> awaiting a typed value for a settings field (from a "Custom" button)
+  const pendingInput = new Map<number, { kind: 'quiet' | 'threshold' }>();
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
   const otpSends = new RateLimiter(SMS_OTP_SENDS_PER_HOUR, 60 * 60 * 1000);
   // Free-only launch: paid plans are off until a real gateway is configured.
@@ -107,39 +114,98 @@ export function createBot(
       .then(rows => rows.map(r => r.meter));
   }
 
-  bot.command('start', async ctx => {
-    await ctx.reply(
-      `Welcome to Power Roast. I watch your prepaid electricity balance and roast you before the lights go out.\n\n${HELP_TEXT}\n\n_By registering a meter you agree to /privacy._`,
-      { parse_mode: 'Markdown' }
-    );
-  });
+  function mainMenuKeyboard(): InlineKeyboard {
+    return new InlineKeyboard()
+      .text('💰 Balance', 'menu:balance')
+      .text('⚙️ Settings', 'menu:settings')
+      .row()
+      .text('📊 Dashboard', 'menu:dashboard')
+      .text('🎟️ Plan', 'menu:plan');
+  }
 
-  bot.command('help', async ctx => {
-    await ctx.reply(HELP_TEXT, { parse_mode: 'Markdown' });
-  });
+  // Apply thresholds to every meter the user has (the bot keeps them in sync,
+  // mirroring the /threshold command). Returns how many meters were updated.
+  async function applyThresholds(chatId: number, low: number, critical: number): Promise<number> {
+    const meters = await userMeters(chatId);
+    for (const meter of meters) {
+      await db
+        .update(schema.meters)
+        .set({ lowThreshold: low, criticalThreshold: critical })
+        .where(eq(schema.meters.id, meter.id));
+    }
+    return meters.length;
+  }
 
-  bot.command('privacy', async ctx => {
-    await ctx.reply(PRIVACY_TEXT, { parse_mode: 'Markdown' });
-  });
+  async function settingsView(
+    chatId: number
+  ): Promise<{ text: string; keyboard: InlineKeyboard } | null> {
+    const user = await findUser(chatId);
+    if (!user) {
+      return null;
+    }
+    const meters = await userMeters(chatId);
+    const tone = normalizeTone(user.tonePref);
+    const quiet =
+      user.quietStart !== null && user.quietEnd !== null
+        ? `${user.quietStart}:00–${user.quietEnd}:00 (Dhaka)`
+        : 'off';
+    const thresholds = meters[0]
+      ? `৳${meters[0].lowThreshold} / ৳${meters[0].criticalThreshold}`
+      : 'set after you /register a meter';
+    const text = [
+      '⚙️ *Settings*',
+      '',
+      `*Tone:* ${tone === 'savage' ? 'savage 🌶️' : 'mild 🥛'}`,
+      `*Quiet hours:* ${quiet}`,
+      `*Thresholds (warn / critical):* ${thresholds}`,
+      '',
+      'Tap to change anything:',
+    ].join('\n');
+    const keyboard = new InlineKeyboard()
+      .text(
+        tone === 'savage' ? '🥛 Switch to mild' : '🌶️ Switch to savage',
+        tone === 'savage' ? 'tone:mild' : 'tone:savage'
+      )
+      .row()
+      .text('🔕 Quiet off', 'quiet:off')
+      .text('🌙 10pm–7am', 'quiet:22-7')
+      .text('🌙 11pm–6am', 'quiet:23-6')
+      .text('✏️ Custom', 'quiet:custom')
+      .row()
+      .text('⚖️ 150/100', 'thr:150-100')
+      .text('⚖️ 200/120', 'thr:200-120')
+      .text('✏️ Custom', 'thr:custom');
+    return { text, keyboard };
+  }
 
-  bot.command('register', async ctx => {
-    const user = await findUser(ctx.chat.id);
-    const meters = await userMeters(ctx.chat.id);
-    const limit = maxMetersFor(user?.plan ?? 'free');
-    if (meters.length >= limit) {
-      await ctx.reply(
-        `The free plan watches ${limit} meter - and you're already using it. Multi-meter support is coming with paid plans. (/stop frees the slot if you want to switch meters.)`
-      );
+  async function showSettings(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
+    const view = await settingsView(ctx.chat.id);
+    if (!view) {
+      await ctx.reply('No account yet - /register a meter first.');
       return;
     }
-    pending.set(ctx.chat.id, { step: 'account' });
-    await ctx.reply(
-      "Send me your DESCO *account number* (it's on your bill or the DESCO portal).",
-      { parse_mode: 'Markdown' }
-    );
-  });
+    await ctx.reply(view.text, { parse_mode: 'Markdown', reply_markup: view.keyboard });
+  }
 
-  bot.command('balance', async ctx => {
+  // re-render the settings message in place after a button press
+  async function refreshSettings(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
+    const view = await settingsView(ctx.chat.id);
+    if (!view) return;
+    try {
+      await ctx.editMessageText(view.text, {
+        parse_mode: 'Markdown',
+        reply_markup: view.keyboard,
+      });
+    } catch {
+      // editing fails if the message is too old or unchanged - just send fresh
+      await ctx.reply(view.text, { parse_mode: 'Markdown', reply_markup: view.keyboard });
+    }
+  }
+
+  async function showBalance(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
     const meters = await userMeters(ctx.chat.id);
     if (meters.length === 0) {
       await ctx.reply('No meters registered yet. Use /register to add one.');
@@ -187,33 +253,10 @@ export function createBot(
         );
       }
     }
-  });
+  }
 
-  bot.command('threshold', async ctx => {
-    const parts = (ctx.match ?? '').trim().split(/\s+/).filter(Boolean);
-    const low = parseInt(parts[0]);
-    const critical = parseInt(parts[1]);
-    if (!Number.isFinite(low) || !Number.isFinite(critical) || critical >= low || critical < 0) {
-      await ctx.reply(
-        'Usage: /threshold <low> <critical> - e.g. /threshold 200 100 (critical must be below low).'
-      );
-      return;
-    }
-    const meters = await userMeters(ctx.chat.id);
-    if (meters.length === 0) {
-      await ctx.reply('No meters registered yet. Use /register to add one.');
-      return;
-    }
-    for (const meter of meters) {
-      await db
-        .update(schema.meters)
-        .set({ lowThreshold: low, criticalThreshold: critical })
-        .where(eq(schema.meters.id, meter.id));
-    }
-    await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
-  });
-
-  bot.command('dashboard', async ctx => {
+  async function showDashboard(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
     const user = await findUser(ctx.chat.id);
     if (!user) {
       await ctx.reply('No account yet - /register a meter first.');
@@ -230,9 +273,10 @@ export function createBot(
         `${config.publicBaseUrl}/dash?t=${token}`,
       ].join('\n')
     );
-  });
+  }
 
-  bot.command('plan', async ctx => {
+  async function showPlan(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
     const user = await findUser(ctx.chat.id);
     if (!user) {
       await ctx.reply('No account yet - /register a meter first.');
@@ -256,6 +300,76 @@ export function createBot(
       );
     }
     await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  }
+
+  bot.command('start', async ctx => {
+    await ctx.reply(
+      `Welcome to Power Roast. I watch your prepaid electricity balance and roast you before the lights go out.\n\n${HELP_TEXT}\n\n_By registering a meter you agree to /privacy._`,
+      { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
+    );
+  });
+
+  bot.command('help', async ctx => {
+    await ctx.reply(HELP_TEXT, { parse_mode: 'Markdown' });
+  });
+
+  bot.command('privacy', async ctx => {
+    await ctx.reply(PRIVACY_TEXT, { parse_mode: 'Markdown' });
+  });
+
+  bot.command('menu', async ctx => {
+    await ctx.reply('What do you want to do?', { reply_markup: mainMenuKeyboard() });
+  });
+
+  bot.command('settings', async ctx => {
+    await showSettings(ctx);
+  });
+
+  bot.command('register', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    const meters = await userMeters(ctx.chat.id);
+    const limit = maxMetersFor(user?.plan ?? 'free');
+    if (meters.length >= limit) {
+      await ctx.reply(
+        `The free plan watches ${limit} meter - and you're already using it. Multi-meter support is coming with paid plans. (/stop frees the slot if you want to switch meters.)`
+      );
+      return;
+    }
+    pending.set(ctx.chat.id, { step: 'account' });
+    await ctx.reply(
+      "Send me your DESCO *account number* (it's on your bill or the DESCO portal).",
+      { parse_mode: 'Markdown' }
+    );
+  });
+
+  bot.command('balance', async ctx => {
+    await showBalance(ctx);
+  });
+
+  bot.command('threshold', async ctx => {
+    const parts = (ctx.match ?? '').trim().split(/\s+/).filter(Boolean);
+    const low = parseInt(parts[0]);
+    const critical = parseInt(parts[1]);
+    if (!Number.isFinite(low) || !Number.isFinite(critical) || critical >= low || critical < 0) {
+      await ctx.reply(
+        'Usage: /threshold <low> <critical> - e.g. /threshold 200 100 (critical must be below low).'
+      );
+      return;
+    }
+    const count = await applyThresholds(ctx.chat.id, low, critical);
+    if (count === 0) {
+      await ctx.reply('No meters registered yet. Use /register to add one.');
+      return;
+    }
+    await ctx.reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
+  });
+
+  bot.command('dashboard', async ctx => {
+    await showDashboard(ctx);
+  });
+
+  bot.command('plan', async ctx => {
+    await showPlan(ctx);
   });
 
   bot.command('upgrade', async ctx => {
@@ -532,8 +646,164 @@ export function createBot(
     );
   });
 
+  // ---- inline button callbacks ----
+
+  bot.callbackQuery('menu:balance', async ctx => {
+    await ctx.answerCallbackQuery();
+    await showBalance(ctx);
+  });
+  bot.callbackQuery('menu:settings', async ctx => {
+    await ctx.answerCallbackQuery();
+    await showSettings(ctx);
+  });
+  bot.callbackQuery('menu:dashboard', async ctx => {
+    await ctx.answerCallbackQuery();
+    await showDashboard(ctx);
+  });
+  bot.callbackQuery('menu:plan', async ctx => {
+    await ctx.answerCallbackQuery();
+    await showPlan(ctx);
+  });
+
+  bot.callbackQuery(/^tone:(savage|mild)$/, async ctx => {
+    if (!ctx.chat) return;
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.answerCallbackQuery('Register a meter first.');
+      return;
+    }
+    const tone = ctx.match[1];
+    await db.update(schema.users).set({ tonePref: tone }).where(eq(schema.users.id, user.id));
+    await ctx.answerCallbackQuery(`Tone set to ${tone}.`);
+    await refreshSettings(ctx);
+  });
+
+  bot.callbackQuery('quiet:custom', async ctx => {
+    if (!ctx.chat) return;
+    pendingInput.set(ctx.chat.id, { kind: 'quiet' });
+    await ctx.answerCallbackQuery();
+    await ctx.reply(
+      'Send your quiet hours as two numbers (24h, Dhaka time): start then end, e.g. `22 7` for 10pm–7am. Or send `off`.',
+      { parse_mode: 'Markdown' }
+    );
+  });
+  bot.callbackQuery(/^quiet:(off|\d{1,2}-\d{1,2})$/, async ctx => {
+    if (!ctx.chat) return;
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.answerCallbackQuery('Register a meter first.');
+      return;
+    }
+    const spec = ctx.match[1];
+    let quietStart: number | null = null;
+    let quietEnd: number | null = null;
+    if (spec !== 'off') {
+      const [s, e] = spec.split('-').map(Number);
+      quietStart = s;
+      quietEnd = e;
+    }
+    await db.update(schema.users).set({ quietStart, quietEnd }).where(eq(schema.users.id, user.id));
+    await ctx.answerCallbackQuery(spec === 'off' ? 'Quiet hours off.' : 'Quiet hours set.');
+    await refreshSettings(ctx);
+  });
+
+  bot.callbackQuery('thr:custom', async ctx => {
+    if (!ctx.chat) return;
+    pendingInput.set(ctx.chat.id, { kind: 'threshold' });
+    await ctx.answerCallbackQuery();
+    await ctx.reply('Send two numbers: warning then critical (critical lower), e.g. `200 100`.', {
+      parse_mode: 'Markdown',
+    });
+  });
+  bot.callbackQuery(/^thr:(\d+)-(\d+)$/, async ctx => {
+    if (!ctx.chat) return;
+    const low = Number(ctx.match[1]);
+    const critical = Number(ctx.match[2]);
+    const count = await applyThresholds(ctx.chat.id, low, critical);
+    await ctx.answerCallbackQuery(count === 0 ? 'Register a meter first.' : 'Thresholds updated.');
+    await refreshSettings(ctx);
+  });
+
+  bot.callbackQuery(/^snooze:(\d+)$/, async ctx => {
+    if (!ctx.chat) return;
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.answerCallbackQuery('Register a meter first.');
+      return;
+    }
+    const meterId = Number(ctx.match[1]);
+    const [meter] = await db
+      .select()
+      .from(schema.meters)
+      .where(and(eq(schema.meters.id, meterId), eq(schema.meters.userId, user.id)));
+    if (!meter) {
+      await ctx.answerCallbackQuery('That meter is not yours.');
+      return;
+    }
+    const until = new Date(Date.now() + SNOOZE_MS);
+    await db
+      .insert(schema.alertState)
+      .values({ meterId, remindersSnoozedUntil: until })
+      .onConflictDoUpdate({
+        target: schema.alertState.meterId,
+        set: { remindersSnoozedUntil: until, updatedAt: new Date() },
+      });
+    await ctx.answerCallbackQuery("Snoozed reminders for 3 days. I'll still shout if it recovers.");
+  });
+
   // plain text drives the registration conversation
   bot.on('message:text', async ctx => {
+    // a value typed in after tapping a "Custom" button in /settings
+    const inputState = pendingInput.get(ctx.chat.id);
+    if (inputState) {
+      pendingInput.delete(ctx.chat.id);
+      const user = await findUser(ctx.chat.id);
+      if (!user) {
+        await ctx.reply('No account yet - /register a meter first.');
+        return;
+      }
+      const raw = ctx.message.text.trim();
+      if (inputState.kind === 'quiet') {
+        if (/^off$/i.test(raw)) {
+          await db
+            .update(schema.users)
+            .set({ quietStart: null, quietEnd: null })
+            .where(eq(schema.users.id, user.id));
+          await ctx.reply('Quiet hours off.');
+          return;
+        }
+        const [s, e] = raw.split(/\s+/).map(Number);
+        if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 0 || e > 23) {
+          await ctx.reply('Send two hours between 0 and 23, like `22 7` - or `off`.', {
+            parse_mode: 'Markdown',
+          });
+          return;
+        }
+        await db
+          .update(schema.users)
+          .set({ quietStart: s, quietEnd: e })
+          .where(eq(schema.users.id, user.id));
+        await ctx.reply(
+          `Quiet hours set: ${s}:00–${e}:00 (Dhaka). I'll hold non-critical alerts until then.`
+        );
+        return;
+      }
+      const [low, critical] = raw.split(/\s+/).map(Number);
+      if (!Number.isFinite(low) || !Number.isFinite(critical) || critical >= low || critical < 0) {
+        await ctx.reply('Send warning then critical (critical lower), like `200 100`.', {
+          parse_mode: 'Markdown',
+        });
+        return;
+      }
+      const count = await applyThresholds(ctx.chat.id, low, critical);
+      await ctx.reply(
+        count > 0
+          ? `Done. I'll warn you under ৳${low} and panic under ৳${critical}.`
+          : 'No meters registered yet. Use /register to add one.'
+      );
+      return;
+    }
+
     // SMS verification codes (only when not mid-registration, where a
     // 6-digit account number would be ambiguous)
     const smsState = pendingSms.get(ctx.chat.id);
@@ -610,8 +880,10 @@ export function createBot(
 
     // step === 'meter' validate against the live api before saving
     if (!descoLookups.allow(ctx.chat.id)) {
-      pending.delete(ctx.chat.id);
-      await ctx.reply('Too many verification attempts. Wait a few minutes and /register again.');
+      // keep the pending state so they only re-send the meter number, not restart
+      await ctx.reply(
+        'Too many lookups right now. Wait a few minutes, then send the meter number again.'
+      );
       return;
     }
     const accountNo = state.accountNo!;
@@ -622,11 +894,19 @@ export function createBot(
     try {
       const data = await getProvider('desco').getBalance({ accountNo, meterNo });
       balance = data.balance;
-    } catch {
-      await ctx.reply(
-        "DESCO doesn't recognize that account/meter combo (or their API is down). Double-check the numbers and /register again."
-      );
-      pending.delete(ctx.chat.id);
+    } catch (error) {
+      // keep the account number so they only re-enter the meter, and word the
+      // error honestly - DESCO being down is not the user's fault.
+      pending.set(ctx.chat.id, { step: 'meter', accountNo });
+      if (error instanceof ProviderUnavailableError) {
+        await ctx.reply(
+          "DESCO's service isn't responding right now - your numbers may be fine. Send the meter number again in a few minutes, or /register to start over."
+        );
+      } else {
+        await ctx.reply(
+          "DESCO didn't recognize that meter number for this account. Double-check it and send the meter number again, or /register to start over."
+        );
+      }
       return;
     }
 

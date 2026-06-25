@@ -85,6 +85,14 @@ export const alertState = pgTable('alert_state', {
   lastAlertAt: timestamp('last_alert_at', { withTimezone: true }),
   lastBalance: doublePrecision('last_balance'),
   rechargeDetectedAt: timestamp('recharge_detected_at', { withTimezone: true }),
+  // Set when the user taps "snooze" on an alert: reminders are held back until
+  // this passes. Only silences the repeat nag, not new escalations or recovery.
+  remindersSnoozedUntil: timestamp('reminders_snoozed_until', { withTimezone: true }),
+  // Consecutive failed balance reads (reset to 0 on the next success). Lets us
+  // tell the user once when their meter has gone unreadable instead of going
+  // silent. failureNotifiedAt is when that heads-up was sent.
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  failureNotifiedAt: timestamp('failure_notified_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

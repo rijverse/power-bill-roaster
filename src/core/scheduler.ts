@@ -28,6 +28,9 @@ const POLL_LOCK_KEY = 727274001;
 // surfaces "today's dead letters" so the operator notices.
 const STUCK_PENDING_THRESHOLD_MS = 2 * 60 * 1000;
 const RECENT_FAILED_WINDOW_MS = 24 * 60 * 60 * 1000;
+// after this many consecutive failed reads of one meter, tell the user once
+// (their meter may be deactivated or renumbered) instead of going silent.
+const FAILURE_NOTIFY_THRESHOLD = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -111,6 +114,9 @@ export class Scheduler {
           logger.error(
             `Meter ${meter.id} (${meter.provider}/${meter.meterNo}) check failed`,
             error instanceof Error ? error.message : error
+          );
+          await this.recordMeterFailure(meter, user).catch(e =>
+            logger.error(`Failed to record meter ${meter.id} read failure`, e)
           );
         }
         // jitter between requests so we never hammer the provider
@@ -221,6 +227,7 @@ export class Scheduler {
       level: (stateRow?.level ?? 'ok') as AlertLevel,
       lastAlertAt: stateRow?.lastAlertAt ?? null,
       lastBalance: stateRow?.lastBalance ?? null,
+      remindersSnoozedUntil: stateRow?.remindersSnoozedUntil ?? null,
     };
 
     const now = new Date();
@@ -238,6 +245,12 @@ export class Scheduler {
       lastBalance: balance,
       lastAlertAt: alertSent ? now : (stateRow?.lastAlertAt ?? null),
       rechargeDetectedAt: decision.rechargeDetected ? now : (stateRow?.rechargeDetectedAt ?? null),
+      // a successful read clears any "can't reach this meter" state
+      consecutiveFailures: 0,
+      failureNotifiedAt: null,
+      // an alert that actually fires ends an active snooze; a reminder
+      // suppressed by snooze (action 'none') keeps it so it still holds
+      remindersSnoozedUntil: alertSent ? null : (stateRow?.remindersSnoozedUntil ?? null),
       updatedAt: now,
     };
 
@@ -291,6 +304,47 @@ export class Scheduler {
         payload: JSON.stringify(ctx),
       });
     });
+  }
+
+  // Called when a balance read fails. Counts consecutive failures and, once they
+  // cross the threshold, tells the user once (over Telegram) that we can't read
+  // their meter - so a deactivated or renumbered meter doesn't just go quiet.
+  // Counters reset on the next successful read (see checkMeter's stateUpdate).
+  private async recordMeterFailure(meter: schema.Meter, user: schema.User): Promise<void> {
+    const [stateRow] = await this.db
+      .select()
+      .from(schema.alertState)
+      .where(eq(schema.alertState.meterId, meter.id));
+
+    const consecutiveFailures = (stateRow?.consecutiveFailures ?? 0) + 1;
+    const alreadyNotified = stateRow?.failureNotifiedAt != null;
+    const shouldNotify =
+      consecutiveFailures >= FAILURE_NOTIFY_THRESHOLD &&
+      !alreadyNotified &&
+      user.telegramChatId !== null;
+    const now = new Date();
+    const set = {
+      consecutiveFailures,
+      failureNotifiedAt: shouldNotify ? now : (stateRow?.failureNotifiedAt ?? null),
+      updatedAt: now,
+    };
+    await this.db
+      .insert(schema.alertState)
+      .values({ meterId: meter.id, ...set })
+      .onConflictDoUpdate({ target: schema.alertState.meterId, set });
+
+    if (shouldNotify && user.telegramChatId !== null) {
+      const label = meter.nickname ?? `meter ${meter.meterNo}`;
+      await this.sender.sendTelegram(
+        user.telegramChatId,
+        [
+          `⚠️ I haven't been able to read ${label} for a while.`,
+          '',
+          "DESCO's service may be down, or the account/meter numbers may have changed (a replaced meter gets new numbers). Balance alerts for it are paused until I can read it again.",
+          'If the meter changed, use /stop and then /register the new one.',
+        ].join('\n')
+      );
+    }
   }
 
   private async alarmOperator(text: string): Promise<void> {

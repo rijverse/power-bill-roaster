@@ -64,6 +64,13 @@
       "when": 1782367418660,
       "tag": "0008_pending_alerts_delivered",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782371046538,
+      "tag": "0009_alert_state_snooze_failures",
+      "breakpoints": true
     }
   ]
 }

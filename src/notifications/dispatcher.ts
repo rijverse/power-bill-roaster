@@ -11,9 +11,15 @@ import { SmsGateway } from './sms';
 import { Mailer } from '../services/mailer';
 import { logger, maskEmail, maskPhone } from '../logger';
 
+/** A button on an alert message: a link, or a callback the bot handles. */
+export type AlertButton = { text: string; url: string } | { text: string; callbackData: string };
+
 export interface TelegramSender {
-  sendTelegram(chatId: number, text: string): Promise<void>;
+  sendTelegram(chatId: number, text: string, buttons?: AlertButton[][]): Promise<void>;
 }
+
+// Fallback only - the scheduler always sets ctx.rechargeUrl from config.
+const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
 
 /**
  * Outcome of one dispatch pass. `delivered` and `failed` hold channel keys -
@@ -197,9 +203,18 @@ export class Dispatcher {
     if (tgChannel && !tgChannel.enabled) {
       return empty();
     }
+    // Recovery is good news with nothing to act on; every other alert gets a
+    // one-tap recharge link and a snooze button (snooze mutes the repeat nag).
+    const buttons: AlertButton[][] | undefined =
+      action === 'recovery'
+        ? undefined
+        : [
+            [{ text: '💳 Recharge now', url: ctx.rechargeUrl ?? DEFAULT_RECHARGE_URL }],
+            [{ text: '🔕 Snooze 3 days', callbackData: `snooze:${meter.id}` }],
+          ];
     let ok = true;
     try {
-      await this.telegram.sendTelegram(user.telegramChatId, message);
+      await this.telegram.sendTelegram(user.telegramChatId, message, buttons);
     } catch (error) {
       ok = false;
       logger.error(

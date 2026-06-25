@@ -1,6 +1,7 @@
 import { Agent } from 'undici';
 import { fetchWithTimeout } from '../core/http';
 import { ApiResponse, BalanceData } from '../types';
+import { ProviderUnavailableError, ProviderLookupError } from '../providers/types';
 
 // Overridable for tests (point at a mock server)
 const API_BASE_URL =
@@ -35,11 +36,23 @@ export class DescoApiClient {
       `${API_BASE_URL}/getBalance?accountNo=${encodeURIComponent(accountNo)}` +
       `&meterNo=${encodeURIComponent(meterNo)}`;
 
-    const response = await fetchWithTimeout(url, { dispatcher: insecureDispatcher });
-    const apiResponse: unknown = await response.json();
+    // A failed request (network, timeout, non-JSON) is an availability problem,
+    // not a bad meter number - keep the two apart so callers can word the error
+    // honestly ("try again" vs "check your numbers").
+    let apiResponse: unknown;
+    try {
+      const response = await fetchWithTimeout(url, { dispatcher: insecureDispatcher });
+      apiResponse = await response.json();
+    } catch (error) {
+      throw new ProviderUnavailableError(
+        `DESCO request failed: ${error instanceof Error ? error.message : 'network error'}`
+      );
+    }
 
     if (!validateApiResponse(apiResponse)) {
-      throw new Error('Invalid API response: missing or invalid data');
+      throw new ProviderLookupError(
+        'DESCO returned no valid balance for that account/meter (the numbers likely do not match)'
+      );
     }
 
     return apiResponse.data;

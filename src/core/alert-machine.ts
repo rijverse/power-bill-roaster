@@ -6,6 +6,9 @@ export interface AlertStateSnapshot {
   level: AlertLevel;
   lastAlertAt: Date | null;
   lastBalance: number | null;
+  /** Set when the user snoozed reminders from an alert button; holds back the
+   *  repeat nag until it passes. Absent/null means not snoozed. */
+  remindersSnoozedUntil?: Date | null;
 }
 
 export interface Thresholds {
@@ -72,7 +75,12 @@ export function evaluate(
     prev.lastAlertAt !== null &&
     now.getTime() - prev.lastAlertAt.getTime() >= reminderIntervalMs
   ) {
-    return { level, action: 'reminder', rechargeDetected };
+    // a reminder is due - unless the user snoozed it from an alert button.
+    // snooze only mutes the repeat nag; the escalation and recovery branches
+    // above deliberately ignore it.
+    const snoozed =
+      prev.remindersSnoozedUntil != null && now.getTime() < prev.remindersSnoozedUntil.getTime();
+    return { level, action: snoozed ? 'none' : 'reminder', rechargeDetected };
   }
 
   return { level, action: 'none', rechargeDetected };

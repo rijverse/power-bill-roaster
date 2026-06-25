@@ -2,13 +2,30 @@ import { getServerConfig } from './config';
 import { createDb } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
-import { Dispatcher } from './notifications/dispatcher';
+import { Dispatcher, AlertButton } from './notifications/dispatcher';
 import { AlertDispatcherWorker } from './core/alert-dispatcher';
 import { createSmsGateway } from './notifications/sms';
 import { createMailer } from './services/mailer';
 import { createPaymentProvider, SubscriptionService } from './billing';
 import { createWebServer } from './web/server';
 import { logger } from './logger';
+import { InlineKeyboard } from 'grammy';
+
+// Translate the dispatcher's channel-agnostic button spec into a grammy keyboard.
+function buildKeyboard(rows: AlertButton[][]): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  rows.forEach((row, i) => {
+    if (i > 0) kb.row();
+    for (const button of row) {
+      if ('url' in button) {
+        kb.url(button.text, button.url);
+      } else {
+        kb.text(button.text, button.callbackData);
+      }
+    }
+  });
+  return kb;
+}
 
 async function main(): Promise<void> {
   const config = getServerConfig();
@@ -25,8 +42,11 @@ async function main(): Promise<void> {
   const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
   const bot = createBot(db, config, subscriptions, smsGateway);
   const telegramSender = {
-    sendTelegram: async (chatId: number, text: string) => {
-      await bot.api.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+    sendTelegram: async (chatId: number, text: string, buttons?: AlertButton[][]) => {
+      await bot.api.sendMessage(chatId, text, {
+        parse_mode: 'Markdown',
+        reply_markup: buttons ? buildKeyboard(buttons) : undefined,
+      });
     },
   };
   subscriptions.notifyDowngrade = async (chatId, expiredPlan, pausedMeters) => {
@@ -108,6 +128,8 @@ async function main(): Promise<void> {
       { command: 'register', description: 'Add your DESCO meter' },
       { command: 'balance', description: 'Check balances right now' },
       { command: 'dashboard', description: 'Balance history charts' },
+      { command: 'settings', description: 'Tone, quiet hours, thresholds' },
+      { command: 'menu', description: 'Quick action buttons' },
       { command: 'threshold', description: 'Set alert levels' },
       { command: 'nickname', description: 'Name your meter' },
       { command: 'sms', description: 'Get alerts by SMS (paid plans)' },

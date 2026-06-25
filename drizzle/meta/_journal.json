@@ -57,6 +57,13 @@
       "when": 1782284683756,
       "tag": "0007_add_pending_alerts",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782367418660,
+      "tag": "0008_pending_alerts_delivered",
+      "breakpoints": true
     }
   ]
 }

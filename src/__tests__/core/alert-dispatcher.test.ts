@@ -20,99 +20,127 @@ import { AlertDispatcherWorker } from '../../core/alert-dispatcher';
 import { Dispatcher } from '../../notifications/dispatcher';
 import { schema } from '../../db';
 
+function makePending(overrides: Partial<schema.PendingAlert> = {}): schema.PendingAlert {
+  return {
+    id: 1,
+    meterId: 7,
+    userId: 1,
+    action: 'low-alert',
+    level: 'low',
+    payload: JSON.stringify({
+      nickname: null,
+      accountNo: '12345678',
+      meterNo: '87654321',
+      balance: 42.5,
+      lowThreshold: 150,
+      criticalThreshold: 100,
+      prediction: null,
+    }),
+    createdAt: new Date(),
+    attempts: 0,
+    nextAttempt: new Date(Date.now() - 1000),
+    status: 'pending',
+    lastError: null,
+    deliveredAt: null,
+    delivered: '[]',
+    ...overrides,
+  };
+}
+
+function makeFakeDb(opts: {
+  pendingRows: schema.PendingAlert[];
+  user?: schema.User;
+  meter?: schema.Meter;
+}) {
+  const db = {
+    select() {
+      return {
+        from(table: unknown) {
+          return {
+            where(_p: unknown) {
+              return {
+                orderBy() {
+                  return {
+                    limit() {
+                      const rows = table === schema.pendingAlerts ? opts.pendingRows : [];
+                      return {
+                        for() {
+                          return Promise.resolve(rows);
+                        },
+                      };
+                    },
+                  };
+                },
+                async then(resolve: (rows: unknown[]) => void) {
+                  if (table === schema.users) {
+                    resolve(opts.user ? [opts.user] : []);
+                  } else if (table === schema.meters) {
+                    resolve(opts.meter ? [opts.meter] : []);
+                  } else {
+                    resolve([]);
+                  }
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    update(table: unknown) {
+      return {
+        set(values: Partial<schema.PendingAlert>) {
+          return {
+            where(predicate: unknown) {
+              const id = extractId(predicate);
+              const row = opts.pendingRows.find(p => p.id === id);
+              if (row && table === schema.pendingAlerts) {
+                Object.assign(row, values);
+              }
+              return Promise.resolve();
+            },
+          };
+        },
+      };
+    },
+  };
+  return db;
+}
+
+function extractId(predicate: unknown): number {
+  if (typeof predicate === 'object' && predicate !== null && '_id' in predicate) {
+    return (predicate as { _id: number })._id;
+  }
+  return 0;
+}
+
+function aUser(): schema.User {
+  return {
+    id: 1,
+    telegramChatId: 123,
+    plan: 'free',
+    tonePref: 'savage',
+    quietStart: null,
+    quietEnd: null,
+  } as unknown as schema.User;
+}
+
+function aMeter(): schema.Meter {
+  return { id: 7, accountNo: '12345678', meterNo: '87654321' } as unknown as schema.Meter;
+}
+
+function workerWith(
+  db: ReturnType<typeof makeFakeDb>,
+  dispatchAlert: jest.Mock,
+  extra: { adminSender?: { sendTelegram: jest.Mock }; adminChatId?: number } = {}
+) {
+  return new AlertDispatcherWorker({
+    db: db as never,
+    dispatcher: { dispatchAlert } as unknown as Dispatcher,
+    ...extra,
+  });
+}
+
 describe('AlertDispatcherWorker failure paths', () => {
-  function makePending(overrides: Partial<schema.PendingAlert> = {}): schema.PendingAlert {
-    return {
-      id: 1,
-      meterId: 7,
-      userId: 1,
-      action: 'low-alert',
-      level: 'low',
-      payload: JSON.stringify({
-        nickname: null,
-        accountNo: '12345678',
-        meterNo: '87654321',
-        balance: 42.5,
-        lowThreshold: 150,
-        criticalThreshold: 100,
-        prediction: null,
-      }),
-      createdAt: new Date(),
-      attempts: 0,
-      nextAttempt: new Date(Date.now() - 1000),
-      status: 'pending',
-      lastError: null,
-      deliveredAt: null,
-      ...overrides,
-    };
-  }
-
-  function makeFakeDb(opts: {
-    pendingRows: schema.PendingAlert[];
-    user?: schema.User;
-    meter?: schema.Meter;
-  }) {
-    const db = {
-      select() {
-        return {
-          from(table: unknown) {
-            return {
-              where(_p: unknown) {
-                return {
-                  orderBy() {
-                    return {
-                      limit() {
-                        const rows = table === schema.pendingAlerts ? opts.pendingRows : [];
-                        return {
-                          for() {
-                            return Promise.resolve(rows);
-                          },
-                        };
-                      },
-                    };
-                  },
-                  async then(resolve: (rows: unknown[]) => void) {
-                    if (table === schema.users) {
-                      resolve(opts.user ? [opts.user] : []);
-                    } else if (table === schema.meters) {
-                      resolve(opts.meter ? [opts.meter] : []);
-                    } else {
-                      resolve([]);
-                    }
-                  },
-                };
-              },
-            };
-          },
-        };
-      },
-      update(table: unknown) {
-        return {
-          set(values: Partial<schema.PendingAlert>) {
-            return {
-              where(predicate: unknown) {
-                const id = extractId(predicate);
-                const row = opts.pendingRows.find(p => p.id === id);
-                if (row && table === schema.pendingAlerts) {
-                  Object.assign(row, values);
-                }
-                return Promise.resolve();
-              },
-            };
-          },
-        };
-      },
-    };
-    return db;
-  }
-
-  function extractId(predicate: unknown): number {
-    if (typeof predicate === 'object' && predicate !== null && '_id' in predicate) {
-      return (predicate as { _id: number })._id;
-    }
-    return 0;
-  }
-
   it('marks a row with malformed payload as failed without infinite retry', async () => {
     const row = makePending({ id: 11, payload: 'not-json' });
     const db = makeFakeDb({
@@ -138,6 +166,68 @@ describe('AlertDispatcherWorker failure paths', () => {
     await worker.tick();
     expect(row.status).toBe('failed');
     expect(row.lastError).toMatch(/user or meter deleted/);
+  });
+});
+
+describe('AlertDispatcherWorker retry semantics', () => {
+  it('marks the row sent and records the delivered channels', async () => {
+    const row = makePending({ id: 21 });
+    const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
+    const dispatchAlert = jest.fn().mockResolvedValue({ delivered: ['telegram'], failed: [] });
+    await workerWith(db, dispatchAlert).tick();
+
+    expect(row.status).toBe('sent');
+    expect(row.deliveredAt).toBeInstanceOf(Date);
+    expect(JSON.parse(row.delivered)).toEqual(['telegram']);
+    expect(row.lastError).toBeNull();
+  });
+
+  it('retries only the failed channel and skips the already-delivered one', async () => {
+    const row = makePending({ id: 22 });
+    const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
+    const dispatchAlert = jest
+      .fn()
+      .mockResolvedValueOnce({ delivered: ['telegram'], failed: ['email:9'] })
+      .mockResolvedValueOnce({ delivered: ['email:9'], failed: [] });
+    const worker = workerWith(db, dispatchAlert);
+
+    await worker.tick();
+    // first pass: telegram landed, email failed -> stay pending and back off
+    expect(row.status).toBe('pending');
+    expect(row.attempts).toBe(1);
+    expect(JSON.parse(row.delivered)).toEqual(['telegram']);
+    expect(row.lastError).toMatch(/email:9/);
+    expect(row.nextAttempt.getTime()).toBeGreaterThan(Date.now());
+
+    await worker.tick();
+    // second pass: worker passed the delivered set so telegram isn't resent
+    const deliveredArg = dispatchAlert.mock.calls[1][5] as Set<string>;
+    expect(deliveredArg.has('telegram')).toBe(true);
+    expect(row.status).toBe('sent');
+    expect(new Set(JSON.parse(row.delivered))).toEqual(new Set(['telegram', 'email:9']));
+  });
+
+  it('dead-letters after MAX_ATTEMPTS and pings the operator', async () => {
+    const row = makePending({ id: 23, attempts: 4 });
+    const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
+    const dispatchAlert = jest.fn().mockResolvedValue({ delivered: [], failed: ['telegram'] });
+    const adminSender = { sendTelegram: jest.fn(async () => undefined) };
+    await workerWith(db, dispatchAlert, { adminSender, adminChatId: 555 }).tick();
+
+    expect(row.status).toBe('failed');
+    expect(row.attempts).toBe(5);
+    expect(adminSender.sendTelegram).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries the whole row when dispatchAlert throws unexpectedly', async () => {
+    const row = makePending({ id: 24 });
+    const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
+    const dispatchAlert = jest.fn().mockRejectedValue(new Error('boom'));
+    await workerWith(db, dispatchAlert).tick();
+
+    expect(row.status).toBe('pending');
+    expect(row.attempts).toBe(1);
+    expect(row.lastError).toMatch(/boom/);
   });
 });
 

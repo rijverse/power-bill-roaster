@@ -145,6 +145,15 @@ You also get in-app alarms: the scheduler messages `ADMIN_CHAT_ID` on Telegram
 if more than half the meters in a cycle fail (likely a provider API change or
 block), and `/stats` shows users / meters / readings / alerts on demand.
 
+**Run a single app instance.** The poll cycle is multi-instance-safe (a Postgres
+advisory lock means only one instance polls) and the outbox worker uses
+`FOR UPDATE SKIP LOCKED`, but the login/OTP/DESCO-lookup rate limiters are
+in-memory per process, and the monthly SMS budget check isn't atomic across
+concurrent dispatches. Running two or more instances would weaken those throttles
+and could let SMS overshoot the plan budget. Scale vertically; if you ever need
+horizontal scale, move the rate-limit/OTP state to shared storage (e.g. Redis)
+and gate the SMS budget in the database first.
+
 ## 6. Email channel (optional)
 
 The email sender speaks plain SMTP. To enable it, set `SMTP_HOST`, `SMTP_PORT`,

@@ -34,19 +34,60 @@ describe('Dispatcher email branch', () => {
     ]);
     const dispatcher = new Dispatcher(db, telegram, null, mailer);
 
-    await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
+    const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
 
     expect(mailer.send).toHaveBeenCalledTimes(1);
     const [to, subject] = (mailer.send as jest.Mock).mock.calls[0];
     expect(to).toBe('me@example.com');
     expect(subject).toContain('Ghost');
+    // the channel key lands in `delivered`, nothing failed
+    expect(result).toEqual({ delivered: ['email:9'], failed: [] });
   });
 
   it('does nothing when no mailer is configured', async () => {
     const db = fakeDb([{ id: 9, address: 'me@example.com', verified: true, enabled: true }]);
     const dispatcher = new Dispatcher(db, telegram, null, null);
-    await expect(
-      dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx)
-    ).resolves.toBeUndefined();
+    await expect(dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx)).resolves.toEqual({
+      delivered: [],
+      failed: [],
+    });
+  });
+
+  it('reports the channel as failed (not delivered) when the mailer throws', async () => {
+    const mailer: Mailer = {
+      from: 'x@y.z',
+      send: jest.fn(async () => {
+        throw new Error('smtp down');
+      }),
+    };
+    const db = fakeDb([
+      { id: 9, address: 'me@example.com', type: 'email', verified: true, enabled: true },
+    ]);
+    const dispatcher = new Dispatcher(db, telegram, null, mailer);
+
+    const result = await dispatcher.dispatchAlert(user, meter, 'critical-alert', 'critical', ctx);
+
+    // a send failure is absorbed (no throw) but surfaced so the worker retries it
+    expect(result).toEqual({ delivered: [], failed: ['email:9'] });
+  });
+
+  it('skips a channel already delivered on a previous attempt', async () => {
+    const mailer: Mailer = { from: 'x@y.z', send: jest.fn(async () => undefined) };
+    const db = fakeDb([
+      { id: 9, address: 'me@example.com', type: 'email', verified: true, enabled: true },
+    ]);
+    const dispatcher = new Dispatcher(db, telegram, null, mailer);
+
+    const result = await dispatcher.dispatchAlert(
+      user,
+      meter,
+      'low-alert',
+      'low',
+      ctx,
+      new Set(['email:9'])
+    );
+
+    expect(mailer.send).not.toHaveBeenCalled();
+    expect(result).toEqual({ delivered: [], failed: [] });
   });
 });

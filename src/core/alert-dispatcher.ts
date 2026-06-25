@@ -7,7 +7,7 @@
 
 import { and, asc, eq, lte, sql } from 'drizzle-orm';
 import { Db, schema } from '../db';
-import { Dispatcher, TelegramSender } from '../notifications/dispatcher';
+import { Dispatcher, DispatchResult, TelegramSender } from '../notifications/dispatcher';
 import { MeterContext } from '../notifications/telegram-templates';
 import { logger } from '../logger';
 
@@ -135,10 +135,13 @@ export class AlertDispatcherWorker {
       return;
     }
 
-    // dispatchAlert's per-channel try/catches absorb real failures and log
-    // them; a throw here is unexpected, so treat it as a retryable transient.
+    // Channels already delivered on a previous attempt, so a retry resends only
+    // the ones that failed - never a duplicate.
+    const alreadyDelivered = parseDelivered(row.delivered);
+
+    let result: DispatchResult;
     try {
-      await this.deps.dispatcher.dispatchAlert(
+      result = await this.deps.dispatcher.dispatchAlert(
         user,
         meter,
         // DB stores action/level as text, dispatcher takes the same union
@@ -146,54 +149,113 @@ export class AlertDispatcherWorker {
         // is the only writer and uses these literals.
         row.action as never,
         row.level as never,
-        ctx
+        ctx,
+        alreadyDelivered
       );
+    } catch (error) {
+      // dispatchAlert isolates each channel and is built not to throw; getting
+      // here is genuinely unexpected. Nothing was reliably delivered this pass,
+      // so retry the whole row (the delivered ledger still guards duplicates).
+      await this.scheduleRetryOrFail(
+        row,
+        meter,
+        row.attempts + 1,
+        error instanceof Error ? error.message : String(error),
+        alreadyDelivered
+      );
+      return;
+    }
+
+    const deliveredNow = new Set([...alreadyDelivered, ...result.delivered]);
+    if (result.failed.length === 0) {
+      // every channel that had something to send succeeded (or there was
+      // nothing to send) - the row is done.
       await this.deps.db
         .update(schema.pendingAlerts)
-        .set({ status: 'sent', deliveredAt: new Date(), lastError: null })
+        .set({
+          status: 'sent',
+          deliveredAt: new Date(),
+          delivered: JSON.stringify([...deliveredNow]),
+          lastError: null,
+        })
         .where(eq(schema.pendingAlerts.id, row.id));
       logger.info(`Pending alert ${row.id} delivered`);
-    } catch (error) {
-      const attempts = row.attempts + 1;
-      const lastError = error instanceof Error ? error.message : String(error);
-      if (attempts >= MAX_ATTEMPTS) {
-        await this.deps.db
-          .update(schema.pendingAlerts)
-          .set({ status: 'failed', attempts, lastError })
-          .where(eq(schema.pendingAlerts.id, row.id));
-        logger.error(
-          `Pending alert ${row.id} exhausted retries (${attempts}); marked failed`,
-          lastError
-        );
-        if (
-          this.deps.adminSender &&
-          this.deps.adminChatId !== null &&
-          this.deps.adminChatId !== undefined
-        ) {
-          try {
-            await this.deps.adminSender.sendTelegram(
-              this.deps.adminChatId,
-              `🚨 Alert for meter ${meter.id} (${meter.accountNo}/${meter.meterNo}) failed after ${attempts} attempts. Last error: ${lastError}`
-            );
-          } catch (notifyError) {
-            logger.error('Failed to notify admin of dead-letter alert', notifyError);
-          }
-        }
-      } else {
-        const backoffMs = BACKOFF_BASE_MS * 2 ** (attempts - 1);
-        await this.deps.db
-          .update(schema.pendingAlerts)
-          .set({
-            attempts,
-            nextAttempt: new Date(Date.now() + backoffMs),
-            lastError,
-          })
-          .where(eq(schema.pendingAlerts.id, row.id));
-        logger.warn(
-          `Pending alert ${row.id} attempt ${attempts} failed; retrying in ${backoffMs}ms`,
-          lastError
-        );
-      }
+      return;
     }
+
+    // some channels failed - back off and retry just those next time.
+    await this.scheduleRetryOrFail(
+      row,
+      meter,
+      row.attempts + 1,
+      `channel(s) failed: ${result.failed.join(', ')}`,
+      deliveredNow
+    );
   }
+
+  // Record a failed attempt: back off and retry until MAX_ATTEMPTS, then
+  // dead-letter the row and ping the operator. `delivered` is the cumulative set
+  // of channels already sent, persisted so the next attempt skips them.
+  private async scheduleRetryOrFail(
+    row: schema.PendingAlert,
+    meter: schema.Meter,
+    attempts: number,
+    lastError: string,
+    delivered: ReadonlySet<string>
+  ): Promise<void> {
+    const deliveredJson = JSON.stringify([...delivered]);
+    if (attempts >= MAX_ATTEMPTS) {
+      await this.deps.db
+        .update(schema.pendingAlerts)
+        .set({ status: 'failed', attempts, delivered: deliveredJson, lastError })
+        .where(eq(schema.pendingAlerts.id, row.id));
+      logger.error(
+        `Pending alert ${row.id} exhausted retries (${attempts}); marked failed`,
+        lastError
+      );
+      if (
+        this.deps.adminSender &&
+        this.deps.adminChatId !== null &&
+        this.deps.adminChatId !== undefined
+      ) {
+        try {
+          await this.deps.adminSender.sendTelegram(
+            this.deps.adminChatId,
+            `🚨 Alert for meter ${meter.id} (${meter.accountNo}/${meter.meterNo}) failed after ${attempts} attempts. Last error: ${lastError}`
+          );
+        } catch (notifyError) {
+          logger.error('Failed to notify admin of dead-letter alert', notifyError);
+        }
+      }
+      return;
+    }
+    const backoffMs = BACKOFF_BASE_MS * 2 ** (attempts - 1);
+    await this.deps.db
+      .update(schema.pendingAlerts)
+      .set({
+        attempts,
+        nextAttempt: new Date(Date.now() + backoffMs),
+        delivered: deliveredJson,
+        lastError,
+      })
+      .where(eq(schema.pendingAlerts.id, row.id));
+    logger.warn(
+      `Pending alert ${row.id} attempt ${attempts} failed; retrying in ${backoffMs}ms`,
+      lastError
+    );
+  }
+}
+
+// the delivered ledger is a JSON array of channel keys; tolerate anything odd
+// (it's only an optimisation to avoid re-sending) by falling back to empty.
+function parseDelivered(raw: string): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return new Set(parsed.filter((x): x is string => typeof x === 'string'));
+    }
+  } catch {
+    // malformed - treat as nothing delivered yet
+  }
+  return new Set();
 }

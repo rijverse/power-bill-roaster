@@ -67,7 +67,7 @@ export function criticalAlertMessage(ctx: MeterContext, tone: Tone = 'savage'): 
       balanceLine(ctx),
       `📟 ${meterLabel(ctx)}`,
       ``,
-      `You're under ৳${ctx.criticalThreshold} — power may be cut soon. Please recharge when you can.`,
+      `You're under ৳${ctx.criticalThreshold} - power may be cut soon. Please recharge when you can.`,
       ...predictionLine(ctx),
       ``,
       `Recharge: ${rechargeUrl(ctx)}`,
@@ -95,7 +95,7 @@ export function reminderMessage(ctx: MeterContext, tone: Tone = 'savage'): strin
       : `🔁 *Still Low. Still Waiting. Still Judging.*`;
   const body =
     tone === 'mild'
-      ? `Just a gentle nudge — the balance is still low.`
+      ? `Just a gentle nudge - the balance is still low.`
       : `Yesterday's warning apparently didn't land. The balance didn't recharge itself overnight - shocking, I know.`;
   return [
     head,

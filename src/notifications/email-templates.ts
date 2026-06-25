@@ -79,12 +79,12 @@ export function emailAlert(
           badge: mild ? '🔴' : '💀⚡',
           title: mild ? 'Critically Low' : 'Power Emergency',
           preheader: mild
-            ? `৳${balance} left — power may be cut soon.`
+            ? `৳${balance} left - power may be cut soon.`
             : `৳${balance} left. DESCO is about to pull the plug.`,
           balance: ctx.balance,
           balanceLabel: 'Critically low',
           pitch: mild
-            ? `You're under ৳${ctx.criticalThreshold} — power may be cut soon.${prediction(ctx)}`
+            ? `You're under ৳${ctx.criticalThreshold} - power may be cut soon.${prediction(ctx)}`
             : `<strong>This is not a drill.</strong> You're under ৳${ctx.criticalThreshold}. DESCO has a finger on the switch.${prediction(ctx)}`,
           roast: mild
             ? 'Please recharge as soon as you can.'
@@ -110,7 +110,7 @@ export function emailAlert(
           balance: ctx.balance,
           balanceLabel: 'Still low',
           pitch: mild
-            ? `A gentle reminder — the balance is still low.${prediction(ctx)}`
+            ? `A gentle reminder - the balance is still low.${prediction(ctx)}`
             : `Yesterday's nudge apparently didn't land - the balance didn't recharge itself overnight.${prediction(ctx)}`,
           roast: mild
             ? 'Whenever you get a moment, a top-up will clear this.'

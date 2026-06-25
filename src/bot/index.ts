@@ -217,7 +217,7 @@ export function createBot(
       );
       return;
     }
-    await ctx.reply('Checking… ⏳');
+    await ctx.reply('Checking... ⏳');
     for (const meter of meters) {
       try {
         const data = await getProvider(meter.provider).getBalance({
@@ -888,7 +888,7 @@ export function createBot(
     }
     const accountNo = state.accountNo!;
     const meterNo = input;
-    await ctx.reply('Verifying with DESCO… ⏳');
+    await ctx.reply('Verifying with DESCO... ⏳');
 
     let balance: number;
     try {

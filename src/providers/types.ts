@@ -15,9 +15,9 @@ export interface Provider {
 }
 
 /**
- * The provider couldn't be reached or errored out (network failure, timeout,
- * a non-JSON body). The meter numbers might be perfectly fine - retrying later
- * may succeed. Callers should say "try again" rather than "check your numbers".
+ * Couldn't reach the provider, or it errored out (network, timeout, non-JSON
+ * body). The meter numbers might be perfectly fine, so this is a "try again
+ * later" — not a "wrong number".
  */
 export class ProviderUnavailableError extends Error {
   constructor(message: string) {
@@ -27,9 +27,8 @@ export class ProviderUnavailableError extends Error {
 }
 
 /**
- * The provider answered but had no valid balance for these identifiers - the
- * account/meter numbers most likely don't match a real meter. Callers should
- * ask the user to double-check the numbers.
+ * The provider answered but had no balance for these numbers — they most likely
+ * don't match a real meter, so it's worth double-checking them.
  */
 export class ProviderLookupError extends Error {
   constructor(message: string) {

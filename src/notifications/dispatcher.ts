@@ -22,11 +22,11 @@ export interface TelegramSender {
 const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
 
 /**
- * Outcome of one dispatch pass. `delivered` and `failed` hold channel keys -
- * 'telegram', 'email:<channelId>', 'sms:<channelId>' - so the outbox worker can
- * mark the row sent only when nothing failed, and on a retry resend ONLY the
- * channels in `failed` while skipping those already delivered. A channel that is
- * intentionally not sent (quiet hours, disabled, no budget) is in neither list.
+ * Result of one dispatch pass. `delivered` and `failed` hold channel keys -
+ * 'telegram', 'email:<channelId>', 'sms:<channelId>' - so the worker marks the
+ * row sent only when nothing failed, and on a retry re-sends just the failed
+ * ones and skips the rest. A channel we deliberately skip (quiet hours, disabled,
+ * no SMS budget) shows up in neither list.
  */
 export interface DispatchResult {
   delivered: string[];

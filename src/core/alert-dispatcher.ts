@@ -153,9 +153,9 @@ export class AlertDispatcherWorker {
         alreadyDelivered
       );
     } catch (error) {
-      // dispatchAlert isolates each channel and is built not to throw; getting
-      // here is genuinely unexpected. Nothing was reliably delivered this pass,
-      // so retry the whole row (the delivered ledger still guards duplicates).
+      // dispatchAlert isolates each channel and shouldn't throw, so reaching here
+      // is a surprise. Nothing was reliably sent this pass, so retry the whole
+      // row - the delivered ledger still keeps us from doubling up.
       await this.scheduleRetryOrFail(
         row,
         meter,
@@ -246,8 +246,8 @@ export class AlertDispatcherWorker {
   }
 }
 
-// the delivered ledger is a JSON array of channel keys; tolerate anything odd
-// (it's only an optimisation to avoid re-sending) by falling back to empty.
+// the delivered ledger is just a JSON array of channel keys. it only exists to
+// avoid re-sending, so if it's ever malformed treat it as nothing-sent-yet.
 function parseDelivered(raw: string): Set<string> {
   try {
     const parsed: unknown = JSON.parse(raw);

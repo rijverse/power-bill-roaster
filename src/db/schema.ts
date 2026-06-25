@@ -195,10 +195,10 @@ export const pendingAlerts = pgTable(
     status: text('status').notNull().default('pending'), // pending | sent | failed
     lastError: text('last_error'),
     deliveredAt: timestamp('delivered_at', { withTimezone: true }),
-    // Per-target delivery ledger: JSON array of channel keys already delivered
-    // ('telegram', 'email:<channelId>', 'sms:<channelId>'). A retry resends
-    // ONLY the channels that failed and skips the ones in here, so a transient
-    // failure on one channel never duplicates an already-delivered one.
+    // What's already been delivered: a JSON array of channel keys
+    // ('telegram', 'email:<channelId>', 'sms:<channelId>'). A retry re-sends only
+    // the channels that failed and skips whatever's already in here, so a blip on
+    // one channel can't double up an alert that already went out on another.
     delivered: text('delivered').notNull().default('[]'),
   },
   table => [

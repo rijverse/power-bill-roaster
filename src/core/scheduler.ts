@@ -306,10 +306,10 @@ export class Scheduler {
     });
   }
 
-  // Called when a balance read fails. Counts consecutive failures and, once they
-  // cross the threshold, tells the user once (over Telegram) that we can't read
-  // their meter - so a deactivated or renumbered meter doesn't just go quiet.
-  // Counters reset on the next successful read (see checkMeter's stateUpdate).
+  // bumps a meter's consecutive-failure count and, once it crosses the threshold,
+  // pings the user once (over Telegram) that we can't read their meter - otherwise
+  // a deactivated or renumbered meter would just go quiet. a good read resets the
+  // count (see checkMeter's stateUpdate).
   private async recordMeterFailure(meter: schema.Meter, user: schema.User): Promise<void> {
     const [stateRow] = await this.db
       .select()

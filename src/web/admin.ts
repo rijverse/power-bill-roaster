@@ -210,7 +210,7 @@ async function deliveries(db: Db) {
       sentAt: r.sentAt.toISOString(),
       meterNo: r.meterNo,
       channel: r.chType ?? 'telegram',
-      recipient: r.chAddr ?? (r.tgChat !== null ? `chat ${r.tgChat}` : '—'),
+      recipient: r.chAddr ?? (r.tgChat !== null ? `chat ${r.tgChat}` : 'n/a'),
       level: r.level,
       action: r.action,
       status: r.deliveryStatus,

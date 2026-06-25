@@ -26,7 +26,7 @@ export function adminLoginHtml(hasError: boolean, message = 'Wrong password.'): 
     </form>
   </div>
 </div>`;
-  return pageDoc('Power Roast — Admin', body);
+  return pageDoc('Power Roast Admin', body);
 }
 
 const AIC = {
@@ -61,10 +61,10 @@ export function adminAppHtml(csrf: string): string {
   <div class="pr-main">
     <header class="pr-topbar">
       <button id="pr-hamburger" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
-      <div class="titles"><div class="t" id="topTitle">Revenue &amp; health</div><div class="s" id="topSub">operator console · everything is fine, mostly</div></div>
+      <div class="titles"><div class="t" id="topTitle">Revenue &amp; health</div><div class="s" id="topSub">operator console, everything is fine, mostly</div></div>
       <button class="pr-btn gold" id="refreshBtn" type="button"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B1020" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span>Refresh</span></button>
     </header>
-    <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading…</div></div></main>
+    <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading...</div></div></main>
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -99,14 +99,14 @@ function balanceClass(m) { return m.balance === null ? 'muted' : m.balance < m.c
 
 // ---- chrome --------------------------------------------------------------
 const TITLES = {
-  revenue: ['Revenue & health', 'operator console · everything is fine, mostly'],
+  revenue: ['Revenue & health', 'operator console, everything is fine, mostly'],
   users: ['Users & meters', null],
-  logs: ['Delivery logs', 'alert delivery · last 24 hours'],
+  logs: ['Delivery logs', 'alert delivery, last 24 hours'],
 };
 function renderChrome() {
   document.querySelectorAll('.pr-navbtn[data-screen]').forEach(b => b.classList.toggle('active', b.getAttribute('data-screen') === SCREEN));
   let title = TITLES[SCREEN][0], sub = TITLES[SCREEN][1];
-  if (SCREEN === 'users' && OVERVIEW) sub = OVERVIEW.users.toLocaleString() + ' users · ' + OVERVIEW.activeMeters.toLocaleString() + ' meters tracked';
+  if (SCREEN === 'users' && OVERVIEW) sub = OVERVIEW.users.toLocaleString() + ' users, ' + OVERVIEW.activeMeters.toLocaleString() + ' meters tracked';
   document.getElementById('topTitle').textContent = title;
   document.getElementById('topSub').textContent = sub || '';
 }
@@ -140,7 +140,7 @@ function revPayments(payments) {
   if (!payments.length) return '<div class="pr-empty" style="padding:18px 0">No payments yet.</div>';
   return '<div class="pr-list">' + payments.map(p =>
     '<div class="pr-rowitem"><span class="pr-chan-ic" style="background:rgba(255,255,255,0.05);font-family:var(--mono);font-size:10px;font-weight:700;color:var(--muted)">' + esc(String(p.provider).slice(0, 4)) + '</span>' +
-    '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(p.user) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(p.plan) + ' · ' + when(p.createdAt) + '</div></div>' +
+    '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(p.user) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(p.plan) + ', ' + when(p.createdAt) + '</div></div>' +
     '<div style="font-size:14px;font-weight:800;color:var(--green)">' + fmt(p.amountBdt) + '</div></div>'
   ).join('') + '</div>';
 }
@@ -155,17 +155,17 @@ function renderRevenue() {
   '</div>';
 
   h += '<div class="pr-grid pr-2col">' +
-    '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Monthly recurring revenue</div><div class="mono" style="font-size:12px;color:var(--faint)">last 12 months · collected, BDT</div></div><span class="mono" style="font-size:12px;font-weight:700;color:var(--green)">' + fmt(o.totalPaidBdt ?? 0) + ' all-time</span></div>' +
-      '<div id="mrrChart"><div class="pr-empty" style="padding:48px 0">Loading…</div></div></div>' +
+    '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Monthly recurring revenue</div><div class="mono" style="font-size:12px;color:var(--faint)">last 12 months, collected, BDT</div></div><span class="mono" style="font-size:12px;font-weight:700;color:var(--green)">' + fmt(o.totalPaidBdt ?? 0) + ' all-time</span></div>' +
+      '<div id="mrrChart"><div class="pr-empty" style="padding:48px 0">Loading...</div></div></div>' +
     '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px">System health</div><div class="pr-list">' +
-      healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : '—', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#6E7790') +
+      healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : 'n/a', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#6E7790') +
       healthRow('Alerts sent', 'rolling 24 hours', (o.alerts24h ?? 0) + ' / 24h', '#34D399') +
       healthRow('Readings stored', 'all-time data points', (o.readings ?? 0).toLocaleString(), '#8FA8FF') +
       healthRow('Past-due subscriptions', 'active but period ended', String(o.pastDue ?? 0), (o.pastDue ?? 0) > 0 ? '#FF8077' : '#34D399') +
     '</div></div></div>';
 
   h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:8px"><span class="pr-card-title">Recent payments</span><span class="mono muted" style="font-size:12px">latest first</span></div>' +
-    '<div id="payFeed"><div class="pr-empty" style="padding:18px 0">Loading…</div></div></div>';
+    '<div id="payFeed"><div class="pr-empty" style="padding:18px 0">Loading...</div></div></div>';
 
   host.innerHTML = h;
   getJSON('/revenue').then(rev => {
@@ -189,11 +189,11 @@ function renderUsers() {
     statCard('Total users', (o.users ?? 0).toLocaleString(), '', '') +
     statCard('Paid', String(o.activeSubscriptions ?? 0), '', 'gold') +
     statCard('Meters tracked', (o.activeMeters ?? 0).toLocaleString(), '', '') +
-    statCard('Past due', '—', 'not tracked yet', 'red', true) +
+    statCard('Past due', 'n/a', 'not tracked yet', 'red', true) +
   '</div>';
   h += '<div class="pr-card" style="padding:8px 0">' +
-    '<div class="row" style="padding:14px 22px;gap:12px"><input id="q" class="pr-input" type="text" placeholder="Search by email or Telegram chat id…" value="' + esc(query) + '" style="flex:1;min-width:200px"><button id="searchBtn" class="pr-btn" type="button">Search</button></div>' +
-    '<div id="list" style="padding:0 8px"><div class="pr-empty">Loading…</div></div>' +
+    '<div class="row" style="padding:14px 22px;gap:12px"><input id="q" class="pr-input" type="text" placeholder="Search by email or Telegram chat id..." value="' + esc(query) + '" style="flex:1;min-width:200px"><button id="searchBtn" class="pr-btn" type="button">Search</button></div>' +
+    '<div id="list" style="padding:0 8px"><div class="pr-empty">Loading...</div></div>' +
     '<div class="row" style="padding:12px 22px"><button id="prev" class="pr-btn ghost sm" type="button">‹ Prev</button><span id="pageLabel" class="mono muted" style="font-size:12px"></span><button id="next" class="pr-btn ghost sm" type="button">Next ›</button></div>' +
   '</div><div id="detailHost"></div>';
   host.innerHTML = h;
@@ -238,15 +238,15 @@ async function openDetail(id) {
   const det = host.querySelector('#detailHost'); if (!det) return;
   const u = d.user;
   const sub = d.subscription
-    ? esc(d.subscription.plan) + ' · ' + esc(d.subscription.status) + ' · via ' + esc(d.subscription.provider) + (d.subscription.currentPeriodEnd ? ' · until ' + when(d.subscription.currentPeriodEnd) : '')
+    ? esc(d.subscription.plan) + ', ' + esc(d.subscription.status) + ', via ' + esc(d.subscription.provider) + (d.subscription.currentPeriodEnd ? ', until ' + when(d.subscription.currentPeriodEnd) : '')
     : 'none (free)';
 
   det.innerHTML =
     '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:10px">' +
       '<div style="display:flex;align-items:center;gap:10px"><span class="pr-card-title">' + esc(u.email || ('Customer #' + u.id)) + '</span>' + planPill(u.plan) + '</div>' +
       '<button class="pr-btn ghost sm" type="button" id="closeDetail">Close</button></div>' +
-      '<p class="muted" style="font-size:13px">#' + u.id + ' · chat ' + esc(u.telegramChatId ?? '—') + ' · joined ' + when(u.createdAt) + ' · tone ' + esc(u.tonePref) + '</p>' +
-      '<p class="muted" style="font-size:13px;margin-top:4px">Subscription: ' + sub + ' · meter cap ' + esc(d.limits.maxMeters) + ' · SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
+      '<p class="muted" style="font-size:13px">#' + u.id + ', chat ' + esc(u.telegramChatId ?? 'n/a') + ', joined ' + when(u.createdAt) + ', tone ' + esc(u.tonePref) + '</p>' +
+      '<p class="muted" style="font-size:13px;margin-top:4px">Subscription: ' + sub + ', meter cap ' + esc(d.limits.maxMeters) + ', SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
       '<div class="row" style="margin-top:14px;gap:10px">' +
         '<select id="grantPlan" class="pr-input" aria-label="Plan to grant" style="width:auto;min-width:120px"><option value="plus">plus</option><option value="business">business</option></select>' +
         '<input id="grantDays" class="pr-input mono" type="text" value="30" style="width:70px" aria-label="Days" title="days">' +
@@ -262,9 +262,9 @@ async function openDetail(id) {
     card.style.marginTop = '18px';
     card.innerHTML =
       '<div class="pr-section-head" style="margin-bottom:4px"><div style="min-width:0"><span style="font-weight:700;color:var(--text)">' + esc(m.label) + '</span>' +
-        '<div class="mono" style="font-size:11.5px;color:var(--faint);margin-top:2px">acct ' + esc(m.accountNo) + ' · meter ' + esc(m.meterNo) + '</div></div>' +
+        '<div class="mono" style="font-size:11.5px;color:var(--faint);margin-top:2px">acct ' + esc(m.accountNo) + ', meter ' + esc(m.meterNo) + '</div></div>' +
         '<div class="balance ' + balanceClass(m) + '" style="font-size:20px;font-weight:800">' + fmt(m.balance) + '</div></div>' +
-      (m.prediction ? '<div class="mono" style="font-size:11.5px;color:var(--faint)">~' + m.prediction.daysLeft.toFixed(1) + ' days left · ' + fmt(m.prediction.burnPerDay) + '/day</div>' : '') +
+      (m.prediction ? '<div class="mono" style="font-size:11.5px;color:var(--faint)">~' + m.prediction.daysLeft.toFixed(1) + ' days left, ' + fmt(m.prediction.burnPerDay) + '/day</div>' : '') +
       '<div class="pr-chart sm"><canvas></canvas></div>';
     det.appendChild(card);
     CHARTS.push(window.prChart(card.querySelector('canvas'), m.readings, { low: m.lowThreshold, critical: m.criticalThreshold }));
@@ -272,7 +272,7 @@ async function openDetail(id) {
   if (d.pausedMeters.length) {
     const c = document.createElement('div'); c.className = 'pr-card'; c.style.marginTop = '18px';
     c.innerHTML = '<div class="mono" style="font-weight:700;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Paused meters</div>' +
-      d.pausedMeters.map(m => '<div class="muted" style="font-size:13px">' + esc(m.nickname ?? m.meterNo) + ' · acct ' + esc(m.accountNo) + '</div>').join('');
+      d.pausedMeters.map(m => '<div class="muted" style="font-size:13px">' + esc(m.nickname ?? m.meterNo) + ', acct ' + esc(m.accountNo) + '</div>').join('');
     det.appendChild(c);
   }
   if (d.active.alerts.length) {
@@ -328,30 +328,30 @@ function deliveryRow(l) {
 }
 function renderLogs() {
   let h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px" id="logStats">' +
-    statCard('Delivered · 24h', '…', 'across all channels', 'green') +
-    statCard('Failed · 24h', '…', 'send errors', 'red') +
-    statCard('Attempts · 24h', '…', 'total sends', '') +
-    statCard('Success rate', '…', 'last 24 hours', 'gold') +
+    statCard('Delivered, 24h', '...', 'across all channels', 'green') +
+    statCard('Failed, 24h', '...', 'send errors', 'red') +
+    statCard('Attempts, 24h', '...', 'total sends', '') +
+    statCard('Success rate', '...', 'last 24 hours', 'gold') +
   '</div>';
 
-  h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">latest 40 · real</span></div>' +
+  h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">latest 40, real</span></div>' +
     '<div class="pr-tableshell" style="overflow-x:auto"><div style="min-width:760px">' +
     '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;padding:11px 22px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)" class="mono">' +
     ['Time', 'Meter', 'Recipient', 'Channel', 'Type', 'Status'].map(c => '<span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">' + c + '</span>').join('') + '</div>' +
-    '<div id="logRows"><div class="pr-empty" style="padding:24px 0">Loading…</div></div></div></div></div>';
+    '<div id="logRows"><div class="pr-empty" style="padding:24px 0">Loading...</div></div></div></div></div>';
 
   // real admin audit log
-  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head"><span class="pr-card-title">Admin audit log</span><span class="mono muted" style="font-size:12px">operator actions</span></div><div id="auditBody"><div class="pr-empty">Loading…</div></div></div>';
+  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head"><span class="pr-card-title">Admin audit log</span><span class="mono muted" style="font-size:12px">operator actions</span></div><div id="auditBody"><div class="pr-empty">Loading...</div></div></div>';
 
   host.innerHTML = h;
   getJSON('/deliveries').then(d => {
     const total = d.delivered24h + d.failed24h;
-    const rate = total > 0 ? Math.round((d.delivered24h / total) * 1000) / 10 + '%' : '—';
+    const rate = total > 0 ? Math.round((d.delivered24h / total) * 1000) / 10 + '%' : 'n/a';
     const stats = host.querySelector('#logStats');
     if (stats) stats.innerHTML =
-      statCard('Delivered · 24h', d.delivered24h.toLocaleString(), 'across all channels', 'green') +
-      statCard('Failed · 24h', d.failed24h.toLocaleString(), 'send errors', d.failed24h > 0 ? 'red' : '') +
-      statCard('Attempts · 24h', total.toLocaleString(), 'total sends', '') +
+      statCard('Delivered, 24h', d.delivered24h.toLocaleString(), 'across all channels', 'green') +
+      statCard('Failed, 24h', d.failed24h.toLocaleString(), 'send errors', d.failed24h > 0 ? 'red' : '') +
+      statCard('Attempts, 24h', total.toLocaleString(), 'total sends', '') +
       statCard('Success rate', rate, 'last 24 hours', 'gold');
     const rows = host.querySelector('#logRows');
     if (rows) rows.innerHTML = d.rows.length ? d.rows.map(deliveryRow).join('') : '<div class="pr-empty" style="padding:24px 0">No alert deliveries yet.</div>';
@@ -366,7 +366,7 @@ async function loadAudit() {
   try { data = await getJSON('/audit'); } catch (e) { box.innerHTML = '<div class="pr-empty">Could not load audit log.</div>'; return; }
   if (!data.entries.length) { box.innerHTML = '<div class="pr-empty">No operator actions logged yet.</div>'; return; }
   box.innerHTML = '<div class="pr-tableshell" style="overflow-x:auto"><table class="pr-table"><thead><tr><th>When</th><th>Action</th><th>Customer</th><th>Detail</th><th>IP</th></tr></thead><tbody>' +
-    data.entries.map(e => '<tr><td class="mono muted">' + when(e.createdAt) + '</td><td>' + esc(e.action) + '</td><td>' + (e.targetUserId == null ? '—' : '#' + esc(e.targetUserId)) + '</td><td class="muted">' + esc(e.detail ?? '—') + '</td><td class="mono muted">' + esc(e.ip ?? '—') + '</td></tr>').join('') +
+    data.entries.map(e => '<tr><td class="mono muted">' + when(e.createdAt) + '</td><td>' + esc(e.action) + '</td><td>' + (e.targetUserId == null ? 'n/a' : '#' + esc(e.targetUserId)) + '</td><td class="muted">' + esc(e.detail ?? 'n/a') + '</td><td class="mono muted">' + esc(e.ip ?? 'n/a') + '</td></tr>').join('') +
     '</tbody></table></div>';
 }
 
@@ -414,5 +414,5 @@ if (['users', 'logs'].includes(initial)) SCREEN = initial;
 (async () => { await loadOverview(); renderScreen(); })().catch(() => { host.innerHTML = '<div class="pr-card pr-empty">Something broke. Reload the page.</div>'; });
 </script>`;
 
-  return pageDoc('Power Roast — Admin', body);
+  return pageDoc('Power Roast Admin', body);
 }

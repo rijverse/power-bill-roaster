@@ -11,8 +11,8 @@ export function dashboardHtml(token: string): string {
     <div style="display:flex; justify-content:center;">${logo(true)}</div>
     <div class="mono" style="color:var(--faint); font-size:12px; margin-top:12px; letter-spacing:0.04em;">your balance, judged in real time</div>
   </header>
-  <div id="app"><div class="pr-card pr-empty">Loading…</div></div>
-  <footer style="text-align:center; color:var(--faint-2); font-size:12px; padding-top:28px;">not affiliated with DESCO · alerts keep running even if you never open this page</footer>
+  <div id="app"><div class="pr-card pr-empty">Loading...</div></div>
+  <footer style="text-align:center; color:var(--faint-2); font-size:12px; padding-top:28px;">not affiliated with DESCO, alerts keep running even if you never open this page</footer>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
@@ -36,7 +36,7 @@ function statRow(meters) {
   return '<div class="pr-statrow" style="margin-bottom:18px">' +
     '<div class="pr-stat"><div class="k">Total balance</div><div class="n">' + fmt(total) + '</div></div>' +
     '<div class="pr-stat"><div class="k">Meters at risk</div><div class="n ' + (atRisk ? 'red' : 'green') + '">' + atRisk + ' <span class="muted" style="font-size:14px;font-weight:600">of ' + meters.length + '</span></div><div class="d ' + (crit ? 'down' : '') + '">' + crit + ' critical</div></div>' +
-    '<div class="pr-stat"><div class="k">Soonest run-out</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? '—' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div></div>' +
+    '<div class="pr-stat"><div class="k">Soonest run-out</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? 'n/a' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div></div>' +
   '</div>';
 }
 
@@ -52,7 +52,7 @@ function meterCard(m) {
           '<span style="font-size:17px;font-weight:800;color:var(--text);letter-spacing:-0.01em">' + esc(m.label) + '</span>' +
           '<span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span>' +
         '</div>' +
-        (m.prediction ? '<div class="mono" style="font-size:11.5px;color:var(--faint)">~' + m.prediction.daysLeft.toFixed(1) + ' days left · ' + fmt(m.prediction.burnPerDay) + '/day</div>' : '') +
+        (m.prediction ? '<div class="mono" style="font-size:11.5px;color:var(--faint)">~' + m.prediction.daysLeft.toFixed(1) + ' days left, ' + fmt(m.prediction.burnPerDay) + '/day</div>' : '') +
       '</div>' +
       '<div class="balance ' + st.cls + '" style="font-size:26px;font-weight:800;letter-spacing:-0.02em">' + fmt(m.balance) + '</div>' +
     '</div>' +
@@ -93,5 +93,5 @@ async function load() {
 load();
 </script>`;
 
-  return pageDoc('Power Roast — Dashboard', body);
+  return pageDoc('Power Roast Dashboard', body);
 }

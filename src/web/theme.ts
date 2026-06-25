@@ -409,5 +409,5 @@ window.prChart = function (canvas, readings, opts) {
 /** Shared client helpers (escape + ৳ money format) as an inline JS string. */
 export const CLIENT_HELPERS = `
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmt = n => n === null || n === undefined ? '—' : '\\u09F3' + Number(n).toFixed(2);
-const when = s => s ? new Date(s).toLocaleString() : '—';`;
+const fmt = n => n === null || n === undefined ? 'n/a' : '\\u09F3' + Number(n).toFixed(2);
+const when = s => s ? new Date(s).toLocaleString() : 'n/a';`;

@@ -203,28 +203,28 @@ export function homeHtml(): string {
   const hero = `<section class="lp-wrap" id="top">
     <div class="lp-hero">
       <div>
-        <span class="lp-eyebrow">DESCO prepaid · brutally honest alerts</span>
+        <span class="lp-eyebrow">DESCO prepaid, brutally honest alerts</span>
         <h1 class="lp-h1">Recharge now, or get <span class="hl">roasted</span> in the dark.</h1>
-        <p class="lp-lead">Your prepaid balance is one bad day from zero — and after how you've treated that meter, can you blame it for wanting out? Power·Roast emails you before the lights do.</p>
+        <p class="lp-lead">Your prepaid balance is one bad day from zero. And after how you've treated that meter, can you blame it for wanting out? Power·Roast emails you before the lights do.</p>
         <div class="lp-ctarow">
           <a class="pr-btn gold" href="/app">${I.msg} Message the bot</a>
           <a class="pr-btn ghost" href="${GITHUB}" target="_blank" rel="noopener">${I.git} Self-host free</a>
         </div>
         <div class="lp-checks">
-          ${check('Free forever, self-hosted')}${check('Open source · MIT')}${check('No app to install')}
+          ${check('Free forever, self-hosted')}${check('Open source, MIT')}${check('No app to install')}
         </div>
       </div>
       <div class="lp-preview">
         <div class="lp-pvhead">${logo()}<span class="pr-pill crit siren" style="margin-left:auto"><span class="dot"></span>CRITICAL</span></div>
         <div class="lp-pvmeter">
-          <div><div class="lp-pvbal">৳42.50</div><div class="mono" style="font-size:12px;color:var(--faint)">Meter #0227 · ~3 days left</div></div>
+          <div><div class="lp-pvbal">৳42.50</div><div class="mono" style="font-size:12px;color:var(--faint)">Meter #0227, ~3 days left</div></div>
           <a class="pr-btn gold sm" href="/app" style="margin-left:auto">Recharge →</a>
         </div>
-        <div class="lp-pvmsg">Bro. ৳42.50? That's not a balance, that's a cry for help. Your meter is one warm fridge away from cutting you off mid-Netflix. Recharge now — or start practicing your shadow puppets.</div>
+        <div class="lp-pvmsg">Bro. ৳42.50? That's not a balance, that's a cry for help. Your meter is one warm fridge away from cutting you off mid-Netflix. Recharge now, or start practicing your shadow puppets.</div>
       </div>
     </div>
     <div class="lp-strip">
-      <span>Checks every 6 hours</span><span>Email · Telegram · SMS</span><span>Run-out predictions</span><span>Multi-meter</span><span>Zero servers to self-host</span>
+      <span>Checks every 6 hours</span><span>Email, Telegram, SMS</span><span>Run-out predictions</span><span>Multi-meter</span><span>Zero servers to self-host</span>
     </div>
   </section>`;
 
@@ -235,13 +235,13 @@ export function homeHtml(): string {
     </div>
     <div class="lp-2col">
       <div class="lp-roast warn">
-        <span class="tag">⚠ Warning shot · below ৳150</span>
+        <span class="tag">⚠ Warning shot, below ৳150</span>
         <div class="q">"Your Electricity About to Ghost You."</div>
         <div class="a">Translation: recharge before you're explaining to your family why the fridge is suddenly "a cabinet."</div>
         <div class="thr">below ৳150</div>
       </div>
       <div class="lp-roast crit">
-        <span class="tag">💀 DEFCON 1 · below ৳100</span>
+        <span class="tag">💀 DEFCON 1, below ৳100</span>
         <div class="q">"You're About to Live in the Stone Age."</div>
         <div class="a">Light a candle. Sharpen a stick. This is DEFCON 1 and your meter is not bluffing.</div>
         <div class="thr">below ৳100</div>
@@ -252,19 +252,19 @@ export function homeHtml(): string {
   const inbox = `<section class="lp-section"><div class="lp-wrap"><div class="lp-split">
     <div>
       <h2 class="lp-h2">It hits your inbox like a disappointed parent.</h2>
-      <p class="lp-lead" style="margin-top:14px">Every check runs the same pipeline: verify config, fetch your live DESCO balance, validate the response, compare against your thresholds — then, if you're too low, blast an email that pulls no punches.</p>
+      <p class="lp-lead" style="margin-top:14px">Every check runs the same pipeline: verify config, fetch your live DESCO balance, validate the response, compare against your thresholds, then if you're too low, blast an email that pulls no punches.</p>
       <div class="lp-bullets">
-        ${bullet("Live balance, straight from DESCO's prepaid API — not a guess.")}
-        ${bullet('Configurable thresholds — defaults ৳150 / ৳100, tune them to taste.')}
-        ${bullet('Tone it down if you must — the templates live in <code>src/templates/</code>.')}
+        ${bullet("Live balance, straight from DESCO's prepaid API. Not a guess.")}
+        ${bullet('Configurable thresholds. Defaults ৳150 / ৳100, tune them to taste.')}
+        ${bullet('Tone it down if you must. The templates live in <code>src/templates/</code>.')}
       </div>
     </div>
     <div class="lp-mail">
-      <div class="lp-mailbar"><span>inbox — 1 unread</span><span>07:42</span></div>
+      <div class="lp-mailbar"><span>inbox (1 unread)</span><span>07:42</span></div>
       <div class="lp-mailbody">
         <div class="lp-mailsub">⚡ Your Electricity About to Ghost You</div>
         <div class="lp-mailmeta">roast@power-roast.app</div>
-        <div class="lp-pvmsg">Bro. ৳42.50? That's not a balance, that's a cry for help. Your meter is one warm fridge away from cutting you off mid-Netflix. Recharge now — or start practicing your shadow puppets.</div>
+        <div class="lp-pvmsg">Bro. ৳42.50? That's not a balance, that's a cry for help. Your meter is one warm fridge away from cutting you off mid-Netflix. Recharge now, or start practicing your shadow puppets.</div>
         <div class="lp-mailfig">
           <div><div class="k">balance</div><div class="v crit">৳42.50</div></div>
           <div><div class="k">threshold</div><div class="v">৳100</div></div>
@@ -287,9 +287,9 @@ export function homeHtml(): string {
       <h2 class="lp-h2">See the decline before it ghosts you.</h2>
       <p class="lp-lead" style="margin-top:14px">The Telegram-hosted version adds a web dashboard: balance history, run-out predictions, and every meter you own in one place.</p>
       <div class="lp-bullets">
-        ${bullet('<b style="color:var(--text)">Your meters</b> — 3 active, each with its own live balance and trend.')}
-        ${bullet('<b style="color:var(--text)">Run-out prediction</b> — at your current burn rate, Home · Mirpur goes dark in ~3 days. The bot already messaged you. Twice.')}
-        ${bullet('<b style="color:var(--text)">14-day history</b> — watch the slide so a flat week never surprises you.')}
+        ${bullet('<b style="color:var(--text)">Your meters</b>: 3 active, each with its own live balance and trend.')}
+        ${bullet('<b style="color:var(--text)">Run-out prediction</b>: at your current burn rate, your Mirpur meter goes dark in ~3 days. The bot already messaged you. Twice.')}
+        ${bullet('<b style="color:var(--text)">14-day history</b>: watch the slide so a flat week never surprises you.')}
       </div>
     </div>
   </div></div></section>`;
@@ -297,22 +297,22 @@ export function homeHtml(): string {
   const features = `<section class="lp-section"><div class="lp-wrap">
     <div class="lp-head lp-center"><h2 class="lp-h2">Small tool. Big mouth.</h2></div>
     <div class="lp-grid3">
-      ${feature(I.clock, 'Checks every 6 hours', "An automated schedule pings DESCO around the clock — or force a run any time you're feeling anxious.")}
-      ${feature(I.msg, 'Email · Telegram · SMS', 'Self-host fires emails. The hosted bot adds Telegram pings and SMS alerts on paid plans — same roast, more channels.')}
+      ${feature(I.clock, 'Checks every 6 hours', "An automated schedule pings DESCO around the clock, or force a run any time you're feeling anxious.")}
+      ${feature(I.msg, 'Email, Telegram, SMS', 'Self-host fires emails. The hosted bot adds Telegram pings and SMS alerts on paid plans. Same roast, more channels.')}
       ${feature(I.trend, 'Run-out predictions', '"~3 days left at this rate." It watches your burn rate and tells you when the lights actually go out.')}
-      ${feature(I.layers, 'Multi-meter support', "Home, office, your parents' place — track every DESCO meter from one dashboard and one bot.")}
+      ${feature(I.layers, 'Multi-meter support', "Home, office, your parents' place. Track every DESCO meter from one dashboard and one bot.")}
       ${feature(I.git, 'Free forever, self-hosted', 'Fork the repo, drop secrets into GitHub Actions, done. Zero servers, zero cost, MIT-licensed.')}
-      ${feature(I.sliders, 'Configurable everything', "Thresholds, SMTP provider, roast intensity — all env vars. Soften the templates if you can't take the heat.")}
+      ${feature(I.sliders, 'Configurable everything', "Thresholds, SMTP provider, roast intensity, all env vars. Soften the templates if you can't take the heat.")}
     </div>
   </div></section>`;
 
   const paths = `<section class="lp-section" id="selfhost"><div class="lp-wrap"><div class="lp-2col">
     <div class="lp-path">
       <h3>Self-hosted</h3>
-      <p>Fork the repo, paste your details into GitHub Secrets, and the workflow runs on a schedule. No servers, no cost — just email roasts.</p>
+      <p>Fork the repo, paste your details into GitHub Secrets, and the workflow runs on a schedule. No servers, no cost, just email roasts.</p>
       <div class="lp-bullets" style="margin-top:0">
         ${bullet('Runs on GitHub Actions every 6h')}
-        ${bullet('Any SMTP provider (Gmail, Outlook…)')}
+        ${bullet('Any SMTP provider (Gmail, Outlook, etc.)')}
         ${bullet('Your data never leaves your repo')}
       </div>
     </div>
@@ -330,7 +330,7 @@ export function homeHtml(): string {
   const pricing = `<section class="lp-section" id="pricing"><div class="lp-wrap">
     <div class="lp-head lp-center">
       <h2 class="lp-h2">Cheaper than living in the dark.</h2>
-      <p class="lp-sub">Self-host for free, forever. Or let the bot do the work — pay in BDT via bKash or SSLCommerz.</p>
+      <p class="lp-sub">Self-host for free, forever. Or let the bot do the work and pay in BDT via bKash or SSLCommerz.</p>
     </div>
     <div class="lp-prices">
       <div class="lp-price">
@@ -355,13 +355,13 @@ export function homeHtml(): string {
         <a class="pr-btn ghost block" href="/app">Choose Power User</a>
       </div>
     </div>
-    <p class="lp-pricenote">60-day money-back guarantee · cancel anytime · no per-meter gouging</p>
+    <p class="lp-pricenote">60-day money-back guarantee. Cancel anytime. No per-meter gouging.</p>
   </div></section>`;
 
   const setup = `<section class="lp-section"><div class="lp-wrap"><div class="lp-split">
     <div>
       <h2 class="lp-h2">Three secrets and a cron. That's the whole setup.</h2>
-      <p class="lp-lead" style="margin-top:14px">Built in TypeScript, run with Bun, scheduled by GitHub Actions. Drop your DESCO + SMTP details into repo secrets and forget it exists — until it roasts you.</p>
+      <p class="lp-lead" style="margin-top:14px">Built in TypeScript, run with Bun, scheduled by GitHub Actions. Drop your DESCO + SMTP details into repo secrets and forget it exists, until it roasts you.</p>
       <div class="lp-stack-chips">
         <span class="lp-chiptag">TypeScript</span><span class="lp-chiptag">nodemailer</span><span class="lp-chiptag">Drizzle</span><span class="lp-chiptag">Docker</span>
       </div>
@@ -374,10 +374,10 @@ export function homeHtml(): string {
 <span class="k">SMTP_USER</span>=<span class="v">you@gmail.com</span>
 <span class="k">SMTP_PASS</span>=<span class="v">••••••••••••</span>
 
-<span class="c"># optional — tune the roast</span>
+<span class="c"># optional, tune the roast</span>
 <span class="k">LOW_THRESHOLD</span>=<span class="v">150</span>
 <span class="k">CRITICAL_THRESHOLD</span>=<span class="v">100</span>
-<span class="c"># …or run every 6h via Actions</span></div>
+<span class="c"># or run every 6h via Actions</span></div>
   </div></div></section>`;
 
   const finalCta = `<section class="lp-section"><div class="lp-wrap"><div class="lp-final">
@@ -391,7 +391,7 @@ export function homeHtml(): string {
 
   const footer = `<footer class="lp-footer lp-wrap">
     ${logo()}
-    <span class="lp-disclaimer">Independent project · not affiliated with DESCO.</span>
+    <span class="lp-disclaimer">Independent project, not affiliated with DESCO.</span>
     <div class="links">
       <a href="#how">How it works</a>
       <a href="#pricing">Pricing</a>
@@ -401,5 +401,5 @@ export function homeHtml(): string {
   </footer>`;
 
   const body = `<style>${STYLE}</style>${nav}<main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${pricing}${setup}${finalCta}</main>${footer}`;
-  return pageDoc('Power·Roast — DESCO prepaid balance alerts that roast you', body);
+  return pageDoc('Power·Roast: DESCO prepaid balance alerts that roast you', body);
 }

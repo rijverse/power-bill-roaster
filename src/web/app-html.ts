@@ -11,7 +11,7 @@ import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 const LOGIN_STATUS: Record<string, { cls: string; msg: string }> = {
   sent: {
     cls: 'pr-good',
-    msg: '✅ Check your inbox — we emailed you a sign-in link (good for 20 minutes).',
+    msg: '✅ Check your inbox, we emailed you a sign-in link (good for 20 minutes).',
   },
   bademail: { cls: 'pr-err', msg: "That doesn't look like an email address." },
   ratelimited: { cls: 'pr-err', msg: 'Too many requests. Wait a few minutes and try again.' },
@@ -29,7 +29,7 @@ export function loginHtml(mailEnabled: boolean, status: string | null): string {
         ${notice}
         <label class="pr-label" for="email">Email</label>
         <input class="pr-input" id="email" type="email" name="email" placeholder="you@example.com" required style="margin-bottom:18px">
-        <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember — we email you a one-tap link.</p>
+        <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember, we email you a one-tap link.</p>
         <button class="pr-btn gold block" type="submit">Send sign-in link &amp; brace yourself</button>
       </form>`
     : `<div class="pr-err" style="background:rgba(255,82,71,0.08); border:1px solid rgba(255,82,71,0.28); border-radius:11px; padding:14px 16px; min-height:0">Email sign-in is not configured on this server yet. Use the Telegram bot instead.</div>`;
@@ -89,7 +89,7 @@ export function loginHtml(mailEnabled: boolean, status: string | null): string {
 
     <div data-pane="email" style="display:none">${emailPane}</div>
 
-    <div style="margin-top:22px; padding-top:18px; border-top:1px solid var(--border-soft); text-align:center; font-size:13px; color:var(--faint);">Not affiliated with DESCO · alerts keep running even when this page is closed.</div>
+    <div style="margin-top:22px; padding-top:18px; border-top:1px solid var(--border-soft); text-align:center; font-size:13px; color:var(--faint);">Not affiliated with DESCO, alerts keep running even when this page is closed.</div>
   </div>
 </div>
 <script>
@@ -138,8 +138,8 @@ export function appShellHtml(
     <div class="pr-side-foot">
       <a class="pr-navbtn" href="/admin" style="border:1px solid var(--border);background:rgba(255,255,255,0.03);font-size:13px;gap:11px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6z"></path></svg>Switch to admin</a>
       <div class="pr-user">
-        <span class="pr-avatar" id="navAvatar">·</span>
-        <div class="who"><div class="n" id="navName">…</div><div class="m" id="navPlan"></div></div>
+        <span class="pr-avatar" id="navAvatar"></span>
+        <div class="who"><div class="n" id="navName">...</div><div class="m" id="navPlan"></div></div>
         <form method="POST" action="/app/logout" style="margin:0"><button class="pr-iconbtn" type="submit" title="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></form>
       </div>
     </div>
@@ -148,11 +148,11 @@ export function appShellHtml(
   <div class="pr-main">
     <header class="pr-topbar">
       <button id="pr-hamburger" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
-      <div class="titles"><div class="t" id="topTitle">Dashboard</div><div class="s" id="topSub">loading…</div></div>
+      <div class="titles"><div class="t" id="topTitle">Dashboard</div><div class="s" id="topSub">loading...</div></div>
       <div class="pr-mselwrap" id="mselWrap" style="display:none"></div>
       <button class="pr-btn gold" id="refreshBtn" type="button" title="Re-fetch the latest balances"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B1020" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span id="refreshLabel">Force check</span></button>
     </header>
-    <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading…</div></div></main>
+    <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading...</div></div></main>
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -193,9 +193,9 @@ function statusOf(m) {
   return { label: 'HEALTHY', key: 'ok', pill: 'pr-pill ok', color: '#34D399' };
 }
 function days(m) { return m && m.prediction ? m.prediction.daysLeft : null; }
-function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '...' : s; }
 function rel(t) {
-  if (!t) return '—';
+  if (!t) return 'n/a';
   const d = Date.now() - new Date(t).getTime();
   if (d < 60000) return 'just now';
   if (d < 3600000) return Math.floor(d / 60000) + 'm ago';
@@ -279,7 +279,7 @@ function renderChrome() {
   const name = DATA.email || 'You';
   document.getElementById('navName').textContent = name;
   document.getElementById('navAvatar').textContent = name.charAt(0).toUpperCase();
-  document.getElementById('navPlan').textContent = DATA.plan + ' · ' + DATA.meters.length + ' meter' + (DATA.meters.length === 1 ? '' : 's');
+  document.getElementById('navPlan').textContent = DATA.plan + ', ' + DATA.meters.length + ' meter' + (DATA.meters.length === 1 ? '' : 's');
 
   document.querySelectorAll('.pr-navbtn[data-screen]').forEach(b => b.classList.toggle('active', b.getAttribute('data-screen') === SCREEN));
 
@@ -296,13 +296,13 @@ function renderChrome() {
   // topbar title/sub
   let title = TITLES[SCREEN][0], sub = TITLES[SCREEN][1];
   if (SCREEN === 'dashboard') {
-    sub = DATA.meters.length ? (DATA.meters.length + ' meter' + (DATA.meters.length === 1 ? '' : 's') + ' watched · checked ' + rel(lastCheck())) : 'no meters yet — add one to begin';
+    sub = DATA.meters.length ? (DATA.meters.length + ' meter' + (DATA.meters.length === 1 ? '' : 's') + ' watched, checked ' + rel(lastCheck())) : 'no meters yet, add one to begin';
   } else if (SCREEN === 'meter') {
     const m = DATA.meters[SEL];
     title = m ? m.label : 'Meters';
-    sub = m ? ('meter ' + m.meterNo + ' · checked ' + rel(m.readings.length ? m.readings[m.readings.length - 1].t : null)) : 'no meters yet';
+    sub = m ? ('meter ' + m.meterNo + ', checked ' + rel(m.readings.length ? m.readings[m.readings.length - 1].t : null)) : 'no meters yet';
   } else if (SCREEN === 'billing') {
-    sub = DATA.plan + ' plan · free-only launch';
+    sub = DATA.plan + ' plan, free-only launch';
   }
   document.getElementById('topTitle').textContent = title;
   document.getElementById('topSub').textContent = sub;
@@ -316,7 +316,7 @@ function dashBanner() {
   if (crit.length) {
     const m = crit[0];
     return '<div class="pr-banner" style="margin-bottom:22px"><span class="ic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FF5247" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg></span>' +
-      '<div class="bd"><div class="h">' + esc(m.label) + ' is one warm fridge from darkness</div><div class="p">' + fmt(m.balance) + ' left' + (crit.length + low.length > 1 ? ' · ' + (crit.length + low.length) + ' meters need attention' : '') + '. Recharge before the lights file a complaint.</div></div>' +
+      '<div class="bd"><div class="h">' + esc(m.label) + ' is one warm fridge from darkness</div><div class="p">' + fmt(m.balance) + ' left' + (crit.length + low.length > 1 ? ', ' + (crit.length + low.length) + ' meters need attention' : '') + '. Recharge before the lights file a complaint.</div></div>' +
       '<button class="pr-btn red" type="button" data-go="billing" style="flex:none">Recharge now →</button></div>';
   }
   if (low.length) {
@@ -346,16 +346,16 @@ function renderDashboard() {
 
   let h = dashBanner();
   h += '<div class="pr-statrow" style="margin-bottom:18px">' +
-    '<div class="pr-stat"><div class="k">Total balance · ' + ms.length + ' meter' + (ms.length === 1 ? '' : 's') + '</div><div class="n">' + fmt(total) + '</div></div>' +
-    '<div class="pr-stat"><div class="k">Meters at risk</div><div style="display:flex;align-items:baseline;gap:8px"><span class="n ' + (atRisk.length ? 'red' : 'green') + '">' + atRisk.length + '</span><span class="muted" style="font-size:14px">of ' + ms.length + '</span></div><div class="d ' + (crit.length ? 'down' : 'warn') + '">' + crit.length + ' critical · ' + (atRisk.length - crit.length) + ' low</div></div>' +
-    '<div class="pr-stat"><div class="k">Next blackout</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? '—' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div><div class="d">' + (soonM ? esc(clip(soonM.label, 22)) + ' leads the race' : 'all steady') + '</div></div>' +
+    '<div class="pr-stat"><div class="k">Total balance, ' + ms.length + ' meter' + (ms.length === 1 ? '' : 's') + '</div><div class="n">' + fmt(total) + '</div></div>' +
+    '<div class="pr-stat"><div class="k">Meters at risk</div><div style="display:flex;align-items:baseline;gap:8px"><span class="n ' + (atRisk.length ? 'red' : 'green') + '">' + atRisk.length + '</span><span class="muted" style="font-size:14px">of ' + ms.length + '</span></div><div class="d ' + (crit.length ? 'down' : 'warn') + '">' + crit.length + ' critical, ' + (atRisk.length - crit.length) + ' low</div></div>' +
+    '<div class="pr-stat"><div class="k">Next blackout</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? 'n/a' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div><div class="d">' + (soonM ? esc(clip(soonM.label, 22)) + ' leads the race' : 'all steady') + '</div></div>' +
   '</div>';
 
   // chart + meters/prediction
   h += '<div class="pr-grid pr-2col">' +
     '<div class="pr-card">' +
       '<div class="pr-section-head" style="align-items:flex-start;margin-bottom:0"><div>' +
-        '<div class="mono" style="font-size:13px;color:var(--faint);margin-bottom:5px">' + esc(sel.label) + ' · last 30 days</div>' +
+        '<div class="mono" style="font-size:13px;color:var(--faint);margin-bottom:5px">' + esc(sel.label) + ', last 30 days</div>' +
         '<div style="display:flex;align-items:baseline;gap:10px"><span style="font-size:30px;font-weight:800;color:var(--text);letter-spacing:-0.03em">' + fmt(sel.balance) + '</span>' + (pc !== null ? '<span class="mono" style="font-size:12px;font-weight:700;color:' + (pc < 0 ? '#FF8077' : '#34D399') + '">' + (pc < 0 ? '▼ ' : '▲ ') + Math.abs(pc) + '%</span>' : '') + '</div>' +
       '</div><span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span></div>' +
       '<div class="pr-chart lg"><canvas data-mi="' + SEL + '"></canvas></div>' +
@@ -366,7 +366,7 @@ function renderDashboard() {
           const s = statusOf(m), d = days(m);
           return '<div class="pr-rowitem" style="cursor:pointer" data-i="' + i + '"><span class="pr-dot" style="background:' + s.color + '"></span>' +
             '<div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text)">' + esc(m.label) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(m.meterNo) + '</div></div>' +
-            '<div style="text-align:right"><div style="font-size:14px;font-weight:800;color:' + s.color + '">' + fmt(m.balance) + '</div><div class="mono" style="font-size:10px;color:var(--faint)">' + (d === null ? '—' : '~' + d.toFixed(d < 10 ? 1 : 0) + 'd') + '</div></div></div>';
+            '<div style="text-align:right"><div style="font-size:14px;font-weight:800;color:' + s.color + '">' + fmt(m.balance) + '</div><div class="mono" style="font-size:10px;color:var(--faint)">' + (d === null ? 'n/a' : '~' + d.toFixed(d < 10 ? 1 : 0) + 'd') + '</div></div></div>';
         }).join('') +
       '</div></div>';
   if (soonM && soon !== null) {
@@ -390,27 +390,27 @@ function renderMeter() {
     return;
   }
   const m = DATA.meters[SEL], st = statusOf(m), d = days(m), lr = lastRecharge(m), als = meterAlerts(m);
-  const proj = (m.prediction && m.balance !== null) ? shortDate(Date.now() + m.prediction.daysLeft * 86400000) : '—';
+  const proj = (m.prediction && m.balance !== null) ? shortDate(Date.now() + m.prediction.daysLeft * 86400000) : 'n/a';
 
   let h = '<div style="display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid ' + (st.key === 'crit' ? 'rgba(255,82,71,0.28)' : 'var(--border)') + ';border-radius:16px;padding:22px;margin-bottom:18px">' +
     gauge(m, 96) +
     '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap"><span style="font-size:20px;font-weight:800;color:var(--text);letter-spacing:-0.02em">' + esc(m.label) + '</span><span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span></div>' +
-      '<div class="mono" style="font-size:12.5px;color:var(--faint)">Account ' + esc(m.accountNo) + ' · Meter ' + esc(m.meterNo) + ' · DESCO prepaid</div>' +
+      '<div class="mono" style="font-size:12.5px;color:var(--faint)">Account ' + esc(m.accountNo) + ', Meter ' + esc(m.meterNo) + ', DESCO prepaid</div>' +
       '<div style="font-size:14px;color:var(--text-2);margin-top:8px">' + (d === null ? 'Not enough history to predict a run-out yet.' : 'Goes dark in <b style="color:' + st.color + '">~' + d.toFixed(d < 10 ? 1 : 0) + ' days</b>. It deserves better and so do you.') + '</div></div>' +
     '<button class="pr-btn gold" type="button" data-go="billing" style="flex:none">Recharge →</button></div>';
 
   h += '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
-    statCard('Daily burn', m.prediction ? fmt(m.prediction.burnPerDay) : '—', m.prediction ? 'per day' : 'need more data', '') +
-    statCard('Projected zero', proj, d === null ? '—' : '~' + d.toFixed(d < 10 ? 1 : 0) + ' days from now', 'gold') +
-    statCard('Last recharge', lr ? fmt(lr.amount) : '—', lr ? rel(lr.t) : 'none detected', '') +
+    statCard('Daily burn', m.prediction ? fmt(m.prediction.burnPerDay) : 'n/a', m.prediction ? 'per day' : 'need more data', '') +
+    statCard('Projected zero', proj, d === null ? 'n/a' : '~' + d.toFixed(d < 10 ? 1 : 0) + ' days from now', 'gold') +
+    statCard('Last recharge', lr ? fmt(lr.amount) : 'n/a', lr ? rel(lr.t) : 'none detected', '') +
     statCard('Alerts sent', String(als.length), als.length ? 'in the last 30 days' : 'all quiet', als.length ? 'red' : '') +
   '</div>';
 
   h += '<div class="pr-grid pr-2col">' +
-    '<div class="pr-card"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">Balance history</div><div class="mono" style="font-size:12px;color:var(--faint);margin-bottom:6px">Last 30 days · ৳ remaining</div><div class="pr-chart lg"><canvas data-mi="' + SEL + '"></canvas></div></div>' +
+    '<div class="pr-card"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px">Balance history</div><div class="mono" style="font-size:12px;color:var(--faint);margin-bottom:6px">Last 30 days, ৳ remaining</div><div class="pr-chart lg"><canvas data-mi="' + SEL + '"></canvas></div></div>' +
     '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">Recent alerts</div>' +
       (als.length ? '<div class="pr-list">' + als.slice(0, 6).map(a =>
-        '<div class="pr-rowitem" style="align-items:flex-start"><span class="pr-dot" style="margin-top:5px;background:' + levelColor(a.level) + '"></span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(a.action) + '</div><div class="mono" style="font-size:11px;color:var(--faint);margin-top:2px">' + esc(a.level) + ' · ' + rel(a.sentAt) + '</div></div></div>'
+        '<div class="pr-rowitem" style="align-items:flex-start"><span class="pr-dot" style="margin-top:5px;background:' + levelColor(a.level) + '"></span><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(a.action) + '</div><div class="mono" style="font-size:11px;color:var(--faint);margin-top:2px">' + esc(a.level) + ', ' + rel(a.sentAt) + '</div></div></div>'
       ).join('') + '</div>' : '<div class="pr-empty" style="padding:20px 0">No alerts for this meter yet.</div>') +
     '</div></div>';
 
@@ -443,14 +443,14 @@ function statCard(k, n, d, cls) {
 // ---- screen: alerts & thresholds ----------------------------------------
 const ROASTS = {
   savage: { accent: '#FF5247', subject: '⚡ Your electricity is about to ghost you', body: 'Bro. {bal} is your line in the sand and you sprinted past it. Recharge now, or start rationing fridge openings like it\\'s a survival show.' },
-  mild: { accent: '#34D399', subject: 'Heads-up: your balance is getting low', body: 'Friendly nudge — your meter is at {bal}. Might be a good time to top up before it runs out.' },
+  mild: { accent: '#34D399', subject: 'Heads-up: your balance is getting low', body: 'Friendly nudge, your meter is at {bal}. Might be a good time to top up before it runs out.' },
 };
 function hourLabel(h) { const ap = h < 12 ? 'am' : 'pm'; const hr = h % 12 === 0 ? 12 : h % 12; return hr + ap; }
 function hourOpts(sel) { let o = ''; for (let h = 0; h < 24; h++) o += '<option value="' + h + '"' + (h === sel ? ' selected' : '') + '>' + hourLabel(h) + '</option>'; return o; }
 
 function renderAlerts() {
   if (!DATA.meters.length) {
-    host.innerHTML = '<div class="pr-card pr-empty">Add a meter first — thresholds are set per meter.</div>';
+    host.innerHTML = '<div class="pr-card pr-empty">Add a meter first, thresholds are set per meter.</div>';
     return;
   }
   const m = DATA.meters[SEL];
@@ -483,7 +483,7 @@ function renderAlerts() {
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:14px">Roast intensity</div>' +
     '<div class="pr-seg" style="margin-bottom:18px"><button type="button" class="' + (ROAST === 'savage' ? 'on' : '') + '" data-roast="savage">🔥 Savage</button><button type="button" class="' + (ROAST === 'mild' ? 'on' : '') + '" data-roast="mild">😌 Mild</button></div>' +
-    '<div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Preview · critical email</div>' +
+    '<div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Preview, critical email</div>' +
     '<div id="roastPrev" style="border-left:3px solid ' + ROASTS[ROAST].accent + ';padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:0 10px 10px 0"></div></div>';
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:16px">Schedule</div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--border-soft)"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Check frequency</div><div class="mono" style="font-size:11.5px;color:var(--faint)">balance polled automatically</div></div><span class="mono" style="font-size:13px;font-weight:700;color:var(--gold)">automatic</span></div>' +
@@ -547,7 +547,7 @@ function smsIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fil
 const PROVIDER_LABEL = { bkash: 'bKash', sslcommerz: 'SSLCommerz', sandbox: 'Sandbox', manual: 'Manual', card: 'Card' };
 
 function renderBilling() {
-  host.innerHTML = '<div class="pr-card pr-empty">Loading…</div>';
+  host.innerHTML = '<div class="pr-card pr-empty">Loading...</div>';
   api('/billing').then(r => r.ok ? r.json() : Promise.reject()).then(paintBilling)
     .catch(() => { host.innerHTML = '<div class="pr-card pr-empty">Could not load billing.</div>'; });
 }
@@ -561,13 +561,13 @@ function paintBilling(b) {
   const upgrades = b.catalog.filter(p => p.id !== 'free' && p.priceBdt > (cur.priceBdt || 0));
   const m = DATA.meters[SEL];
 
-  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on DESCO\\'s prepaid portal — Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Self-serve plan upgrades are switched off on this server.') + '</div></div>';
+  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on DESCO\\'s prepaid portal, Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Self-serve plan upgrades are switched off on this server.') + '</div></div>';
 
   h += '<div class="pr-grid pr-2col-even">';
   // left: recharge deep-link + history
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title">Recharge a meter</div><div class="pr-card-sub" style="margin-bottom:16px">' +
-    (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official DESCO portal — your meter and account are below.</div>' +
+    (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official DESCO portal, your meter and account are below.</div>' +
     (m ? '<div class="pr-list" style="margin-bottom:16px"><div class="pr-rowitem"><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Account</div><div style="font-weight:600;color:var(--text)">' + esc(m.accountNo) + '</div></div><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Meter</div><div style="font-weight:600;color:var(--text)">' + esc(m.meterNo) + '</div></div></div></div>' : '') +
     '<a class="pr-btn gold block" href="' + RECHARGE_URL + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open DESCO recharge →</a></div>';
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div>' +
@@ -583,15 +583,15 @@ function paintBilling(b) {
   // right: current plan + manage/upgrade
   h += '<div class="pr-stack">';
   h += '<div class="pr-plan"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><span class="mono" style="font-size:11px;font-weight:700;color:var(--gold);letter-spacing:0.04em">CURRENT PLAN</span>' +
-    (b.subscription ? '<span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>' + esc(b.subscription.status) + (b.subscription.currentPeriodEnd ? ' · renews ' + when(b.subscription.currentPeriodEnd).split(',')[0] : '') + '</span>' : '<span class="mono muted" style="font-size:11px">free plan</span>') + '</div>' +
+    (b.subscription ? '<span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>' + esc(b.subscription.status) + (b.subscription.currentPeriodEnd ? ', renews ' + when(b.subscription.currentPeriodEnd).split(',')[0] : '') + '</span>' : '<span class="mono muted" style="font-size:11px">free plan</span>') + '</div>' +
     '<div style="font-size:26px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin-bottom:4px">' + esc(cur.name) + '</div>' +
-    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">৳' + cur.priceBdt + '</span><span style="font-size:13px;color:var(--faint)">/ month' + (cur.priceBdt === 0 ? ' · free forever' : '') + '</span></div>' +
+    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">৳' + cur.priceBdt + '</span><span style="font-size:13px;color:var(--faint)">/ month' + (cur.priceBdt === 0 ? ', free forever' : '') + '</span></div>' +
     '<div style="display:flex;flex-direction:column;gap:9px">' + planFeatures(cur) + '</div></div>';
 
   h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">' + (upgrades.length ? 'Upgrade' : 'Manage plan') + '</div>';
   if (upgrades.length) {
     h += '<p class="muted" style="font-size:13px;line-height:1.5;margin-bottom:14px">More meters and SMS alerts when you need them.</p><div style="display:flex;flex-direction:column;gap:9px">' +
-      upgrades.map(p => '<button class="pr-btn ' + (b.live ? 'gold' : 'ghost') + '" type="button" data-plan="' + p.id + '"' + (b.live ? '' : ' disabled') + '>Upgrade to ' + esc(p.name) + ' · ৳' + p.priceBdt + '/mo' + (b.live ? '' : ' (soon)') + '</button>').join('') + '</div>';
+      upgrades.map(p => '<button class="pr-btn ' + (b.live ? 'gold' : 'ghost') + '" type="button" data-plan="' + p.id + '"' + (b.live ? '' : ' disabled') + '>Upgrade to ' + esc(p.name) + ', ৳' + p.priceBdt + '/mo' + (b.live ? '' : ' (soon)') + '</button>').join('') + '</div>';
     if (!b.live) h += '<p class="mono" style="font-size:11px;color:var(--faint);margin-top:10px">Upgrades are disabled on this server. Ask in the bot: /upgrade.</p>';
   } else {
     h += '<p class="muted" style="font-size:13px;line-height:1.5">You\\'re on the top plan. Nothing left to sell you.</p>';
@@ -656,7 +656,7 @@ const refreshBtn = document.getElementById('refreshBtn');
 refreshBtn.onclick = async () => {
   const icon = document.getElementById('refreshIcon');
   icon.classList.add('pr-spin');
-  document.getElementById('refreshLabel').textContent = 'Checking…';
+  document.getElementById('refreshLabel').textContent = 'Checking...';
   try { await load(); } finally { icon.classList.remove('pr-spin'); document.getElementById('refreshLabel').textContent = 'Force check'; }
 };
 

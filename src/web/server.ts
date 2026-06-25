@@ -10,6 +10,7 @@ import { pageDoc, logo } from './theme';
 import { dashboardData } from './queries';
 import { handleAdminRequest } from './admin';
 import { handleAppRequest } from './app';
+import { homeHtml } from './home-html';
 import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 
@@ -276,6 +277,15 @@ export function createWebServer(
 
       if (url.pathname === '/pay/sslcommerz/fail' || url.pathname === '/pay/sslcommerz/cancel') {
         payPage(res, 200, 'Payment cancelled', 'No charge was made. Run /upgrade to try again.');
+        return;
+      }
+
+      if (url.pathname === '/') {
+        // public marketing page - let search engines index it (every other
+        // route keeps the noindex set in applySecurityHeaders).
+        res.setHeader('X-Robots-Tag', 'index, follow');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(homeHtml());
         return;
       }
 

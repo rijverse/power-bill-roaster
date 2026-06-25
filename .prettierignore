@@ -5,6 +5,3 @@ drizzle/
 bun.lock
 docs/
 README.md
-
-# Design reference mockup (vendored artifact, not source)
-Power-Roast App (standalone).html

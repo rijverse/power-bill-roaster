@@ -1,10 +1,10 @@
 # Power-Roast
 
-A TypeScript-based DESCO prepaid electricity balance monitor that sends brutally honest email notifications when your balance gets dangerously low. Because sometimes you need tough love to remember to recharge.
+A TypeScript-based DESCO prepaid electricity balance monitor that sends brutally honest notifications (Discord or email) when your balance gets dangerously low. Because sometimes you need tough love to remember to recharge.
 
 ## What It Does
 
-It checks your DESCO prepaid meter balance and fires off angry emails if you're getting close to zero 
+It checks your DESCO prepaid meter balance and fires off angry alerts if you're getting close to zero 
 
 - **Below 150 BDT** (configurable) Warning shot  "Your Electricity About to Ghost You"
 - **Below 100 BDT** (configurable) DEFCON 1  "You're About to Live in the Stone Age"
@@ -12,7 +12,7 @@ It checks your DESCO prepaid meter balance and fires off angry emails if you're 
 ## Two Ways to Run It
 
 1. **Self-hosted (free forever) ** just fork this repo, toss your details into GitHub secrets, and the workflow does its thing on a schedule. Zero servers, zero cost. The setup guide below covers this.
-2. **Hosted (Telegram bot) ** a bot that does it all for you  no fork, no secrets, just message the bot. Run-out predictions ("~3 days left at this rate"), a web dashboard with balance history charts, multi-meter support, and SMS alerts on paid plans (bKash / SSLCommerz billing). Deploy your own with [docs/DEPLOY.md](docs/DEPLOY.md).
+2. **Hosted (Telegram bot) ** a bot that does it all for you  no fork, no secrets, just message the bot. Run-out predictions ("~3 days left at this rate"), a web dashboard with balance history charts, multi-meter support, free Discord alerts (via a channel webhook), and SMS alerts on paid plans (bKash / SSLCommerz billing). Deploy your own with [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ### Operator admin dashboard
 
@@ -38,17 +38,23 @@ bun install
 
 ### 2. Configure Environment Variables
 
-Create a `.env` file in the project root:
+You need your DESCO account and meter numbers, plus **at least one alert channel** 
+Discord (one secret) or email (SMTP). Create a `.env` file in the project root:
 
 ```env
 # Required
 DESCO_ACCOUNT_NO=your_account_number
 DESCO_METER_NO=your_meter_number
-EMAIL_TO=recipient@example.com
-EMAIL_FROM=sender@example.com
-SMTP_HOST=smtp.gmail.com
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
+
+# Easiest channel: Discord (a channel webhook URL)
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+
+# Or the email channel (set all five together)
+#EMAIL_TO=recipient@example.com
+#EMAIL_FROM=sender@example.com
+#SMTP_HOST=smtp.gmail.com
+#SMTP_USER=your_email@gmail.com
+#SMTP_PASS=your_app_password
 
 # Optional
 SMTP_PORT=587
@@ -58,24 +64,38 @@ CRITICAL_THRESHOLD=100
 
 ### 3. Set Up GitHub Secrets
 
-To make this run automatically via GitHub Actions, just drop these secrets into your repo 
+To run automatically on GitHub Actions, add your details as repo **Secrets**  never
+**Variables**. Variables are visible to anyone who can read the repo; Actions masks
+Secrets in its logs. Go to **Settings → Secrets and variables → Actions**.
 
-1. Go to your repo's **Settings** → **Secrets and variables** → **Actions**
-2. Add the following secrets
+Always required:
 
-**Required **
 - `DESCO_ACCOUNT_NO`
 - `DESCO_METER_NO`
-- `EMAIL_TO`
-- `EMAIL_FROM`
-- `SMTP_HOST`
-- `SMTP_USER`
-- `SMTP_PASS`
 
-**Optional **
+Then pick at least one channel:
+
+**Easiest: Discord (one more secret)**
+
+- `DISCORD_WEBHOOK_URL`  in Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy URL.
+
+**Email (five more secrets)**
+
+- `EMAIL_TO`, `EMAIL_FROM`, `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`
+
+Optional (either channel):
+
 - `SMTP_PORT` (defaults to 587)
 - `LOW_THRESHOLD` (defaults to 150)
 - `CRITICAL_THRESHOLD` (defaults to 100)
+
+### 4. Enable and verify the schedule
+
+GitHub Actions schedules have a couple of gotchas worth knowing:
+
+1. Scheduled workflows are **disabled by default on forks**  open the **Actions** tab once and enable them.
+2. **Trigger the workflow manually once** to confirm your secrets work: on the **Actions** tab, pick *Check DESCO Balance* and hit **Run workflow**.
+3. GitHub **suspends schedules after ~60 days of no repo activity**. Any commit re-arms them, and GitHub emails you a warning first.
 
 ## Usage
 
@@ -87,7 +107,7 @@ bun run check-balance
 
 ### Automated Checks
 
-The GitHub Actions workflow kicks in every 6 hours on its own. You can also force it to run manually from the **Actions** tab if you're impatient.
+The GitHub Actions workflow runs once a day at 06:00 UTC on its own. You can also force it to run manually from the **Actions** tab any time (see step 4 above).
 
 ## Email Providers
 
@@ -112,20 +132,23 @@ Works with any SMTP provider. Common settings
 2. Fetches your current balance from DESCO's prepaid API
 3. Validates the API response
 4. Compares balance against configurable thresholds
-5. Blasts out a wildly aggressive email if you're too low
+5. Blasts out a wildly aggressive alert on every configured channel (Discord and/or email) if you're too low
 6. Logs everything for your viewing pleasure
 
 ## Configuration
+
+Set the two DESCO variables plus at least one channel (Discord or the full email/SMTP set).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DESCO_ACCOUNT_NO` | ✅ | - | Your DESCO account number |
 | `DESCO_METER_NO` | ✅ | - | Your DESCO meter number |
-| `EMAIL_TO` | ✅ | - | Email recipient |
-| `EMAIL_FROM` | ✅ | - | Email sender |
-| `SMTP_HOST` | ✅ | - | SMTP server hostname |
-| `SMTP_USER` | ✅ | - | SMTP username |
-| `SMTP_PASS` | ✅ | - | SMTP password |
+| `DISCORD_WEBHOOK_URL` | channel | - | Discord channel webhook (one of the two channels) |
+| `EMAIL_TO` | channel | - | Email recipient (needs the full SMTP set) |
+| `EMAIL_FROM` | channel | - | Email sender |
+| `SMTP_HOST` | channel | - | SMTP server hostname |
+| `SMTP_USER` | channel | - | SMTP username |
+| `SMTP_PASS` | channel | - | SMTP password |
 | `SMTP_PORT` | ❌ | 587 | SMTP port |
 | `LOW_THRESHOLD` | ❌ | 150 | Warning threshold (BDT) |
 | `CRITICAL_THRESHOLD` | ❌ | 100 | Critical threshold (BDT) |
@@ -180,8 +203,10 @@ Both run in CI on every push and PR, so run them before pushing.
 
 - **TypeScript** - Type-safe balance checking
 - **bun** - Package management & script running
-- **node-fetch** - API requests
+- **undici** - HTTP requests (native fetch, no extra client)
 - **nodemailer** - Email notifications
+- **grammy** - Telegram bot (hosted mode)
+- **Drizzle ORM + PostgreSQL** - Persistence (hosted mode)
 - **GitHub Actions** - Automated scheduling
 - **Jest** - Testing
 
@@ -197,4 +222,4 @@ This is just a personal project. You're using the DESCO API at your own risk. Al
 
 - Never commit your `.env` file (it's in `.gitignore`)
 - Use GitHub Secrets for CI/CD, never hardcode credentials
-- We actually disable SSL verification for DESCO's API because their certificates act up sometimes  just keeping you in the loop on that.
+- TLS verification on DESCO's API is on by default. Their certificate chain has been flaky in the past, so if real calls start failing with cert errors you can set `DESCO_TLS_INSECURE=1` to skip it. The bypass is scoped to the DESCO client only, so everything else still verifies.

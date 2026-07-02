@@ -20,7 +20,7 @@ jobs:
         with:
           # pinned to match bun.lock; a floating "latest" re-resolves the frozen
           # lockfile and fails install. bump deliberately + regenerate the lockfile.
-          bun-version: 1.1.33
+          bun-version: 1.2.23
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -29,6 +29,8 @@ jobs:
         env:
           DESCO_ACCOUNT_NO: ${{ secrets.DESCO_ACCOUNT_NO }}
           DESCO_METER_NO: ${{ secrets.DESCO_METER_NO }}
+          # alert channels - configure at least one (Discord and/or email)
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}

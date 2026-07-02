@@ -81,7 +81,7 @@ ufw enable
 
 The `.github/workflows/deploy.yml` workflow runs `bun run db:migrate` against
 your production DB and builds + pushes a fresh image to GHCR on every push to
-`main`. To roll out on the server:
+`main`, tagged both `:latest` and `:<commit-sha>`. To roll out on the server:
 
 ```bash
 cd /opt/power-roast
@@ -91,6 +91,16 @@ docker compose -f docker-compose.prod.yml up -d
 
 `docker compose pull` is a no-op if the `:latest` tag hasn't changed since
 your last deploy.
+
+To roll back (or pin a specific build), set `IMAGE_TAG` to a commit sha in
+`.env` and re-run the two commands above — it defaults to `latest`:
+
+```env
+IMAGE_TAG=<commit-sha from the good build>
+```
+
+If you're running your own fork, set `IMAGE_REPO=<your-owner>/power-bill-roaster`
+in `.env` so it pulls your image instead of the upstream one.
 
 If you skip the GitHub workflow (e.g. testing on a non-main branch), the
 manual flow still works:
@@ -123,8 +133,11 @@ ufw allow 443/tcp
 ufw delete allow 3000/tcp   # only Caddy talks to the app now
 ```
 
-Then set `PUBLIC_BASE_URL=https://app.yourdomain.com` in `.env`, restart the
-app, and point your uptime monitor at `https://app.yourdomain.com/health`.
+Then set `PUBLIC_BASE_URL=https://app.yourdomain.com` and `TRUST_PROXY=1` in
+`.env`, restart the app, and point your uptime monitor at
+`https://app.yourdomain.com/health`. `TRUST_PROXY=1` tells the rate limiters to
+read the client IP from Caddy's `X-Forwarded-For`; leave it unset any time the
+app's port is reachable directly, or the header can be spoofed to bypass them.
 
 ## 5. Monitoring
 
@@ -159,6 +172,11 @@ and gate the SMS budget in the database first.
 The email sender speaks plain SMTP. To enable it, set `SMTP_HOST`, `SMTP_PORT`,
 `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` (an address on a domain with proper
 SPF/DKIM) in `.env`. Any transactional email provider works.
+
+Discord needs no server config: it's a free per-user channel. A user pastes a
+channel webhook URL into `/discord <url>` in the bot (or the web app's Alerts
+screen); the app validates it, fires a test message, and stores the URL against
+their account. Deleting the account (or `/discord off`) removes it.
 
 ## 7. Billing (paid plans)
 

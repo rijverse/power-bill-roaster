@@ -12,6 +12,8 @@ const BD_PHONE_RE = /(?:\+?88)?01[3-9]\d{8}\b/g;
 const ACCOUNT_RE =
   /\b(account(?:_no)?\s*[=:]\s*|meter(?:_no)?\s*[=:]\s*|account\s+is\s+)(\d{5,20})\b/gi;
 const HEX_TOKEN_RE = /\b[a-f0-9]{40,}\b/gi;
+// discord webhook tokens are base64url (not hex), so HEX_TOKEN_RE misses them
+const DISCORD_WEBHOOK_RE = /(https:\/\/discord(?:app)?\.com\/api\/webhooks\/\d+\/)[\w-]+/gi;
 
 export function maskEmail(value: string): string {
   const [user, domain] = value.split('@');
@@ -35,11 +37,19 @@ export function maskAccount(value: string): string {
   return `${value.slice(0, 2)}${'*'.repeat(Math.max(0, value.length - 4))}${value.slice(-2)}`;
 }
 
+// keep host + webhook id (useful for correlating), drop the secret token segment
+export function maskWebhookUrl(value: string): string {
+  const m = value.match(/^https:\/\/(discord(?:app)?\.com)\/api\/webhooks\/(\d+)\/.+$/);
+  if (!m) return '***';
+  return `https://${m[1]}/api/webhooks/${m[2]}/***`;
+}
+
 function maskString(value: string): string {
   return value
     .replace(EMAIL_RE, m => maskEmail(m))
     .replace(BD_PHONE_RE, m => maskPhone(m))
     .replace(ACCOUNT_RE, (_m, prefix) => `${prefix}***`)
+    .replace(DISCORD_WEBHOOK_RE, (_m, prefix) => `${prefix}***`)
     .replace(HEX_TOKEN_RE, m => `${m.slice(0, 6)}***`);
 }
 

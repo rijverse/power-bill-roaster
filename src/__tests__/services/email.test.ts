@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { EmailService } from '../../services/email';
-import { Config } from '../../config';
+import { EmailConfig } from '../../config';
 
 jest.mock('nodemailer');
 
@@ -10,7 +10,7 @@ const mockCreateTransport = nodemailer.createTransport as jest.MockedFunction<
 
 describe('EmailService', () => {
   let mockSendMail: jest.Mock;
-  let config: Config;
+  let email: EmailConfig;
 
   beforeEach(() => {
     mockSendMail = jest.fn().mockResolvedValue({});
@@ -18,24 +18,20 @@ describe('EmailService', () => {
       sendMail: mockSendMail,
     } as any);
 
-    config = {
-      desco: { accountNo: '123', meterNo: '456' },
-      email: { to: 'test@example.com', from: 'from@example.com' },
-      smtp: {
-        host: 'smtp.test.com',
-        port: 587,
-        user: 'user@test.com',
-        pass: 'password',
-      },
-      thresholds: { low: 150, critical: 100 },
-      rechargeUrl: 'https://prepaid.desco.org.bd/',
+    email = {
+      to: 'test@example.com',
+      from: 'from@example.com',
+      host: 'smtp.test.com',
+      port: 587,
+      user: 'user@test.com',
+      pass: 'password',
     };
 
     jest.clearAllMocks();
   });
 
   it('should configure SMTP transport correctly', () => {
-    new EmailService(config);
+    new EmailService(email);
 
     expect(mockCreateTransport).toHaveBeenCalledWith({
       host: 'smtp.test.com',
@@ -52,8 +48,8 @@ describe('EmailService', () => {
   });
 
   it('should use secure connection for port 465', () => {
-    config.smtp.port = 465;
-    new EmailService(config);
+    email.port = 465;
+    new EmailService(email);
 
     expect(mockCreateTransport).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -63,7 +59,7 @@ describe('EmailService', () => {
   });
 
   it('should send email with correct content', async () => {
-    const service = new EmailService(config);
+    const service = new EmailService(email);
 
     await service.send({
       subject: 'Test Subject',
@@ -82,7 +78,7 @@ describe('EmailService', () => {
 
   it('should propagate send errors', async () => {
     mockSendMail.mockRejectedValue(new Error('SMTP Error'));
-    const service = new EmailService(config);
+    const service = new EmailService(email);
 
     await expect(
       service.send({ subject: 'Test', text: 'Test', html: '<p>Test</p>' })

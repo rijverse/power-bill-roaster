@@ -1,21 +1,25 @@
 import 'dotenv/config';
 import crypto from 'crypto';
+import { isValidDiscordWebhookUrl } from './notifications/discord';
+
+/** SMTP host + addresses for the self-hosted email channel. */
+export interface EmailConfig {
+  to: string;
+  from: string;
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+}
 
 export interface Config {
   desco: {
     accountNo: string;
     meterNo: string;
   };
-  email: {
-    to: string;
-    from: string;
-  };
-  smtp: {
-    host: string;
-    port: number;
-    user: string;
-    pass: string;
-  };
+  // At least one of these two channels is configured - validateEnv enforces it.
+  email: EmailConfig | null;
+  discordWebhookUrl: string | null;
   thresholds: {
     low: number;
     critical: number;
@@ -29,6 +33,8 @@ export interface ServerConfig {
   telegramBotToken: string;
   /** override the Telegram Bot API root (mock servers / local bot-api). Null = api.telegram.org */
   telegramApiRoot: string | null;
+  /** bot's @username (no @), for deep links like t.me/<username>. Null = links hidden. */
+  botUsername: string | null;
   port: number;
   pollIntervalHours: number;
   reminderIntervalHours: number;
@@ -195,6 +201,9 @@ export function getServerConfig(): ServerConfig {
     databaseUrl: process.env.DATABASE_URL!,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
     telegramApiRoot: process.env.TELEGRAM_API_ROOT || null,
+    botUsername:
+      (process.env.BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '') ||
+      null,
     port: parseInt(process.env.PORT || '3000'),
     pollIntervalHours: parseFloat(process.env.POLL_INTERVAL_HOURS || '6'),
     reminderIntervalHours: parseFloat(process.env.REMINDER_INTERVAL_HOURS || '24'),
@@ -217,41 +226,60 @@ export function getServerConfig(): ServerConfig {
   };
 }
 
-const REQUIRED_ENV_VARS = [
-  'DESCO_ACCOUNT_NO',
-  'DESCO_METER_NO',
-  'EMAIL_TO',
-  'EMAIL_FROM',
-  'SMTP_HOST',
-  'SMTP_USER',
-  'SMTP_PASS',
-] as const;
+// The meter is always required; the alert channels are "at least one of".
+const REQUIRED_DESCO_VARS = ['DESCO_ACCOUNT_NO', 'DESCO_METER_NO'] as const;
+// A complete email channel needs all of these (SMTP_PORT defaults to 587).
+const EMAIL_VARS = ['EMAIL_TO', 'EMAIL_FROM', 'SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'] as const;
 
 export function validateEnv(): void {
-  const missing = REQUIRED_ENV_VARS.filter(key => !process.env[key]);
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  const missingDesco = REQUIRED_DESCO_VARS.filter(key => !process.env[key]);
+  if (missingDesco.length > 0) {
+    throw new Error(`Missing required environment variables: ${missingDesco.join(', ')}`);
+  }
+
+  // Email is all-or-nothing: a half-filled SMTP block is almost always a typo,
+  // so name what's missing rather than silently treating the channel as off.
+  const emailSet = EMAIL_VARS.filter(key => process.env[key]);
+  const hasEmail = emailSet.length === EMAIL_VARS.length;
+  if (emailSet.length > 0 && !hasEmail) {
+    const missing = EMAIL_VARS.filter(key => !process.env[key]);
+    throw new Error(`Incomplete email config - also set: ${missing.join(', ')}`);
+  }
+
+  const webhook = process.env.DISCORD_WEBHOOK_URL;
+  if (webhook && !isValidDiscordWebhookUrl(webhook)) {
+    throw new Error('DISCORD_WEBHOOK_URL is set but is not a valid Discord webhook URL');
+  }
+
+  if (!hasEmail && !webhook) {
+    throw new Error(
+      'Configure at least one alert channel: set DISCORD_WEBHOOK_URL, or the SMTP_*/EMAIL_* variables (see README).'
+    );
   }
 }
 
 export function getConfig(): Config {
   validateEnv();
 
+  // After validateEnv, the email vars are present all-or-nothing.
+  const email: EmailConfig | null = process.env.SMTP_HOST
+    ? {
+        to: process.env.EMAIL_TO!,
+        from: process.env.EMAIL_FROM!,
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        user: process.env.SMTP_USER!,
+        pass: process.env.SMTP_PASS!,
+      }
+    : null;
+
   return {
     desco: {
       accountNo: process.env.DESCO_ACCOUNT_NO!,
       meterNo: process.env.DESCO_METER_NO!,
     },
-    email: {
-      to: process.env.EMAIL_TO!,
-      from: process.env.EMAIL_FROM!,
-    },
-    smtp: {
-      host: process.env.SMTP_HOST!,
-      port: parseInt(process.env.SMTP_PORT || '587'),
-      user: process.env.SMTP_USER!,
-      pass: process.env.SMTP_PASS!,
-    },
+    email,
+    discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || null,
     thresholds: {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),

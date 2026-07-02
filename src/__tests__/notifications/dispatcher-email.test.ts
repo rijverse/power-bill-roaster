@@ -17,9 +17,32 @@ const ctx: MeterContext = {
 const user = { id: 1, telegramChatId: null, plan: 'free' } as unknown as schema.User;
 const meter = { id: 7 } as unknown as schema.Meter;
 
+// The dispatcher filters channels by `type` in SQL; the fake db can't run SQL,
+// so recover the queried type from the drizzle condition to mimic that filter -
+// otherwise the discord/sms branches would pick up these email rows.
+const CHANNEL_TYPES = ['telegram', 'email', 'sms', 'discord'];
+function conditionType(cond: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  const stack: unknown[] = [cond];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+    for (const value of Object.values(node as Record<string, unknown>)) {
+      if (typeof value === 'string' && CHANNEL_TYPES.includes(value)) return value;
+      if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+  return undefined;
+}
+
 function fakeDb(emailChannels: unknown[]) {
   return {
-    select: () => ({ from: () => ({ where: async () => emailChannels }) }),
+    select: () => ({
+      from: () => ({
+        where: async (cond: unknown) => (conditionType(cond) === 'email' ? emailChannels : []),
+      }),
+    }),
     insert: () => ({ values: async () => undefined }),
   } as unknown as Db;
 }

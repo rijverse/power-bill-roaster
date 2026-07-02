@@ -7,9 +7,11 @@ import { inQuietHours } from '../core/quiet-hours';
 import { renderAlert, MeterContext } from './telegram-templates';
 import { smsAlertText } from './sms-templates';
 import { emailAlert } from './email-templates';
+import { discordAlertEmbed } from './discord-templates';
+import { sendDiscordAlert as postDiscordWebhook } from './discord';
 import { SmsGateway } from './sms';
 import { Mailer } from '../services/mailer';
-import { logger, maskEmail, maskPhone } from '../logger';
+import { logger, maskEmail, maskPhone, maskWebhookUrl } from '../logger';
 
 /** A button on an alert message: a link, or a callback the bot handles. */
 export type AlertButton = { text: string; url: string } | { text: string; callbackData: string };
@@ -23,7 +25,7 @@ const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
 
 /**
  * Result of one dispatch pass. `delivered` and `failed` hold channel keys -
- * 'telegram', 'email:<channelId>', 'sms:<channelId>' - so the worker marks the
+ * 'telegram', 'email:<channelId>', 'sms:<channelId>', 'discord:<channelId>' - so the worker marks the
  * row sent only when nothing failed, and on a retry re-sends just the failed
  * ones and skips the rest. A channel we deliberately skip (quiet hours, disabled,
  * no SMS budget) shows up in neither list.
@@ -39,9 +41,10 @@ function empty(): DispatchResult {
 
 /**
  * Fans an alert out to every channel the user has: Telegram always (free),
- * email to verified addresses (free, so reminders/recovery go too), and SMS
- * only for low/critical, only on plans with an SMS budget, and only while this
- * month's budget holds. Every delivery attempt is logged to alerts_log.
+ * email and Discord to verified webhooks/addresses (both free, so reminders and
+ * recovery go too), and SMS only for low/critical, only on plans with an SMS
+ * budget, and only while this month's budget holds. Every delivery attempt is
+ * logged to alerts_log.
  *
  * Returns a {@link DispatchResult}: each channel send is isolated so one
  * channel's failure never aborts another, and the caller (the outbox worker)
@@ -79,6 +82,9 @@ export class Dispatcher {
       ),
       await this.runChannel('sms', () =>
         this.sendSmsAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+      ),
+      await this.runChannel('discord', () =>
+        this.sendDiscordAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
     ];
     return {
@@ -205,13 +211,17 @@ export class Dispatcher {
     }
     // Recovery is good news with nothing to act on; every other alert gets a
     // one-tap recharge link and a snooze button (snooze mutes the repeat nag).
+    // Low/critical alerts also get a "check again" button to re-poll on demand.
+    const firstRow: AlertButton[] = [
+      { text: '💳 Recharge now', url: ctx.rechargeUrl ?? DEFAULT_RECHARGE_URL },
+    ];
+    if (action === 'low-alert' || action === 'critical-alert') {
+      firstRow.push({ text: '🔄 Check again', callbackData: `recheck:${meter.id}` });
+    }
     const buttons: AlertButton[][] | undefined =
       action === 'recovery'
         ? undefined
-        : [
-            [{ text: '💳 Recharge now', url: ctx.rechargeUrl ?? DEFAULT_RECHARGE_URL }],
-            [{ text: '🔕 Snooze 3 days', callbackData: `snooze:${meter.id}` }],
-          ];
+        : [firstRow, [{ text: '🔕 Snooze 3 days', callbackData: `snooze:${meter.id}` }]];
     let ok = true;
     try {
       await this.telegram.sendTelegram(user.telegramChatId, message, buttons);
@@ -328,6 +338,62 @@ export class Dispatcher {
       } else {
         failed.push(key);
       }
+    }
+    return { delivered, failed };
+  }
+
+  private async sendDiscordAlert(
+    user: schema.User,
+    meter: schema.Meter,
+    action: AlertAction,
+    level: AlertLevel,
+    ctx: MeterContext,
+    tone: Tone,
+    alreadyDelivered: ReadonlySet<string>
+  ): Promise<DispatchResult> {
+    const embed = discordAlertEmbed(action, ctx, tone);
+    if (!embed) {
+      return empty();
+    }
+    // Discord is a free channel (webhooks cost nothing), so - like email - it
+    // gets the full action set. verified=true means the /discord test embed
+    // landed; unverified/disabled rows never receive anything.
+    const discordChannels = await this.db
+      .select()
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.userId, user.id),
+          eq(schema.channels.type, 'discord'),
+          eq(schema.channels.enabled, true),
+          eq(schema.channels.verified, true)
+        )
+      );
+    const delivered: string[] = [];
+    const failed: string[] = [];
+    for (const channel of discordChannels) {
+      const key = `discord:${channel.id}`;
+      if (alreadyDelivered.has(key)) {
+        continue; // delivered on a previous attempt - don't resend
+      }
+      let ok = true;
+      try {
+        await postDiscordWebhook(channel.address, embed);
+      } catch (error) {
+        ok = false;
+        logger.error(
+          `Discord alert failed for meter ${meter.id} to ${maskWebhookUrl(channel.address)}`,
+          error instanceof Error ? error.message : error
+        );
+      }
+      await this.logDelivery({
+        meterId: meter.id,
+        channelId: channel.id,
+        level,
+        action,
+        deliveryStatus: ok ? 'sent' : 'failed',
+      });
+      (ok ? delivered : failed).push(key);
     }
     return { delivered, failed };
   }

@@ -61,7 +61,7 @@ describe('Config', () => {
         expect(config.desco.accountNo).toBe('13151091');
         expect(config.desco.meterNo).toBe('661120227647');
         expect(config.email.to).toBe('test@example.com');
-        expect(config.smtp.host).toBe('smtp.test.com');
+        expect(config.email.host).toBe('smtp.test.com');
       });
     });
 
@@ -96,7 +96,7 @@ describe('Config', () => {
         const { getConfig } = require('../config');
         const config = getConfig();
 
-        expect(config.smtp.port).toBe(587);
+        expect(config.email.port).toBe(587);
       });
     });
 
@@ -108,7 +108,88 @@ describe('Config', () => {
         const { getConfig } = require('../config');
         const config = getConfig();
 
-        expect(config.smtp.port).toBe(465);
+        expect(config.email.port).toBe(465);
+      });
+    });
+  });
+
+  describe('validateEnv alert channels', () => {
+    const GOOD_WEBHOOK = 'https://discord.com/api/webhooks/123456789/abc-token';
+
+    beforeEach(() => {
+      process.env.DESCO_ACCOUNT_NO = '13151091';
+      process.env.DESCO_METER_NO = '661120227647';
+    });
+
+    const setEmail = () => {
+      process.env.EMAIL_TO = 'test@example.com';
+      process.env.EMAIL_FROM = 'from@example.com';
+      process.env.SMTP_HOST = 'smtp.test.com';
+      process.env.SMTP_USER = 'user';
+      process.env.SMTP_PASS = 'pass';
+    };
+
+    it('accepts an email-only channel', () => {
+      setEmail();
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        const config = getConfig();
+        expect(config.email).not.toBeNull();
+        expect(config.discordWebhookUrl).toBeNull();
+      });
+    });
+
+    it('accepts a discord-only channel (no SMTP)', () => {
+      process.env.DISCORD_WEBHOOK_URL = GOOD_WEBHOOK;
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        const config = getConfig();
+        expect(config.email).toBeNull();
+        expect(config.discordWebhookUrl).toBe(GOOD_WEBHOOK);
+      });
+    });
+
+    it('accepts both channels together', () => {
+      setEmail();
+      process.env.DISCORD_WEBHOOK_URL = GOOD_WEBHOOK;
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        const config = getConfig();
+        expect(config.email).not.toBeNull();
+        expect(config.discordWebhookUrl).toBe(GOOD_WEBHOOK);
+      });
+    });
+
+    it('rejects zero channels with guidance', () => {
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { validateEnv } = require('../config');
+        expect(() => validateEnv()).toThrow('at least one alert channel');
+      });
+    });
+
+    it('rejects a partial SMTP block, naming the missing keys', () => {
+      process.env.EMAIL_TO = 'test@example.com';
+      process.env.EMAIL_FROM = 'from@example.com';
+      process.env.SMTP_HOST = 'smtp.test.com';
+      // SMTP_USER and SMTP_PASS intentionally unset
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { validateEnv } = require('../config');
+        expect(() => validateEnv()).toThrow('SMTP_USER');
+        expect(() => validateEnv()).toThrow('SMTP_PASS');
+      });
+    });
+
+    it('rejects an invalid Discord webhook URL', () => {
+      process.env.DISCORD_WEBHOOK_URL = 'https://evil.com/hook';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { validateEnv } = require('../config');
+        expect(() => validateEnv()).toThrow('not a valid Discord webhook');
       });
     });
   });

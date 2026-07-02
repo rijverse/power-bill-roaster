@@ -1,7 +1,15 @@
 # Production: app only - the database is Neon (managed Postgres).
-# Usage on the server: docker compose -f docker-compose.prod.yml up -d --build
+#
+# Default flow pulls the prebuilt image deploy.yml pushed to GHCR:
+#   docker compose -f docker-compose.prod.yml pull && ... up -d
+# Pin a rollback with IMAGE_TAG=<commit-sha> (defaults to :latest); forks point
+# IMAGE_REPO at their own "owner/repo". Set either in .env.
+#
+# The build stanza is the fallback for deploying off a branch that hasn't pushed
+# an image yet: docker compose -f docker-compose.prod.yml up -d --build
 services:
   app:
+    image: ghcr.io/${IMAGE_REPO:-rijverse/power-bill-roaster}:${IMAGE_TAG:-latest}
     build: .
     restart: unless-stopped
     env_file: .env

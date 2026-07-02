@@ -18,7 +18,7 @@ jobs:
         with:
           # pinned to match bun.lock; a floating "latest" re-resolves the frozen
           # lockfile and fails install. bump deliberately + regenerate the lockfile.
-          bun-version: 1.1.33
+          bun-version: 1.2.23
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

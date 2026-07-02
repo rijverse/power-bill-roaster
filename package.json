@@ -1,6 +1,6 @@
 {
   "name": "power-bill-roaster",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "DESCO prepaid electricity balance monitor that sends brutally honest email notifications when your balance gets dangerously low. Because sometimes you need tough love to remember to recharge.",
   "private": true,
   "scripts": {

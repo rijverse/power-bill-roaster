@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+# legacy binary lockfile - we track the text bun.lock now; an older bun would
+# regenerate this, so keep it out of the repo
+bun.lockb
 
 # Build output
 dist/

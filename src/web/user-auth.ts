@@ -10,6 +10,7 @@ import crypto from 'crypto';
 export const USER_COOKIE = 'pr_user';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAGIC_TTL_MS = 20 * 60 * 1000;
+const LINK_TTL_MS = 15 * 60 * 1000;
 
 function hmac(ns: string, payload: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(`${ns}:${payload}`).digest('base64url');
@@ -58,6 +59,42 @@ export function verifyMagicLink(token: string, secret: string, now = Date.now())
   return email;
 }
 
+// A short numeric fallback to the magic link, for people whose mail app opens
+// the link in a different browser than the one they started in. Stateless like
+// the link: derived from (email, time bucket) so we can recompute and check it
+// without storing anything. Valid for the current and previous bucket, so ~10-20
+// minutes depending on when in the bucket it was issued.
+const CODE_BUCKET_MS = 10 * 60 * 1000;
+
+function magicCodeFor(email: string, secret: string, bucket: number): string {
+  const digest = crypto
+    .createHmac('sha256', secret)
+    .update(`magic-code:${email.toLowerCase()}\n${bucket}`)
+    .digest();
+  return (digest.readUInt32BE(0) % 1_000_000).toString().padStart(6, '0');
+}
+
+/** The 6-digit code to email alongside the magic link. */
+export function magicCode(email: string, secret: string, now = Date.now()): string {
+  return magicCodeFor(email, secret, Math.floor(now / CODE_BUCKET_MS));
+}
+
+export function verifyMagicCode(
+  email: string,
+  code: string,
+  secret: string,
+  now = Date.now()
+): boolean {
+  if (!/^\d{6}$/.test(code)) {
+    return false;
+  }
+  const bucket = Math.floor(now / CODE_BUCKET_MS);
+  return (
+    safeEqual(code, magicCodeFor(email, secret, bucket)) ||
+    safeEqual(code, magicCodeFor(email, secret, bucket - 1))
+  );
+}
+
 export function signUserSession(
   userId: number,
   secret: string,
@@ -69,6 +106,32 @@ export function signUserSession(
 /** Returns the userId for a valid, unexpired session cookie, else null. */
 export function verifyUserSession(token: string, secret: string, now = Date.now()): number | null {
   const data = unsign('session', token, secret);
+  if (data === null) {
+    return null;
+  }
+  const [userIdRaw, expiresRaw] = data.split('\n');
+  const userId = parseInt(userIdRaw);
+  const expiresAtMs = parseInt(expiresRaw);
+  if (!Number.isFinite(userId) || !Number.isFinite(expiresAtMs) || now > expiresAtMs) {
+    return null;
+  }
+  return userId;
+}
+
+// Account-linking token: proves a web user asked to connect Telegram. Carried in
+// the bot deep link (t.me/<bot>?start=link_<token>) and short-lived like a magic
+// link. Namespaced so it can't be replayed as a session or magic link.
+export function signLinkToken(
+  userId: number,
+  secret: string,
+  expiresAtMs = Date.now() + LINK_TTL_MS
+): string {
+  return sign('tg-link', `${userId}\n${expiresAtMs}`, secret);
+}
+
+/** Returns the userId for a valid, unexpired link token, else null. */
+export function verifyLinkToken(token: string, secret: string, now = Date.now()): number | null {
+  const data = unsign('tg-link', token, secret);
   if (data === null) {
     return null;
   }

@@ -20,7 +20,10 @@ export function adminLoginHtml(hasError: boolean, message = 'Wrong password.'): 
       <div style="font-size:20px; font-weight:800; color:var(--text); letter-spacing:-0.02em; margin-bottom:4px;">Operator sign-in</div>
       <p class="muted" style="font-size:13px; margin-bottom:18px;">This console holds customer PII. Sign in to continue.</p>
       <label class="pr-label" for="pw">Admin password</label>
-      <input class="pr-input" id="pw" type="password" name="password" aria-label="Admin password" placeholder="••••••••" autofocus required style="margin-bottom:16px">
+      <div style="position:relative;margin-bottom:16px">
+        <input class="pr-input" id="pw" type="password" name="password" aria-label="Admin password" placeholder="••••••••" autofocus required style="margin:0;padding-right:56px">
+        <button type="button" id="pwToggle" onclick="var p=document.getElementById('pw');var s=p.type==='password';p.type=s?'text':'password';this.textContent=s?'Hide':'Show'" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 8px">Show</button>
+      </div>
       <button class="pr-btn gold block" type="submit">Sign in</button>
       <p class="pr-err" style="margin-top:12px">${err}</p>
     </form>
@@ -47,6 +50,7 @@ export function adminAppHtml(csrf: string): string {
       <button class="pr-navbtn active" type="button" data-screen="revenue">${AIC.revenue}Revenue &amp; health</button>
       <button class="pr-navbtn" type="button" data-screen="users">${AIC.users}Users &amp; meters</button>
       <button class="pr-navbtn" type="button" data-screen="logs">${AIC.logs}Delivery logs</button>
+      <button class="pr-navbtn" type="button" data-screen="audit">${AIC.logs}Audit trail</button>
     </nav>
     <div class="pr-side-foot">
       <a class="pr-navbtn" href="/app" style="border:1px solid var(--border);background:rgba(255,255,255,0.03);font-size:13px;gap:11px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>Back to my dashboard</a>
@@ -73,7 +77,7 @@ const CSRF = ${JSON.stringify(csrf)};
 ${CLIENT_HELPERS}
 ${CHART_SCRIPT}
 
-let SCREEN = 'revenue', page = 0, query = '', OVERVIEW = null, HEALTH = null, DETAIL = null;
+let SCREEN = 'revenue', page = 0, query = '', OVERVIEW = null, HEALTH = null, DETAIL = null, auditPage = 0, filter = 'all', logStatus = 'all', logChannel = 'all';
 let CHARTS = [];
 const host = document.getElementById('host');
 
@@ -83,8 +87,8 @@ async function api(path, opts) {
   return res;
 }
 async function getJSON(path) { const r = await api(path); if (!r.ok) throw new Error(await r.text()); return r.json(); }
-async function action(id, verb, body) {
-  const r = await api('/users/' + id + '/' + verb, {
+async function postAdmin(path, body) {
+  const r = await api(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
     body: body ? JSON.stringify(body) : undefined,
@@ -93,8 +97,15 @@ async function action(id, verb, body) {
   if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
   return data;
 }
+async function action(id, verb, body) {
+  return postAdmin('/users/' + id + '/' + verb, body);
+}
+async function meterAction(id, meterId, verb) {
+  return postAdmin('/users/' + id + '/meters/' + meterId + '/' + verb);
+}
 function clearCharts() { CHARTS.forEach(c => { try { c.destroy(); } catch (e) {} }); CHARTS = []; }
 function planPill(plan) { return '<span class="pr-pill ' + (plan === 'free' ? '' : 'low') + '">' + esc(plan) + '</span>'; }
+function copyChip(label, value) { return '<button class="pr-btn ghost sm copyBtn" type="button" data-copy="' + esc(value) + '">' + label + '</button>'; }
 function balanceClass(m) { return m.balance === null ? 'muted' : m.balance < m.criticalThreshold ? 'critical' : m.balance < m.lowThreshold ? 'low' : 'ok'; }
 
 // ---- chrome --------------------------------------------------------------
@@ -102,6 +113,7 @@ const TITLES = {
   revenue: ['Revenue & health', 'operator console, everything is fine, mostly'],
   users: ['Users & meters', null],
   logs: ['Delivery logs', 'alert delivery, last 24 hours'],
+  audit: ['Audit trail', 'every operator action, newest first'],
 };
 function renderChrome() {
   document.querySelectorAll('.pr-navbtn[data-screen]').forEach(b => b.classList.toggle('active', b.getAttribute('data-screen') === SCREEN));
@@ -164,6 +176,15 @@ function renderRevenue() {
       healthRow('Past-due subscriptions', 'active but period ended', String(o.pastDue ?? 0), (o.pastDue ?? 0) > 0 ? '#FF8077' : '#34D399') +
     '</div></div></div>';
 
+  const poll = o.poll || {};
+  h += '<div class="pr-grid pr-2col" style="margin-top:18px">' +
+    '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">Poll cycle</span><button class="pr-btn ghost sm" id="pollBtn" type="button">Run now</button></div><div class="pr-list">' +
+      healthRow('Last completed', poll.lastCycleAt ? relWhen(poll.lastCycleAt) : 'never', poll.overdue ? 'Overdue' : (poll.running ? 'Running' : 'OK'), poll.overdue ? '#FF5247' : (poll.running ? '#FBB024' : '#34D399')) +
+      healthRow('Interval', 'configured', (poll.intervalHours ?? '?') + 'h', '#8FA8FF') +
+    '</div><p class="mono muted" id="pollMsg" style="font-size:12px;margin-top:8px"></p></div>' +
+    '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">Dead letters</span><button class="pr-btn ghost sm" id="requeueAll" type="button">Requeue all</button></div><div id="deadBody"><div class="pr-empty" style="padding:12px 0">Loading...</div></div></div>' +
+  '</div>';
+
   h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:8px"><span class="pr-card-title">Recent payments</span><span class="mono muted" style="font-size:12px">latest first</span></div>' +
     '<div id="payFeed"><div class="pr-empty" style="padding:18px 0">Loading...</div></div></div>';
 
@@ -172,6 +193,28 @@ function renderRevenue() {
     const c = host.querySelector('#mrrChart'); if (c) c.innerHTML = mrrSvg(rev.mrrSeries);
     const f = host.querySelector('#payFeed'); if (f) f.innerHTML = revPayments(rev.payments);
   }).catch(() => {});
+  const pollMsg = host.querySelector('#pollMsg');
+  host.querySelector('#pollBtn').onclick = async () => {
+    pollMsg.textContent = 'starting...';
+    try { const r = await postAdmin('/poll'); pollMsg.textContent = r.alreadyRunning ? 'A cycle is already running.' : 'Poll cycle started.'; } catch (e) { pollMsg.textContent = e.message; }
+  };
+  host.querySelector('#requeueAll').onclick = async () => {
+    try { await postAdmin('/alerts/requeue-all'); loadDeadLetters(); } catch (e) { const b = host.querySelector('#deadBody'); if (b) b.innerHTML = '<div class="pr-empty" style="padding:12px 0">' + e.message + '</div>'; }
+  };
+  loadDeadLetters();
+}
+async function loadDeadLetters() {
+  const box = host.querySelector('#deadBody'); if (!box) return;
+  let d;
+  try { d = await getJSON('/deadletters'); } catch (e) { box.innerHTML = '<div class="pr-empty" style="padding:12px 0">Could not load.</div>'; return; }
+  if (!d.rows.length) { box.innerHTML = '<div class="pr-empty" style="padding:12px 0">No dead letters in the last 24h ✓</div>'; return; }
+  box.innerHTML = '<div class="pr-list">' + d.rows.map(r =>
+    '<div class="pr-rowitem"><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--text)">' + esc(r.action) + ', ' + esc(r.level) + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + relWhen(r.createdAt) + ', ' + r.attempts + ' tries, ' + esc(r.lastError ?? 'no error') + '</div></div>' +
+    '<button class="pr-btn ghost sm dlq" type="button" data-id="' + r.id + '">Requeue</button></div>'
+  ).join('') + '</div>';
+  box.querySelectorAll('.dlq').forEach(b => b.onclick = async () => {
+    try { await postAdmin('/alerts/' + b.dataset.id + '/requeue'); loadDeadLetters(); } catch (e) { box.innerHTML = '<div class="pr-empty" style="padding:12px 0">' + e.message + '</div>'; }
+  });
 }
 function relWhen(t) {
   if (!t) return 'never';
@@ -189,25 +232,34 @@ function renderUsers() {
     statCard('Total users', (o.users ?? 0).toLocaleString(), '', '') +
     statCard('Paid', String(o.activeSubscriptions ?? 0), '', 'gold') +
     statCard('Meters tracked', (o.activeMeters ?? 0).toLocaleString(), '', '') +
-    statCard('Past due', 'n/a', 'not tracked yet', 'red', true) +
+    statCard('Past due', String(o.pastDue ?? 0), 'active plans lapsed', o.pastDue ? 'red' : '') +
   '</div>';
+  const chip = (key, label) => '<button class="pr-btn ' + (filter === key ? '' : 'ghost') + ' sm chip" type="button" data-filter="' + key + '">' + label + '</button>';
   h += '<div class="pr-card" style="padding:8px 0">' +
-    '<div class="row" style="padding:14px 22px;gap:12px"><input id="q" class="pr-input" type="text" placeholder="Search by email or Telegram chat id..." value="' + esc(query) + '" style="flex:1;min-width:200px"><button id="searchBtn" class="pr-btn" type="button">Search</button></div>' +
+    '<div class="row" style="padding:14px 22px 6px;gap:12px"><input id="q" class="pr-input" type="text" placeholder="Search email, chat id, meter/account no, or nickname..." value="' + esc(query) + '" style="flex:1;min-width:200px"><button id="searchBtn" class="pr-btn" type="button">Search</button></div>' +
+    '<div class="row" style="padding:0 22px 12px;gap:8px">' + chip('all', 'All') + chip('paid', 'Paid') + chip('pastdue', 'Past due') + chip('stale', 'Stale') + '</div>' +
     '<div id="list" style="padding:0 8px"><div class="pr-empty">Loading...</div></div>' +
     '<div class="row" style="padding:12px 22px"><button id="prev" class="pr-btn ghost sm" type="button">‹ Prev</button><span id="pageLabel" class="mono muted" style="font-size:12px"></span><button id="next" class="pr-btn ghost sm" type="button">Next ›</button></div>' +
   '</div><div id="detailHost"></div>';
   host.innerHTML = h;
   host.querySelector('#searchBtn').onclick = () => { query = host.querySelector('#q').value.trim(); page = 0; loadList(); };
   host.querySelector('#q').addEventListener('keydown', e => { if (e.key === 'Enter') host.querySelector('#searchBtn').click(); });
+  host.querySelectorAll('.chip').forEach(c => c.onclick = () => { filter = c.dataset.filter; page = 0; renderUsers(); });
   host.querySelector('#prev').onclick = () => { if (page > 0) { page--; loadList(); } };
   host.querySelector('#next').onclick = () => { page++; loadList(); };
   loadList();
   if (DETAIL) openDetail(DETAIL);
 }
+// green fresh / amber late / red stale-or-never, from the last reading time
+function dotFor(lastReadingAt) {
+  if (!lastReadingAt) return '#FF5247';
+  const hrs = (Date.now() - new Date(lastReadingAt).getTime()) / 3600000;
+  return hrs < 12 ? '#34D399' : hrs < 36 ? '#FBB024' : '#FF5247';
+}
 async function loadList() {
   const box = host.querySelector('#list'); if (!box) return;
   let data;
-  try { data = await getJSON('/users?page=' + page + '&q=' + encodeURIComponent(query)); }
+  try { data = await getJSON('/users?page=' + page + '&filter=' + filter + '&q=' + encodeURIComponent(query)); }
   catch (e) { box.innerHTML = '<div class="pr-empty">Could not load users.</div>'; return; }
   if (!data.users.length) { box.innerHTML = '<div class="pr-empty">No users found.</div>'; }
   else {
@@ -221,18 +273,21 @@ async function loadList() {
           '<div style="display:flex;align-items:center;gap:11px;min-width:0"><span class="pr-avatar" style="width:30px;height:30px;font-size:12px">' + initial + '</span><div style="min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(u.email || 'no email') + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(handle) + '</div></div></div>' +
           '<span class="mono" style="font-size:13px;color:var(--text-2)">' + u.activeMeters + '</span>' +
           '<span style="font-size:13px">' + planPill(u.plan) + '</span>' +
-          '<span class="mono muted" style="font-size:12px">' + when(u.lastReadingAt) + '</span>' +
+          '<span class="mono muted" style="font-size:12px;display:inline-flex;align-items:center;gap:7px"><span style="width:8px;height:8px;border-radius:50%;flex:none;background:' + dotFor(u.lastReadingAt) + '"></span>' + relWhen(u.lastReadingAt) + '</span>' +
           '<span>' + status + '</span></div>';
       }).join('') + '</div></div>';
     box.querySelectorAll('.userRow').forEach(tr => tr.onclick = () => openDetail(tr.dataset.id));
   }
-  host.querySelector('#pageLabel').textContent = 'page ' + (page + 1);
+  const totalTxt = typeof data.total === 'number' ? ' · ' + data.total.toLocaleString() + ' users' : '';
+  host.querySelector('#pageLabel').textContent = 'page ' + (page + 1) + totalTxt;
   host.querySelector('#prev').disabled = page === 0;
   host.querySelector('#next').disabled = !data.hasMore;
 }
 
 async function openDetail(id) {
   DETAIL = id;
+  // keep the URL shareable without re-triggering the router
+  if (location.hash !== '#user/' + id) history.replaceState(null, '', '#user/' + id);
   clearCharts();
   const d = await getJSON('/users/' + id);
   const det = host.querySelector('#detailHost'); if (!det) return;
@@ -245,15 +300,26 @@ async function openDetail(id) {
     '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:10px">' +
       '<div style="display:flex;align-items:center;gap:10px"><span class="pr-card-title">' + esc(u.email || ('Customer #' + u.id)) + '</span>' + planPill(u.plan) + '</div>' +
       '<button class="pr-btn ghost sm" type="button" id="closeDetail">Close</button></div>' +
-      '<p class="muted" style="font-size:13px">#' + u.id + ', chat ' + esc(u.telegramChatId ?? 'n/a') + ', joined ' + when(u.createdAt) + ', tone ' + esc(u.tonePref) + '</p>' +
-      '<p class="muted" style="font-size:13px;margin-top:4px">Subscription: ' + sub + ', meter cap ' + esc(d.limits.maxMeters) + ', SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
-      '<div class="row" style="margin-top:14px;gap:10px">' +
+      '<p class="muted" style="font-size:13px" title="' + esc(when(u.createdAt)) + '">#' + u.id + ', chat ' + esc(u.telegramChatId ?? 'n/a') + ', joined ' + relWhen(u.createdAt) + ', tone ' + esc(u.tonePref) + '</p>' +
+      // t.me can't deep-link a bot *to* a user, so we offer copy buttons, not links
+      '<div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">' +
+        (u.email ? copyChip('Copy email', u.email) : '') +
+        (u.telegramChatId != null ? copyChip('Copy chat id', String(u.telegramChatId)) : '') +
+      '</div>' +
+      '<p class="muted" style="font-size:13px;margin-top:8px">Subscription: ' + sub + ', meter cap ' + esc(d.limits.maxMeters) + ', SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
+      '<div class="row" style="margin-top:14px;gap:10px;flex-wrap:wrap">' +
         '<select id="grantPlan" class="pr-input" aria-label="Plan to grant" style="width:auto;min-width:120px"><option value="plus">plus</option><option value="business">business</option></select>' +
         '<input id="grantDays" class="pr-input mono" type="text" value="30" style="width:70px" aria-label="Days" title="days">' +
+        '<button class="pr-btn ghost sm" type="button" data-days="30">30</button>' +
+        '<button class="pr-btn ghost sm" type="button" data-days="90">90</button>' +
+        '<button class="pr-btn ghost sm" type="button" data-days="365">365</button>' +
         '<button class="pr-btn gold" type="button" id="grantBtn">Grant plan</button>' +
+        (d.subscription ? '<button class="pr-btn ghost" type="button" id="revokeBtn">Revoke plan</button>' : '') +
         '<button class="pr-btn ghost" type="button" id="pauseBtn">Pause monitoring</button>' +
         '<button class="pr-btn danger" type="button" id="eraseBtn">Erase customer</button>' +
-      '</div><p class="pr-err" id="detailErr" style="margin-top:8px"></p></div>';
+      '</div>' +
+      '<input id="grantReason" class="pr-input" type="text" placeholder="Reason for grant (optional, saved to the audit log)" style="margin-top:8px">' +
+      '<p class="pr-err" id="detailErr" style="margin-top:8px"></p></div>';
 
   for (let i = 0; i < d.active.meters.length; i++) {
     const m = d.active.meters[i];
@@ -265,15 +331,32 @@ async function openDetail(id) {
         '<div class="mono" style="font-size:11.5px;color:var(--faint);margin-top:2px">acct ' + esc(m.accountNo) + ', meter ' + esc(m.meterNo) + '</div></div>' +
         '<div class="balance ' + balanceClass(m) + '" style="font-size:20px;font-weight:800">' + fmt(m.balance) + '</div></div>' +
       (m.prediction ? '<div class="mono" style="font-size:11.5px;color:var(--faint)">~' + m.prediction.daysLeft.toFixed(1) + ' days left, ' + fmt(m.prediction.burnPerDay) + '/day</div>' : '') +
+      '<div class="row" style="gap:8px;margin:10px 0;flex-wrap:wrap"><button class="pr-btn ghost sm mRecheck" type="button" data-mid="' + m.id + '">🔄 Re-check</button><button class="pr-btn ghost sm mPause" type="button" data-mid="' + m.id + '">Pause</button>' + copyChip('Copy acct', m.accountNo) + copyChip('Copy meter', m.meterNo) + '<span class="mono muted mMsg" style="font-size:11.5px"></span></div>' +
       '<div class="pr-chart sm"><canvas></canvas></div>';
     det.appendChild(card);
     CHARTS.push(window.prChart(card.querySelector('canvas'), m.readings, { low: m.lowThreshold, critical: m.criticalThreshold }));
+    const mid = m.id, msg = card.querySelector('.mMsg');
+    card.querySelector('.mRecheck').onclick = async () => {
+      msg.textContent = 'checking...';
+      try { const r = await meterAction(u.id, mid, 'recheck'); msg.textContent = 'now ' + fmt(r.balance); } catch (e) { msg.textContent = e.message; }
+    };
+    card.querySelector('.mPause').onclick = async () => {
+      try { await meterAction(u.id, mid, 'pause'); await openDetail(u.id); await loadList(); } catch (e) { msg.textContent = e.message; }
+    };
   }
   if (d.pausedMeters.length) {
     const c = document.createElement('div'); c.className = 'pr-card'; c.style.marginTop = '18px';
-    c.innerHTML = '<div class="mono" style="font-weight:700;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Paused meters</div>' +
-      d.pausedMeters.map(m => '<div class="muted" style="font-size:13px">' + esc(m.nickname ?? m.meterNo) + ', acct ' + esc(m.accountNo) + '</div>').join('');
+    c.innerHTML = '<div class="pr-section-head" style="margin-bottom:6px"><span class="mono" style="font-weight:700;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em">Paused meters</span><button class="pr-btn ghost sm" type="button" id="resumeAll">Resume all</button></div>' +
+      d.pausedMeters.map(m => '<div class="row" style="justify-content:space-between;gap:10px;padding:4px 0"><span class="muted" style="font-size:13px">' + esc(m.nickname ?? m.meterNo) + ', acct ' + esc(m.accountNo) + '</span><button class="pr-btn ghost sm pResume" type="button" data-mid="' + m.id + '">Resume</button></div>').join('') +
+      '<p class="pr-err pMsg" style="margin-top:6px"></p>';
     det.appendChild(c);
+    const pMsg = c.querySelector('.pMsg');
+    c.querySelector('#resumeAll').onclick = async () => {
+      try { const r = await action(u.id, 'resume'); if (r.stillPaused) alert(r.stillPaused + ' meter(s) stayed paused (plan cap full).'); await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
+    };
+    c.querySelectorAll('.pResume').forEach(b => b.onclick = async () => {
+      try { await meterAction(u.id, b.dataset.mid, 'resume'); await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
+    });
   }
   if (d.active.alerts.length) {
     const c = document.createElement('div'); c.className = 'pr-card'; c.style.marginTop = '18px';
@@ -291,10 +374,17 @@ async function openDetail(id) {
   }
 
   const err = host.querySelector('#detailErr');
-  host.querySelector('#closeDetail').onclick = () => { DETAIL = null; det.innerHTML = ''; };
+  host.querySelector('#closeDetail').onclick = () => { DETAIL = null; det.innerHTML = ''; history.replaceState(null, '', '#users'); };
+  det.querySelectorAll('[data-days]').forEach(b => b.onclick = () => { host.querySelector('#grantDays').value = b.dataset.days; });
   host.querySelector('#grantBtn').onclick = async () => {
     err.textContent = '';
-    try { await action(u.id, 'grant', { plan: host.querySelector('#grantPlan').value, days: Number(host.querySelector('#grantDays').value) }); await loadOverview(); await openDetail(u.id); } catch (e) { err.textContent = e.message; }
+    try { await action(u.id, 'grant', { plan: host.querySelector('#grantPlan').value, days: Number(host.querySelector('#grantDays').value), reason: host.querySelector('#grantReason').value }); await loadOverview(); await openDetail(u.id); } catch (e) { err.textContent = e.message; }
+  };
+  const revokeBtn = host.querySelector('#revokeBtn');
+  if (revokeBtn) revokeBtn.onclick = async () => {
+    if (!confirm('Cancel this customer\\'s plan and drop them to free? Meters beyond the free cap will be paused.')) return;
+    err.textContent = '';
+    try { await action(u.id, 'revoke'); await loadOverview(); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#pauseBtn').onclick = async () => {
     if (!confirm('Pause monitoring for every meter this customer has?')) return;
@@ -302,10 +392,16 @@ async function openDetail(id) {
     try { await action(u.id, 'pause'); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#eraseBtn').onclick = async () => {
-    if (prompt('This permanently erases customer #' + u.id + ' and ALL their data. Type ERASE to confirm.') !== 'ERASE') return;
+    const im = d.impact || { meters: 0, readings: 0, payments: 0 };
+    if (prompt('This ERASES customer #' + u.id + ': ' + im.meters + ' meter(s), ' + im.readings + ' reading(s), ' + im.payments + ' payment(s). No undo. Type ERASE to confirm.') !== 'ERASE') return;
     err.textContent = '';
-    try { await action(u.id, 'erase'); DETAIL = null; det.innerHTML = ''; await loadOverview(); await loadList(); renderChrome(); } catch (e) { err.textContent = e.message; }
+    try { await action(u.id, 'erase'); DETAIL = null; det.innerHTML = ''; history.replaceState(null, '', '#users'); await loadOverview(); await loadList(); renderChrome(); } catch (e) { err.textContent = e.message; }
   };
+  // copy buttons (header + meter cards), wired after everything is in the DOM
+  det.querySelectorAll('.copyBtn').forEach(b => b.onclick = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy);
+    const orig = b.textContent; b.textContent = 'Copied ✓'; setTimeout(() => { b.textContent = orig; }, 1200);
+  });
   det.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -323,7 +419,7 @@ function deliveryRow(l) {
   return '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;align-items:center;padding:13px 22px;border-bottom:1px solid var(--border-soft)">' +
     '<span class="mono" style="font-size:12px;color:var(--muted)">' + date + ' ' + time + '</span>' +
     '<span class="mono" style="font-size:12px;color:var(--text-2)">' + esc(l.meterNo) + '</span>' +
-    '<span style="font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(l.recipient) + '</span>' +
+    '<span style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + (l.userId != null ? '<a href="#users" class="logUser" data-uid="' + l.userId + '" style="color:var(--gold)">' + esc(l.recipient) + '</a>' : esc(l.recipient)) + '</span>' +
     '<span style="font-size:12.5px;color:var(--muted)">' + esc(chan) + '</span>' + typePill + statusPill + '</div>';
 }
 function renderLogs() {
@@ -334,40 +430,65 @@ function renderLogs() {
     statCard('Success rate', '...', 'last 24 hours', 'gold') +
   '</div>';
 
+  const sChip = (key, label) => '<button class="pr-btn ' + (logStatus === key ? '' : 'ghost') + ' sm lchip" type="button" data-status="' + key + '">' + label + '</button>';
+  const chOpt = (key, label) => '<option value="' + key + '"' + (logChannel === key ? ' selected' : '') + '>' + label + '</option>';
   h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">latest 40, real</span></div>' +
+    '<div class="row" style="padding:0 22px 12px;gap:8px;flex-wrap:wrap">' + sChip('all', 'All') + sChip('sent', 'Sent') + sChip('failed', 'Failed') +
+      '<select id="chanSel" class="pr-input sm" style="width:auto;min-width:130px">' + chOpt('all', 'All channels') + chOpt('telegram', 'Telegram') + chOpt('email', 'Email') + chOpt('sms', 'SMS') + chOpt('discord', 'Discord') + '</select></div>' +
     '<div class="pr-tableshell" style="overflow-x:auto"><div style="min-width:760px">' +
     '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;padding:11px 22px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)" class="mono">' +
     ['Time', 'Meter', 'Recipient', 'Channel', 'Type', 'Status'].map(c => '<span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">' + c + '</span>').join('') + '</div>' +
     '<div id="logRows"><div class="pr-empty" style="padding:24px 0">Loading...</div></div></div></div></div>';
 
-  // real admin audit log
-  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head"><span class="pr-card-title">Admin audit log</span><span class="mono muted" style="font-size:12px">operator actions</span></div><div id="auditBody"><div class="pr-empty">Loading...</div></div></div>';
-
   host.innerHTML = h;
-  getJSON('/deliveries').then(d => {
-    const total = d.delivered24h + d.failed24h;
-    const rate = total > 0 ? Math.round((d.delivered24h / total) * 1000) / 10 + '%' : 'n/a';
-    const stats = host.querySelector('#logStats');
-    if (stats) stats.innerHTML =
-      statCard('Delivered, 24h', d.delivered24h.toLocaleString(), 'across all channels', 'green') +
-      statCard('Failed, 24h', d.failed24h.toLocaleString(), 'send errors', d.failed24h > 0 ? 'red' : '') +
-      statCard('Attempts, 24h', total.toLocaleString(), 'total sends', '') +
-      statCard('Success rate', rate, 'last 24 hours', 'gold');
-    const rows = host.querySelector('#logRows');
-    if (rows) rows.innerHTML = d.rows.length ? d.rows.map(deliveryRow).join('') : '<div class="pr-empty" style="padding:24px 0">No alert deliveries yet.</div>';
-  }).catch(() => {
-    const rows = host.querySelector('#logRows'); if (rows) rows.innerHTML = '<div class="pr-empty" style="padding:24px 0">Could not load deliveries.</div>';
-  });
+  host.querySelectorAll('.lchip').forEach(c => c.onclick = () => { logStatus = c.dataset.status; renderLogs(); });
+  host.querySelector('#chanSel').onchange = e => { logChannel = e.target.value; renderLogs(); };
+  loadDeliveries();
+}
+async function loadDeliveries() {
+  let d;
+  try { d = await getJSON('/deliveries?status=' + logStatus + '&channel=' + logChannel); }
+  catch (e) { const rows = host.querySelector('#logRows'); if (rows) rows.innerHTML = '<div class="pr-empty" style="padding:24px 0">Could not load deliveries.</div>'; return; }
+  const total = d.delivered24h + d.failed24h;
+  const rate = total > 0 ? Math.round((d.delivered24h / total) * 1000) / 10 + '%' : 'n/a';
+  const stats = host.querySelector('#logStats');
+  if (stats) stats.innerHTML =
+    statCard('Delivered, 24h', d.delivered24h.toLocaleString(), 'across all channels', 'green') +
+    statCard('Failed, 24h', d.failed24h.toLocaleString(), 'send errors', d.failed24h > 0 ? 'red' : '') +
+    statCard('Attempts, 24h', total.toLocaleString(), 'total sends', '') +
+    statCard('Success rate', rate, 'last 24 hours', 'gold');
+  const rows = host.querySelector('#logRows');
+  if (rows) {
+    rows.innerHTML = d.rows.length ? d.rows.map(deliveryRow).join('') : '<div class="pr-empty" style="padding:24px 0">No matching deliveries.</div>';
+    rows.querySelectorAll('.logUser').forEach(a => a.onclick = ev => { ev.preventDefault(); go('user/' + a.dataset.uid); });
+  }
+}
+
+// ---- screen: audit trail -------------------------------------------------
+function renderAudit() {
+  host.innerHTML = '<div class="pr-card" style="padding:8px 0">' +
+    '<div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Operator actions</div><span class="mono muted" style="font-size:12px">newest first</span></div>' +
+    '<div id="auditBody"><div class="pr-empty" style="padding:24px 0">Loading...</div></div>' +
+    '<div class="row" style="justify-content:flex-end;gap:8px;padding:12px 22px"><button id="aPrev" class="pr-btn" type="button">Prev</button><button id="aNext" class="pr-btn" type="button">Next</button></div>' +
+    '</div>';
+  host.querySelector('#aPrev').onclick = () => { if (auditPage > 0) { auditPage--; loadAudit(); } };
+  host.querySelector('#aNext').onclick = () => { auditPage++; loadAudit(); };
   loadAudit();
 }
 async function loadAudit() {
   const box = host.querySelector('#auditBody'); if (!box) return;
   let data;
-  try { data = await getJSON('/audit'); } catch (e) { box.innerHTML = '<div class="pr-empty">Could not load audit log.</div>'; return; }
-  if (!data.entries.length) { box.innerHTML = '<div class="pr-empty">No operator actions logged yet.</div>'; return; }
-  box.innerHTML = '<div class="pr-tableshell" style="overflow-x:auto"><table class="pr-table"><thead><tr><th>When</th><th>Action</th><th>Customer</th><th>Detail</th><th>IP</th></tr></thead><tbody>' +
-    data.entries.map(e => '<tr><td class="mono muted">' + when(e.createdAt) + '</td><td>' + esc(e.action) + '</td><td>' + (e.targetUserId == null ? 'n/a' : '#' + esc(e.targetUserId)) + '</td><td class="muted">' + esc(e.detail ?? 'n/a') + '</td><td class="mono muted">' + esc(e.ip ?? 'n/a') + '</td></tr>').join('') +
-    '</tbody></table></div>';
+  try { data = await getJSON('/audit?page=' + auditPage); } catch (e) { box.innerHTML = '<div class="pr-empty" style="padding:24px 0">Could not load audit log.</div>'; return; }
+  if (!data.entries.length) { box.innerHTML = '<div class="pr-empty" style="padding:24px 0">' + (auditPage > 0 ? 'No more entries.' : 'No operator actions logged yet.') + '</div>'; }
+  else {
+    box.innerHTML = '<div class="pr-tableshell" style="overflow-x:auto"><table class="pr-table"><thead><tr><th>When</th><th>Action</th><th>Customer</th><th>Detail</th><th>IP</th></tr></thead><tbody>' +
+      data.entries.map(e => '<tr><td class="mono muted" title="' + esc(when(e.createdAt)) + '">' + relWhen(e.createdAt) + '</td><td>' + esc(e.action) + '</td><td>' + (e.targetUserId == null ? 'n/a' : '<a href="#users" class="auditUser" data-uid="' + esc(e.targetUserId) + '" style="color:var(--gold)">#' + esc(e.targetUserId) + '</a>') + '</td><td class="muted">' + esc(e.detail ?? 'n/a') + '</td><td class="mono muted">' + esc(e.ip ?? 'n/a') + '</td></tr>').join('') +
+      '</tbody></table></div>';
+    box.querySelectorAll('.auditUser').forEach(a => a.onclick = ev => { ev.preventDefault(); go('user/' + a.dataset.uid); });
+  }
+  const prev = host.querySelector('#aPrev'), next = host.querySelector('#aNext');
+  if (prev) prev.disabled = auditPage === 0;
+  if (next) next.disabled = !data.hasMore;
 }
 
 // ---- router --------------------------------------------------------------
@@ -375,16 +496,29 @@ function renderScreen() {
   clearCharts();
   if (SCREEN === 'users') renderUsers();
   else if (SCREEN === 'logs') renderLogs();
+  else if (SCREEN === 'audit') renderAudit();
   else renderRevenue();
 }
-function go(screen) {
-  SCREEN = screen;
-  if (location.hash !== '#' + screen) location.hash = screen;
-  if (screen !== 'users') DETAIL = null;
-  renderChrome();
-  renderScreen();
+// mirrors parseHash() in admin-hash.ts (this script is inlined, can't import)
+function parseHashClient(h) {
+  h = (h || '').replace(/^#/, '');
+  const i = h.indexOf('/'), head = i === -1 ? h : h.slice(0, i), tail = i === -1 ? '' : h.slice(i + 1);
+  if (head === 'user' && /^\\d+$/.test(tail)) return { screen: 'users', detail: tail, query: '', logStatus: 'all' };
+  if (head === 'users') return { screen: 'users', detail: null, query: tail.indexOf('q=') === 0 ? decodeURIComponent(tail.slice(2)) : '', logStatus: 'all' };
+  if (head === 'logs') return { screen: 'logs', detail: null, query: '', logStatus: (tail === 'failed' || tail === 'sent') ? tail : 'all' };
+  if (head === 'audit') return { screen: 'audit', detail: null, query: '', logStatus: 'all' };
+  return { screen: 'revenue', detail: null, query: '', logStatus: 'all' };
+}
+function applyRoute(r) {
+  SCREEN = r.screen; DETAIL = r.detail; query = r.query; logStatus = r.logStatus;
+  if (r.screen === 'audit') auditPage = 0;
+  renderChrome(); renderScreen(); // renderUsers opens DETAIL when set
   window.scrollTo(0, 0);
+}
+function go(route) {
   setSidebar(false);
+  if (('#' + route) === location.hash) applyRoute(parseHashClient(route));
+  else location.hash = route; // triggers hashchange -> applyRoute
 }
 async function loadOverview() {
   OVERVIEW = await getJSON('/overview').catch(() => OVERVIEW);
@@ -399,18 +533,25 @@ function setSidebar(open) { sidebar.dataset.open = open ? 'true' : 'false'; scri
 document.getElementById('pr-hamburger').onclick = () => setSidebar(sidebar.dataset.open !== 'true');
 scrim.onclick = () => setSidebar(false);
 document.querySelectorAll('.pr-navbtn[data-screen]').forEach(btn => btn.onclick = () => go(btn.getAttribute('data-screen')));
-window.addEventListener('hashchange', () => {
-  const s = location.hash.slice(1);
-  if (['revenue', 'users', 'logs'].includes(s) && s !== SCREEN) { SCREEN = s; if (s !== 'users') DETAIL = null; renderChrome(); renderScreen(); }
+document.addEventListener('keydown', e => {
+  const tag = (e.target && e.target.tagName) || '';
+  if (e.key === '/' && tag !== 'INPUT' && tag !== 'SELECT' && tag !== 'TEXTAREA') {
+    if (SCREEN !== 'users') go('users');
+    setTimeout(() => { const q = host.querySelector('#q'); if (q) { q.focus(); } }, 0);
+    e.preventDefault();
+  } else if (e.key === 'Escape' && DETAIL) {
+    const c = host.querySelector('#closeDetail'); if (c) c.click();
+  }
 });
+window.addEventListener('hashchange', () => { applyRoute(parseHashClient(location.hash)); });
 document.getElementById('refreshBtn').onclick = async () => {
   const icon = document.getElementById('refreshIcon');
   icon.classList.add('pr-spin');
   try { await loadOverview(); renderScreen(); } finally { icon.classList.remove('pr-spin'); }
 };
 
-const initial = location.hash.slice(1);
-if (['users', 'logs'].includes(initial)) SCREEN = initial;
+const initialRoute = parseHashClient(location.hash);
+SCREEN = initialRoute.screen; DETAIL = initialRoute.detail; query = initialRoute.query; logStatus = initialRoute.logStatus;
 (async () => { await loadOverview(); renderScreen(); })().catch(() => { host.innerHTML = '<div class="pr-card pr-empty">Something broke. Reload the page.</div>'; });
 </script>`;
 

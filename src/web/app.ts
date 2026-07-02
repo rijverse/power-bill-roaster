@@ -16,6 +16,8 @@ import {
 import { normalizeTone, TONES } from '../core/tone';
 import { SubscriptionService } from '../billing';
 import { getProvider } from '../providers';
+import { isValidDiscordWebhookUrl, sendDiscordAlert } from '../notifications/discord';
+import { maskWebhookUrl } from '../logger';
 import { dashboardData } from './queries';
 import { readCookie } from './admin-session';
 import { appShellHtml, loginHtml } from './app-html';
@@ -23,6 +25,10 @@ import {
   USER_COOKIE,
   signMagicLink,
   verifyMagicLink,
+  magicCode,
+  verifyMagicCode,
+  signLinkToken,
+  verifyLinkToken,
   signUserSession,
   verifyUserSession,
   csrfFor,
@@ -96,10 +102,18 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
+// Only honor X-Forwarded-For behind a proxy we control (TRUST_PROXY=1). Exposed
+// directly, the header is client-controlled and someone could rotate it to slip
+// past the per-IP rate limiters, so we fall back to the socket address.
+const trustProxy = process.env.TRUST_PROXY === '1';
+
 function clientIp(req: http.IncomingMessage): string {
-  const fwd = req.headers['x-forwarded-for'];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
-  return first || req.socket.remoteAddress || 'unknown';
+  if (trustProxy) {
+    const fwd = req.headers['x-forwarded-for'];
+    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress || 'unknown';
 }
 
 async function parseJson(req: http.IncomingMessage): Promise<Record<string, unknown> | null> {
@@ -152,6 +166,49 @@ async function findOrCreateByEmail(db: Db, email: string): Promise<schema.User> 
   return user;
 }
 
+/**
+ * Attach an email to an existing (bot) account so the web app recognizes it as
+ * the same user. Returns 'conflict' if the email already belongs to a different
+ * account - we don't auto-merge on the email path; the user links from the web
+ * side instead. On success returns the updated user with a verified email channel.
+ */
+async function attachEmailToUser(
+  db: Db,
+  userId: number,
+  email: string
+): Promise<schema.User | 'conflict'> {
+  const [existing] = await db
+    .select()
+    .from(schema.users)
+    .where(sql`lower(${schema.users.email}) = ${email}`);
+  if (existing && existing.id !== userId) {
+    return 'conflict';
+  }
+  await db.update(schema.users).set({ email }).where(eq(schema.users.id, userId));
+  const [channel] = await db
+    .select()
+    .from(schema.channels)
+    .where(
+      and(
+        eq(schema.channels.userId, userId),
+        eq(schema.channels.type, 'email'),
+        eq(schema.channels.address, email)
+      )
+    );
+  if (!channel) {
+    await db
+      .insert(schema.channels)
+      .values({ userId, type: 'email', address: email, verified: true, enabled: true });
+  } else if (!channel.verified || !channel.enabled) {
+    await db
+      .update(schema.channels)
+      .set({ verified: true, enabled: true })
+      .where(eq(schema.channels.id, channel.id));
+  }
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  return user;
+}
+
 async function ownedMeter(db: Db, userId: number, meterId: number): Promise<schema.Meter | null> {
   const [meter] = await db
     .select()
@@ -171,6 +228,7 @@ async function me(db: Db, userId: number, billingLive = false) {
   const email = chans.find(c => c.type === 'email');
   const tg = chans.find(c => c.type === 'telegram');
   const sms = chans.find(c => c.type === 'sms' && c.verified);
+  const discord = chans.find(c => c.type === 'discord' && c.verified);
   const emailAlerts = !!(email && email.verified && email.enabled);
   return {
     email: user.email,
@@ -182,12 +240,23 @@ async function me(db: Db, userId: number, billingLive = false) {
     emailAlerts,
     channels: {
       email: { address: user.email, verified: !!(email && email.verified), enabled: emailAlerts },
-      telegram: { available: user.telegramChatId !== null, enabled: !tg || tg.enabled },
+      telegram: {
+        available: user.telegramChatId !== null,
+        enabled: !tg || tg.enabled,
+        // filled in by the /app/api/me route when a connect link is available
+        connectUrl: null as string | null,
+      },
       sms: {
         available: smsPerMonthFor(user.plan) > 0,
         hasPhone: !!sms,
         enabled: !!(sms && sms.enabled),
         address: sms?.address ?? null,
+      },
+      // Discord is free for everyone; only the masked URL is ever sent to the client.
+      discord: {
+        connected: !!discord,
+        enabled: !!(discord && discord.enabled),
+        address: discord ? maskWebhookUrl(discord.address) : null,
       },
     },
     billingLive,
@@ -229,11 +298,11 @@ async function setSettings(
   return { status: 200, body: { ok: true } };
 }
 
-/** Enable/disable an alert channel (email | telegram | sms) for a user. */
+/** Enable/disable an alert channel (email | telegram | sms | discord) for a user. */
 async function setChannel(
   db: Db,
   user: schema.User,
-  type: 'email' | 'telegram' | 'sms',
+  type: 'email' | 'telegram' | 'sms' | 'discord',
   enabled: boolean
 ): Promise<{ status: number; body: unknown }> {
   if (type === 'telegram') {
@@ -276,11 +345,60 @@ async function setChannel(
     const hint =
       type === 'sms'
         ? 'Add a phone number first with the bot: /sms <number>.'
-        : 'No verified email on file.';
+        : type === 'discord'
+          ? 'Connect a Discord webhook first.'
+          : 'No verified email on file.';
     return { status: 400, body: { error: hint } };
   }
   await db.update(schema.channels).set({ enabled }).where(eq(schema.channels.id, channel.id));
   return { status: 200, body: { ok: true, enabled } };
+}
+
+/**
+ * Save (or replace) a user's Discord webhook. Validates the URL, fires a test
+ * embed to prove the webhook is live, then upserts the channel as verified and
+ * enabled - mirroring the bot's /discord flow.
+ */
+async function setDiscordWebhook(
+  db: Db,
+  user: schema.User,
+  url: unknown
+): Promise<{ status: number; body: unknown }> {
+  if (typeof url !== 'string' || !isValidDiscordWebhookUrl(url)) {
+    return { status: 400, body: { error: "That doesn't look like a Discord webhook URL." } };
+  }
+  try {
+    await sendDiscordAlert(url, {
+      title: 'Power Roast connected ✅',
+      description:
+        "Low-balance alerts for your meter(s) will land here. If you're reading this, it works.",
+      color: 0x3ba55d,
+    });
+  } catch {
+    return {
+      status: 400,
+      body: { error: "Couldn't post to that webhook - check the URL is current and try again." },
+    };
+  }
+  const [existing] = await db
+    .select()
+    .from(schema.channels)
+    .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'discord')));
+  if (existing) {
+    await db
+      .update(schema.channels)
+      .set({ address: url, verified: true, enabled: true })
+      .where(eq(schema.channels.id, existing.id));
+  } else {
+    await db.insert(schema.channels).values({
+      userId: user.id,
+      type: 'discord',
+      address: url,
+      verified: true,
+      enabled: true,
+    });
+  }
+  return { status: 200, body: { ok: true, address: maskWebhookUrl(url) } };
 }
 
 // ---- billing --------------------------------------------------------------
@@ -457,12 +575,22 @@ async function setNickname(
 
 // ---- sign-in email --------------------------------------------------------
 
-async function sendMagicLink(mailer: Mailer, baseUrl: string, email: string, token: string) {
-  const link = `${baseUrl}/app/auth?token=${encodeURIComponent(token)}`;
+export async function sendMagicLink(
+  mailer: Mailer,
+  baseUrl: string,
+  email: string,
+  token: string,
+  code: string,
+  attachLinkToken?: string
+) {
+  const link =
+    `${baseUrl}/app/auth?token=${encodeURIComponent(token)}` +
+    (attachLinkToken ? `&link=${encodeURIComponent(attachLinkToken)}` : '');
+  const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
   await mailer.send(
     email,
     'Your Power Roast sign-in link',
-    `Tap to sign in (expires in 20 minutes):\n${link}\n\nIf you didn't request this, ignore it.`,
+    `Tap to sign in (expires in 20 minutes):\n${link}\n\nOn the device you started from, you can enter this code instead: ${spaced}\n\nIf you didn't request this, ignore it.`,
     `<!DOCTYPE html><html><body style="margin:0;background:#0B1020;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#C8D0E0">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#0B1020"><tr><td align="center" style="padding:32px 16px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#11162A;border-radius:16px;border:1px solid rgba(255,255,255,0.09)">
@@ -470,6 +598,8 @@ async function sendMagicLink(mailer: Mailer, baseUrl: string, email: string, tok
 <h1 style="margin:0 0 8px;font-size:22px;font-weight:800;letter-spacing:-0.02em;color:#F4F7FF">⚡ Power<span style="color:#FBB024">·Roast</span></h1>
 <p style="color:#9AA3B8;font-size:14px;line-height:1.55;margin:0 0 24px">Tap to sign in. This link expires in 20 minutes.</p>
 <a href="${link}" style="display:inline-block;background:#FBB024;color:#0B1020;text-decoration:none;padding:14px 34px;border-radius:11px;font-weight:700">Sign in &amp; brace yourself</a>
+<p style="color:#9AA3B8;font-size:13px;line-height:1.55;margin:24px 0 0">On the device you started from, you can enter this code instead:</p>
+<div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;letter-spacing:0.15em;color:#F4F7FF;margin:6px 0 0">${spaced}</div>
 <p style="color:#6E7790;font-size:12px;margin:24px 0 0">If you didn't request this, just ignore it.</p>
 </td></tr></table></td></tr></table></body></html>`
   );
@@ -531,7 +661,13 @@ export async function handleAppRequest(
       return true;
     }
     try {
-      await sendMagicLink(mailer, config.publicBaseUrl, email, signMagicLink(email, secret));
+      await sendMagicLink(
+        mailer,
+        config.publicBaseUrl,
+        email,
+        signMagicLink(email, secret),
+        magicCode(email, secret)
+      );
     } catch (error) {
       console.error('Magic-link send failed:', error);
       redirect(res, '/app?status=sendfailed');
@@ -541,13 +677,56 @@ export async function handleAppRequest(
     return true;
   }
 
+  // Code fallback: enter the 6-digit code from the email on the device you
+  // started from (mail apps often open the link in a different browser).
+  if (path === '/app/login/code' && method === 'POST') {
+    if (!mailEnabled) {
+      redirect(res, '/app?status=disabled');
+      return true;
+    }
+    const form = new URLSearchParams(await readBody(req));
+    const email = (form.get('email') ?? '').trim().toLowerCase();
+    const code = (form.get('code') ?? '').replace(/\D/g, '');
+    if (!EMAIL_RE.test(email) || !/^\d{6}$/.test(code)) {
+      redirect(res, '/app?status=badcode');
+      return true;
+    }
+    if (!loginLimiter.allow(`${email}|${clientIp(req)}`)) {
+      redirect(res, '/app?status=ratelimited');
+      return true;
+    }
+    if (!verifyMagicCode(email, code, secret)) {
+      redirect(res, '/app?status=badcode');
+      return true;
+    }
+    const user = await findOrCreateByEmail(db, email);
+    redirect(res, '/app', userCookie(signUserSession(user.id, secret), secure));
+    return true;
+  }
+
   if (path === '/app/auth' && method === 'GET') {
     const email = verifyMagicLink(url.searchParams.get('token') ?? '', secret);
     if (!email) {
       redirect(res, '/app?status=badlink');
       return true;
     }
-    const user = await findOrCreateByEmail(db, email);
+    // A `link` param (from the bot's /email flow) attaches this email to an
+    // existing bot account instead of creating a fresh one - unless the email
+    // already belongs to someone else, in which case we send them to link from
+    // the web side (we never auto-merge on the email path).
+    const linkParam = url.searchParams.get('link');
+    const attachUserId = linkParam ? verifyLinkToken(linkParam, secret) : null;
+    let user: schema.User;
+    if (attachUserId !== null) {
+      const attached = await attachEmailToUser(db, attachUserId, email);
+      if (attached === 'conflict') {
+        redirect(res, '/app?status=emailtaken');
+        return true;
+      }
+      user = attached;
+    } else {
+      user = await findOrCreateByEmail(db, email);
+    }
     redirect(res, '/app', userCookie(signUserSession(user.id, secret), secure));
     return true;
   }
@@ -569,6 +748,13 @@ export async function handleAppRequest(
       if (!data) {
         json(res, 404, { error: 'Account not found.' });
       } else {
+        // Offer a "Connect Telegram" deep link when the account has no Telegram
+        // yet and we know the bot's username. The token links this web user to
+        // whichever chat taps it (bot side handles the linking / merge).
+        if (!data.channels.telegram.available && config.botUsername) {
+          const token = signLinkToken(userId, secret);
+          data.channels.telegram.connectUrl = `https://t.me/${config.botUsername}?start=link_${token}`;
+        }
         json(res, 200, data);
       }
       return true;
@@ -621,7 +807,7 @@ export async function handleAppRequest(
       return true;
     }
 
-    const chanMatch = /^\/app\/api\/alerts\/(email|telegram|sms)$/.exec(path);
+    const chanMatch = /^\/app\/api\/alerts\/(email|telegram|sms|discord)$/.exec(path);
     if (chanMatch && method === 'POST') {
       const body = await parseJson(req);
       const enabled = body?.enabled === true;
@@ -633,9 +819,21 @@ export async function handleAppRequest(
       const result = await setChannel(
         db,
         user,
-        chanMatch[1] as 'email' | 'telegram' | 'sms',
+        chanMatch[1] as 'email' | 'telegram' | 'sms' | 'discord',
         enabled
       );
+      json(res, result.status, result.body);
+      return true;
+    }
+
+    if (path === '/app/api/discord' && method === 'POST') {
+      const body = await parseJson(req);
+      const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+      if (!user) {
+        json(res, 404, { error: 'Account not found.' });
+        return true;
+      }
+      const result = await setDiscordWebhook(db, user, body?.url);
       json(res, result.status, result.body);
       return true;
     }

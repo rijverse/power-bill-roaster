@@ -30,6 +30,9 @@ const APP_LOGIN_SENDS = 5;
 const APP_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const APP_METER_LOOKUPS = 6;
 const APP_METER_WINDOW_MS = 10 * 60 * 1000;
+// Operator "re-check balance now" politeness cap toward DESCO, keyed per meter.
+const ADMIN_RECHECKS = 10;
+const ADMIN_RECHECK_WINDOW_MS = 10 * 60 * 1000;
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -88,6 +91,24 @@ function payPage(res: http.ServerResponse, status: number, title: string, messag
     `<p class="muted" style="font-size:13px;margin:14px 0 0">You can close this tab and head back to Telegram.</p>` +
     `</div></div>`;
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(pageDoc(title, body));
+}
+
+/** Branded page for an expired or invalid dashboard link (the /dash HTML route). */
+function expiredDashPage(res: http.ServerResponse, config: ServerConfig): void {
+  const title = 'Link expired';
+  const button = config.botUsername
+    ? `<a href="https://t.me/${encodeURIComponent(config.botUsername)}" class="pr-btn blue" style="text-decoration:none;display:inline-block;margin-top:18px">Open Telegram</a>`
+    : '';
+  const body =
+    `<div style="position:relative;z-index:1;min-height:100vh;display:grid;place-items:center;padding:32px 20px;">` +
+    `<div class="pr-card" style="max-width:440px;width:100%;text-align:center;">` +
+    `<div style="display:flex;justify-content:center;margin-bottom:18px">${logo(true)}</div>` +
+    `<h1 style="font-size:22px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin:0 0 8px">${escapeHtml(title)}</h1>` +
+    `<p style="color:var(--text-2);line-height:1.55;margin:0">Dashboard links expire for your security. Open Telegram and send /dashboard to get a fresh one.</p>` +
+    button +
+    `</div></div>`;
+  res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(pageDoc(title, body));
 }
 
@@ -173,6 +194,7 @@ export function createWebServer(
   const loginGlobalLimiter = new RateLimiter(ADMIN_LOGIN_GLOBAL_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const appLoginLimiter = new RateLimiter(APP_LOGIN_SENDS, APP_LOGIN_WINDOW_MS);
   const appMeterLimiter = new RateLimiter(APP_METER_LOOKUPS, APP_METER_WINDOW_MS);
+  const adminRecheckLimiter = new RateLimiter(ADMIN_RECHECKS, ADMIN_RECHECK_WINDOW_MS);
   const secure = (config.publicBaseUrl ?? '').startsWith('https');
 
   return http.createServer((req, res) => {
@@ -187,6 +209,8 @@ export function createWebServer(
           subscriptions,
           loginLimiter,
           loginGlobalLimiter,
+          recheckLimiter: adminRecheckLimiter,
+          scheduler,
         });
         return;
       }
@@ -239,7 +263,13 @@ export function createWebServer(
           config.dashboardSecret
         );
         if (userId === null) {
-          json(res, 401, { error: 'Link expired or invalid. Get a fresh one with /dashboard.' });
+          // /dash/data feeds the SPA, which handles a JSON 401 itself; a person
+          // hitting the /dash link directly gets a branded page, not raw JSON.
+          if (url.pathname === '/dash/data') {
+            json(res, 401, { error: 'Link expired or invalid. Get a fresh one with /dashboard.' });
+          } else {
+            expiredDashPage(res, config);
+          }
           return;
         }
         if (url.pathname === '/dash/data') {

@@ -6,7 +6,7 @@ import { SubscriptionService } from '../../billing';
 import { Db } from '../../db';
 import { ServerConfig } from '../../config';
 import { Mailer } from '../../services/mailer';
-import { signUserSession, signMagicLink, csrfFor } from '../../web/user-auth';
+import { signUserSession, signMagicLink, magicCode, csrfFor } from '../../web/user-auth';
 import { eraseUser } from '../../core/erase-user';
 
 jest.mock('../../core/erase-user', () => ({ eraseUser: jest.fn(async () => undefined) }));
@@ -140,6 +140,37 @@ describe('app - magic-link sign in', () => {
     const { server, base } = await startServer();
     const res = await fetch(`${base}/app/auth?token=garbage`, { redirect: 'manual' });
     expect(res.headers.get('location')).toBe('/app?status=badlink');
+    server.close();
+  });
+
+  it('signs in with the emailed code and sets the session cookie', async () => {
+    const { server, base } = await startServer();
+    const code = magicCode('me@example.com', SECRET);
+    const res = await form('/app/login/code', base, { email: 'me@example.com', code });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/app');
+    expect(res.headers.get('set-cookie') ?? '').toContain('pr_user=');
+    server.close();
+  });
+
+  it('rejects a wrong code', async () => {
+    const { server, base } = await startServer();
+    const res = await form('/app/login/code', base, { email: 'me@example.com', code: '000000' });
+    expect(res.headers.get('location')).toBe('/app?status=badcode');
+    server.close();
+  });
+
+  it('rate-limits repeated code attempts', async () => {
+    const { server, base } = await startServer();
+    let location = '';
+    for (let i = 0; i < 6; i++) {
+      const res = await form('/app/login/code', base, {
+        email: 'guessy@example.com',
+        code: '111111',
+      });
+      location = res.headers.get('location') ?? '';
+    }
+    expect(location).toBe('/app?status=ratelimited');
     server.close();
   });
 });

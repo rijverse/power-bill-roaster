@@ -8,6 +8,7 @@ import { MeterContext } from '../notifications/telegram-templates';
 import { TelegramSender } from '../notifications/dispatcher';
 import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
+import { adminDeepLink } from './admin-link';
 import { logger } from '../logger';
 
 export type AlertSender = TelegramSender;
@@ -41,6 +42,11 @@ export class Scheduler {
   private running = false;
   /** when the last full poll cycle finished null until the first completes. */
   lastCycleCompletedAt: Date | null = null;
+
+  /** true while a poll cycle is in flight (the operator "run now" button checks this). */
+  get isPolling(): boolean {
+    return this.running;
+  }
 
   constructor(
     private db: Db,
@@ -147,7 +153,8 @@ export class Scheduler {
           );
         if (stuck && stuck.count > 0) {
           await this.alarmOperator(
-            `🚨 Outbox worker appears wedged: ${stuck.count} pending alert(s) older than 2 min. The dispatcher should be draining these in seconds.`
+            `🚨 Outbox worker appears wedged: ${stuck.count} pending alert(s) older than 2 min. The dispatcher should be draining these in seconds.`,
+            'logs/failed'
           );
         }
         const [failed] = await this.db
@@ -161,7 +168,8 @@ export class Scheduler {
           );
         if (failed && failed.count > 0) {
           await this.alarmOperator(
-            `🚨 ${failed.count} alert(s) exhausted retries in the last 24h. Check pending_alerts and the channel health (SMS gateway, mailer, Telegram).`
+            `🚨 ${failed.count} alert(s) exhausted retries in the last 24h. Check pending_alerts and the channel health (SMS gateway, mailer, Telegram).`,
+            'logs/failed'
           );
         }
       } catch (error) {
@@ -347,11 +355,15 @@ export class Scheduler {
     }
   }
 
-  private async alarmOperator(text: string): Promise<void> {
-    logger.error(text);
+  private async alarmOperator(text: string, hash?: string): Promise<void> {
+    // A deep link straight to the relevant panel screen turns an alarm into a
+    // one-tap investigation. Skipped when we only have the localhost default.
+    const link = hash ? adminDeepLink(this.config.publicBaseUrl, hash) : '';
+    const message = link ? `${text}\n${link}` : text;
+    logger.error(message);
     if (this.config.adminChatId !== null) {
       try {
-        await this.sender.sendTelegram(this.config.adminChatId, text);
+        await this.sender.sendTelegram(this.config.adminChatId, message);
       } catch (error) {
         logger.error('Failed to notify admin', error);
       }

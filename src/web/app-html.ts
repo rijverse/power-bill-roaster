@@ -11,18 +11,40 @@ import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 const LOGIN_STATUS: Record<string, { cls: string; msg: string }> = {
   sent: {
     cls: 'pr-good',
-    msg: '✅ Check your inbox, we emailed you a sign-in link (good for 20 minutes).',
+    msg: '✅ Check your inbox, we emailed you a sign-in link (good for 20 minutes). Check your spam folder too.',
   },
   bademail: { cls: 'pr-err', msg: "That doesn't look like an email address." },
   ratelimited: { cls: 'pr-err', msg: 'Too many requests. Wait a few minutes and try again.' },
   sendfailed: { cls: 'pr-err', msg: "Couldn't send the email just now. Try again in a bit." },
   badlink: { cls: 'pr-err', msg: 'That sign-in link is invalid or expired. Request a new one.' },
+  badcode: {
+    cls: 'pr-err',
+    msg: 'That code is wrong or expired. Request a new link and try again.',
+  },
+  emailtaken: {
+    cls: 'pr-err',
+    msg: 'That email already has an account. Sign in with it, then use Connect Telegram to link them.',
+  },
   disabled: { cls: 'pr-err', msg: 'Email sign-in is not configured on this server yet.' },
 };
 
 export function loginHtml(mailEnabled: boolean, status: string | null): string {
   const s = status ? LOGIN_STATUS[status] : undefined;
   const notice = s ? `<p class="${s.cls}" style="margin:0 0 14px">${s.msg}</p>` : '';
+
+  // After a link is sent, offer the emailed code as a fallback for people whose
+  // mail app opened the link in a different browser than the one they started in.
+  const codeForm =
+    mailEnabled && status === 'sent'
+      ? `<div style="margin-top:18px; padding-top:18px; border-top:1px solid var(--border-soft)">
+          <label class="pr-label" for="lcemail">Or enter the 6-digit code from the email</label>
+          <form method="POST" action="/app/login/code" style="margin-top:8px">
+            <input class="pr-input" id="lcemail" type="email" name="email" placeholder="you@example.com" required style="margin-bottom:10px">
+            <input class="pr-input mono" id="code" name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" placeholder="123 456" required style="margin-bottom:12px; letter-spacing:0.15em">
+            <button class="pr-btn ghost block" type="submit">Sign in with code</button>
+          </form>
+        </div>`
+      : '';
 
   const emailPane = mailEnabled
     ? `<form method="POST" action="/app/login">
@@ -31,7 +53,7 @@ export function loginHtml(mailEnabled: boolean, status: string | null): string {
         <input class="pr-input" id="email" type="email" name="email" placeholder="you@example.com" required style="margin-bottom:18px">
         <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember, we email you a one-tap link.</p>
         <button class="pr-btn gold block" type="submit">Send sign-in link &amp; brace yourself</button>
-      </form>`
+      </form>${codeForm}`
     : `<div class="pr-err" style="background:rgba(255,82,71,0.08); border:1px solid rgba(255,82,71,0.28); border-radius:11px; padding:14px 16px; min-height:0">Email sign-in is not configured on this server yet. Use the Telegram bot instead.</div>`;
 
   // Default to the Telegram tab (matches the design); if there's an email status
@@ -260,11 +282,14 @@ function addMeterCard() {
 function wireAddMeter() {
   const btn = host.querySelector('#addBtn'); if (!btn) return;
   btn.onclick = async () => {
-    const err = host.querySelector('#addErr'); err.textContent = '';
+    const err = host.querySelector('#addErr'); err.textContent = ''; err.className = 'pr-err';
     try {
-      await post('/meters', { accountNo: host.querySelector('#acct').value.trim(), meterNo: host.querySelector('#meter').value.trim() });
-      await load();
-    } catch (e) { err.textContent = e.message; }
+      const r = await post('/meters', { accountNo: host.querySelector('#acct').value.trim(), meterNo: host.querySelector('#meter').value.trim() });
+      // echo the balance we just read so the add feels confirmed, then refresh
+      err.className = 'pr-good';
+      err.textContent = 'Added ✓ Current balance: ' + fmt(r.balance) + '. Watching it now.';
+      setTimeout(load, 1200);
+    } catch (e) { err.className = 'pr-err'; err.textContent = e.message; }
   };
 }
 
@@ -466,12 +491,24 @@ function renderAlerts() {
   const smsBadge = ch.sms.available ? '' : 'PAID';
   const smsMeta = ch.sms.hasPhone ? esc(ch.sms.address) : ch.sms.available ? 'add a number via the bot' : 'on paid plans';
   const smsRow = channelRow('rgba(52,211,153,0.13)', smsIcon(), 'SMS', smsMeta, 'sms', ch.sms.enabled, !ch.sms.available || !ch.sms.hasPhone, smsBadge, ch.sms.available ? 'Add a phone with /sms in the bot' : 'Upgrade for SMS alerts');
+  const dc = ch.discord || { connected: false, enabled: false, address: null };
+  const dcMeta = dc.connected ? esc(dc.address) : 'free - paste a webhook below';
+  const discordRow = channelRow('rgba(88,101,242,0.15)', discordIcon(), 'Discord', dcMeta, 'discord', dc.enabled, !dc.connected, '', 'Connect a webhook below first');
+  // when this account has no Telegram yet, offer the deep link to connect one
+  const tgConnect = ch.telegram.connectUrl
+    ? '<div style="margin-top:12px"><a href="' + ch.telegram.connectUrl + '" target="_blank" rel="noopener" class="pr-btn blue block" style="text-decoration:none">Connect Telegram</a><p class="mono" style="font-size:11px;color:var(--faint);margin:6px 0 0">Get instant alerts and manage meters from the bot too.</p></div>'
+    : '';
 
   let h = '<div class="pr-grid pr-2col-even">';
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title">Where it roasts you</div><div class="pr-card-sub" style="margin-bottom:14px">Turn off a channel and you\\'re just choosing which way to be surprised by darkness.</div><div class="pr-list">' +
-    emailRow + tgRow + smsRow +
-  '</div><p class="pr-err" id="chErr" style="margin-top:8px"></p></div>';
+    emailRow + tgRow + smsRow + discordRow +
+  '</div>' +
+  '<div style="margin-top:12px"><div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Discord webhook</div>' +
+    '<div class="row" style="gap:8px"><input type="text" id="dcUrl" class="pr-input" placeholder="https://discord.com/api/webhooks/..." style="flex:1;min-width:160px"><button class="pr-btn ghost" id="dcBtn" type="button">' + (dc.connected ? 'Update' : 'Connect') + '</button></div>' +
+    '<p class="mono" id="dcMsg" style="font-size:11.5px;margin-top:6px;color:var(--faint)">We send a test message to confirm it works.</p></div>' +
+  tgConnect +
+  '<p class="pr-err" id="chErr" style="margin-top:8px"></p></div>';
 
   h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Thresholds</span><span class="mono muted" style="font-size:12px">' + esc(clip(m.label, 18)) + '</span></div><div class="pr-card-sub" style="margin-bottom:22px">Defaults are ৳150 / ৳100. Higher if you like a buffer, lower if you like danger.</div>' +
     '<div style="margin-bottom:24px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--gold)"><span style="width:9px;height:9px;border-radius:50%;background:var(--gold)"></span>Warning shot</span><span class="mono" id="loVal" style="font-size:18px;font-weight:700;color:var(--text)">৳' + m.lowThreshold + '</span></div><input type="range" class="pr-range" id="loRange" min="50" max="400" step="10" value="' + m.lowThreshold + '"></div>' +
@@ -498,13 +535,24 @@ function renderAlerts() {
   host.innerHTML = h;
   // channel toggles (real) — email/telegram/sms
   const chErr = host.querySelector('#chErr');
-  ['email', 'telegram', 'sms'].forEach(key => {
+  ['email', 'telegram', 'sms', 'discord'].forEach(key => {
     const el = host.querySelector('#tg-' + key);
     if (el && !el.disabled) el.onchange = async e => {
       chErr.textContent = '';
       try { await post('/alerts/' + key, { enabled: e.target.checked }); } catch (err) { chErr.textContent = err.message; e.target.checked = !e.target.checked; }
     };
   });
+  // Discord: validate + test-send + save the webhook, then reload to reflect state
+  const dcBtn = host.querySelector('#dcBtn');
+  if (dcBtn) dcBtn.onclick = async () => {
+    const url = host.querySelector('#dcUrl').value.trim();
+    const dcMsg = host.querySelector('#dcMsg');
+    dcMsg.style.color = 'var(--faint)';
+    if (!url) { dcMsg.style.color = 'var(--red-soft)'; dcMsg.textContent = 'Paste your webhook URL first.'; return; }
+    dcMsg.textContent = 'Sending a test message...';
+    try { await post('/discord', { url }); dcMsg.textContent = 'Connected - check Discord for the test message.'; await load(); }
+    catch (e) { dcMsg.style.color = 'var(--red-soft)'; dcMsg.textContent = e.message; }
+  };
   // roast preview reflects the selected (savable) tone
   function paintRoast() {
     const r = ROASTS[ROAST];
@@ -542,6 +590,7 @@ function channelRow(bg, icon, name, meta, key, on, disabled, badge, lockTitle) {
 function emailIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 6 10-6"></path></svg>'; }
 function tgIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="#5E83FF"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>'; }
 function smsIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"></rect><path d="M11 18h2"></path></svg>'; }
+function discordIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="#5865F2"><path d="M20.3 4.9A19.8 19.8 0 0 0 15.4 3.4l-.2.5c1.6.5 2.4 1 3.3 1.6a13.4 13.4 0 0 0-11 0c.9-.6 1.8-1.1 3.3-1.6l-.2-.5A19.8 19.8 0 0 0 3.7 4.9C1 8.9.2 12.9.6 16.8a19.9 19.9 0 0 0 6 3l.4-.6c-.9-.3-1.6-.7-2.3-1.2l.6-.4a14 14 0 0 0 11.9 0l.6.4c-.7.5-1.5.9-2.3 1.2l.4.6a19.9 19.9 0 0 0 6-3c.5-4.5-.8-8.5-3.6-11.9zM9 14.3c-.9 0-1.7-.9-1.7-2s.8-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2zm6 0c-.9 0-1.7-.9-1.7-2s.8-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2z"></path></svg>'; }
 
 // ---- screen: billing & recharge -----------------------------------------
 const PROVIDER_LABEL = { bkash: 'bKash', sslcommerz: 'SSLCommerz', sandbox: 'Sandbox', manual: 'Manual', card: 'Card' };

@@ -1,12 +1,30 @@
 import http from 'http';
 import crypto from 'crypto';
-import { eq, and, gte, lt, or, ilike, desc, inArray, count, max, sum, sql } from 'drizzle-orm';
+import {
+  eq,
+  and,
+  gte,
+  lt,
+  or,
+  ilike,
+  desc,
+  inArray,
+  count,
+  max,
+  sum,
+  sql,
+  exists,
+  notExists,
+} from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { SubscriptionService } from '../billing';
+import { Scheduler } from '../core/scheduler';
 import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
+import { enforceMeterCap } from '../core/meter-cap';
 import { isPurchasablePlan, maxMetersFor, smsPerMonthFor, priceBdtFor } from '../core/plans';
+import { getProvider, ProviderUnavailableError } from '../providers';
 import { dashboardData } from './queries';
 import { adminAppHtml, adminLoginHtml } from './admin-html';
 import {
@@ -22,7 +40,6 @@ import {
 const MAX_BODY_BYTES = 16 * 1024;
 const PAGE_SIZE = 25;
 const PAYMENTS_SHOWN = 20;
-const AUDIT_SHOWN = 50;
 
 export interface AdminDeps {
   db: Db;
@@ -32,6 +49,10 @@ export interface AdminDeps {
   loginLimiter: RateLimiter;
   /** aggregate login throttle (backstop against IP-rotating brute force) */
   loginGlobalLimiter: RateLimiter;
+  /** politeness throttle on operator "re-check balance now" actions (keyed by meter) */
+  recheckLimiter: RateLimiter;
+  /** the poll scheduler, so the panel can show cycle health and trigger a run */
+  scheduler: Scheduler;
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
@@ -75,11 +96,18 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-/** Trust the first hop's forwarded address (Caddy) for rate-limit keying, else the socket. */
+// Only honor the forwarded address behind a proxy we control (TRUST_PROXY=1).
+// Exposed directly it's client-spoofable and would defeat the rate-limit keying,
+// so fall back to the socket address.
+const trustProxy = process.env.TRUST_PROXY === '1';
+
 function clientIp(req: http.IncomingMessage): string {
-  const fwd = req.headers['x-forwarded-for'];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
-  return first || req.socket.remoteAddress || 'unknown';
+  if (trustProxy) {
+    const fwd = req.headers['x-forwarded-for'];
+    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress || 'unknown';
 }
 
 // ---- data assembly -------------------------------------------------------
@@ -173,8 +201,8 @@ async function revenue(db: Db) {
   };
 }
 
-/** Delivery logs: real per-send rows from alerts_log + 24h delivery counts. */
-async function deliveries(db: Db) {
+/** Delivery logs: real per-send rows from alerts_log + 24h delivery counts, filterable. */
+async function deliveries(db: Db, status: string, channel: string) {
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const [delivered24h, failed24h] = await Promise.all([
     db.$count(
@@ -186,6 +214,16 @@ async function deliveries(db: Db) {
       and(gte(schema.alertsLog.sentAt, dayAgo), eq(schema.alertsLog.deliveryStatus, 'failed'))
     ),
   ]);
+  const conds = [];
+  if (status === 'sent' || status === 'failed') {
+    conds.push(eq(schema.alertsLog.deliveryStatus, status));
+  }
+  // telegram rides users.telegram_chat_id with no channel row, so match a null type
+  if (channel === 'telegram') {
+    conds.push(sql`${schema.channels.type} is null`);
+  } else if (channel === 'email' || channel === 'sms' || channel === 'discord') {
+    conds.push(eq(schema.channels.type, channel));
+  }
   const rows = await db
     .select({
       sentAt: schema.alertsLog.sentAt,
@@ -196,11 +234,13 @@ async function deliveries(db: Db) {
       chType: schema.channels.type,
       chAddr: schema.channels.address,
       tgChat: schema.users.telegramChatId,
+      userId: schema.users.id,
     })
     .from(schema.alertsLog)
     .innerJoin(schema.meters, eq(schema.alertsLog.meterId, schema.meters.id))
     .innerJoin(schema.users, eq(schema.meters.userId, schema.users.id))
     .leftJoin(schema.channels, eq(schema.alertsLog.channelId, schema.channels.id))
+    .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(schema.alertsLog.sentAt))
     .limit(40);
   return {
@@ -214,20 +254,137 @@ async function deliveries(db: Db) {
       level: r.level,
       action: r.action,
       status: r.deliveryStatus,
+      userId: r.userId,
     })),
   };
 }
 
-async function userList(db: Db, q: string, page: number) {
+/** Readings older than 2x the poll interval mean the meter has effectively gone dark. */
+export function staleCutoff(pollIntervalHours: number, now = new Date()): Date {
+  return new Date(now.getTime() - 2 * pollIntervalHours * 60 * 60 * 1000);
+}
+
+/** Poll-cycle health for the ops card: last completion, whether it's overdue, and if a run is in flight. */
+function pollStatus(scheduler: Scheduler, pollIntervalHours: number) {
+  const last = scheduler.lastCycleCompletedAt;
+  const intervalMs = pollIntervalHours * 60 * 60 * 1000;
+  const overdue = last ? Date.now() - last.getTime() > intervalMs * 2 : false;
+  return {
+    lastCycleAt: last?.toISOString() ?? null,
+    intervalHours: pollIntervalHours,
+    overdue,
+    running: scheduler.isPolling,
+  };
+}
+
+/** Dead-letter outbox rows: alerts stuck in 'failed' over the last 24h. */
+async function deadLetters(db: Db) {
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select()
+    .from(schema.pendingAlerts)
+    .where(
+      and(eq(schema.pendingAlerts.status, 'failed'), gte(schema.pendingAlerts.createdAt, dayAgo))
+    )
+    .orderBy(desc(schema.pendingAlerts.createdAt))
+    .limit(PAGE_SIZE);
+  return {
+    count: rows.length,
+    rows: rows.map(r => ({
+      id: r.id,
+      action: r.action,
+      level: r.level,
+      attempts: r.attempts,
+      lastError: r.lastError,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  };
+}
+
+// Reset failed outbox rows to 'pending' so the dispatcher worker retries them.
+// Uses the worker's own status literal ('pending') - no new states.
+async function requeueDeadLetters(
+  db: Db,
+  id: number | null
+): Promise<{ status: number; body: unknown }> {
+  const target =
+    id === null ? eq(schema.pendingAlerts.status, 'failed') : eq(schema.pendingAlerts.id, id);
+  await db
+    .update(schema.pendingAlerts)
+    .set({ status: 'pending', attempts: 0, nextAttempt: new Date(), lastError: null })
+    .where(and(target, eq(schema.pendingAlerts.status, 'failed')));
+  return { status: 200, body: { ok: true } };
+}
+
+async function userList(
+  db: Db,
+  q: string,
+  page: number,
+  filter: string,
+  pollIntervalHours: number
+) {
   const filters = [];
   if (q) {
     const ors = [ilike(schema.users.email, `%${q}%`)];
+    // operators get handed meter numbers and nicknames from support chats, so
+    // match any of the user's meters too (nickname always, account/meter when numeric)
+    const meterConds = [ilike(schema.meters.nickname, `%${q}%`)];
     if (/^\d+$/.test(q)) {
       ors.push(eq(schema.users.telegramChatId, Number(q)));
+      meterConds.push(
+        ilike(schema.meters.accountNo, `%${q}%`),
+        ilike(schema.meters.meterNo, `%${q}%`)
+      );
     }
+    ors.push(
+      exists(
+        db
+          .select({ x: sql`1` })
+          .from(schema.meters)
+          .where(and(eq(schema.meters.userId, schema.users.id), or(...meterConds)))
+      )
+    );
     filters.push(or(...ors));
   }
+
+  const now = new Date();
+  if (filter === 'paid') {
+    filters.push(sql`${schema.users.plan} <> 'free'`);
+  } else if (filter === 'pastdue') {
+    filters.push(
+      exists(
+        db
+          .select({ x: sql`1` })
+          .from(schema.subscriptions)
+          .where(
+            and(
+              eq(schema.subscriptions.userId, schema.users.id),
+              eq(schema.subscriptions.status, 'active'),
+              lt(schema.subscriptions.currentPeriodEnd, now)
+            )
+          )
+      )
+    );
+  } else if (filter === 'stale') {
+    // stale = no reading within 2x the poll interval (covers "never read" too)
+    filters.push(
+      notExists(
+        db
+          .select({ x: sql`1` })
+          .from(schema.readings)
+          .innerJoin(schema.meters, eq(schema.readings.meterId, schema.meters.id))
+          .where(
+            and(
+              eq(schema.meters.userId, schema.users.id),
+              gte(schema.readings.fetchedAt, staleCutoff(pollIntervalHours, now))
+            )
+          )
+      )
+    );
+  }
+
   const where = filters.length > 0 ? and(...filters) : undefined;
+  const total = await db.$count(schema.users, where);
 
   const rows = await db
     .select()
@@ -268,6 +425,7 @@ async function userList(db: Db, q: string, page: number) {
   return {
     page,
     hasMore,
+    total,
     users: pageRows.map(u => ({
       id: u.id,
       telegramChatId: u.telegramChatId,
@@ -286,6 +444,7 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
     return null;
   }
   const allMeters = await db.select().from(schema.meters).where(eq(schema.meters.userId, userId));
+  const meterIds = allMeters.map(m => m.id);
   const subscription = await subscriptions.activeFor(userId);
   const payments = await db
     .select()
@@ -293,6 +452,13 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
     .where(eq(schema.payments.userId, userId))
     .orderBy(desc(schema.payments.createdAt))
     .limit(PAYMENTS_SHOWN);
+  // what an erase would destroy, so the operator confirms against real counts
+  const [readingCount, paymentCount] = await Promise.all([
+    meterIds.length > 0
+      ? db.$count(schema.readings, inArray(schema.readings.meterId, meterIds))
+      : Promise.resolve(0),
+    db.$count(schema.payments, eq(schema.payments.userId, userId)),
+  ]);
 
   return {
     user: {
@@ -304,6 +470,7 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
       createdAt: user.createdAt.toISOString(),
     },
     limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
+    impact: { meters: allMeters.length, readings: readingCount, payments: paymentCount },
     active: await dashboardData(db, userId),
     pausedMeters: allMeters
       .filter(m => !m.active)
@@ -366,6 +533,22 @@ async function grant(
   return { status: 200, body: { ok: true } };
 }
 
+/** Build the audit `detail` for a grant: plan / days / operator reason, not raw JSON. */
+function grantAuditDetail(bodyText: string): string | null {
+  try {
+    const b = JSON.parse(bodyText || '{}') as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof b.plan === 'string') parts.push(`plan=${b.plan}`);
+    if (typeof b.days === 'number' || typeof b.days === 'string') parts.push(`days=${b.days}`);
+    if (typeof b.reason === 'string' && b.reason.trim()) {
+      parts.push(`reason=${b.reason.trim().slice(0, 150)}`);
+    }
+    return parts.join(' ') || null;
+  } catch {
+    return null;
+  }
+}
+
 async function pause(db: Db, userId: number): Promise<{ status: number; body: unknown }> {
   await db.update(schema.meters).set({ active: false }).where(eq(schema.meters.userId, userId));
   return { status: 200, body: { ok: true } };
@@ -380,12 +563,130 @@ async function erase(db: Db, userId: number): Promise<{ status: number; body: un
   return { status: 200, body: { ok: true } };
 }
 
+/** Reactivate paused meters, oldest first, up to the plan cap; report how many stayed paused. */
+async function resumeAllMeters(db: Db, userId: number): Promise<{ status: number; body: unknown }> {
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!user) {
+    return { status: 404, body: { error: 'No such user.' } };
+  }
+  const all = await db
+    .select()
+    .from(schema.meters)
+    .where(eq(schema.meters.userId, userId))
+    .orderBy(schema.meters.createdAt);
+  const activeCount = all.filter(m => m.active).length;
+  const inactive = all.filter(m => !m.active);
+  const slots = Math.max(0, maxMetersFor(user.plan) - activeCount);
+  const toActivate = inactive.slice(0, slots);
+  if (toActivate.length > 0) {
+    await db
+      .update(schema.meters)
+      .set({ active: true })
+      .where(
+        inArray(
+          schema.meters.id,
+          toActivate.map(m => m.id)
+        )
+      );
+  }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      resumed: toActivate.length,
+      stillPaused: inactive.length - toActivate.length,
+    },
+  };
+}
+
+/** Pause or resume a single meter. A resume is refused if the plan cap is already full. */
+async function setMeterActive(
+  db: Db,
+  userId: number,
+  meterId: number,
+  active: boolean
+): Promise<{ status: number; body: unknown }> {
+  const [meter] = await db
+    .select()
+    .from(schema.meters)
+    .where(and(eq(schema.meters.id, meterId), eq(schema.meters.userId, userId)));
+  if (!meter) {
+    return { status: 404, body: { error: 'No such meter.' } };
+  }
+  if (active && !meter.active) {
+    const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+    const activeCount = await db.$count(
+      schema.meters,
+      and(eq(schema.meters.userId, userId), eq(schema.meters.active, true))
+    );
+    if (user && activeCount >= maxMetersFor(user.plan)) {
+      return {
+        status: 400,
+        body: { error: 'Plan meter cap is full - pause another meter or raise the plan first.' },
+      };
+    }
+  }
+  await db.update(schema.meters).set({ active }).where(eq(schema.meters.id, meterId));
+  return { status: 200, body: { ok: true, active } };
+}
+
+/** Cancel the active subscription, drop to free, and pause meters beyond the free cap. */
+async function revoke(
+  db: Db,
+  subscriptions: SubscriptionService,
+  userId: number
+): Promise<{ status: number; body: unknown }> {
+  const subscription = await subscriptions.activeFor(userId);
+  if (!subscription) {
+    return { status: 400, body: { error: 'No active subscription to revoke.' } };
+  }
+  await db
+    .update(schema.subscriptions)
+    .set({ status: 'cancelled', updatedAt: new Date() })
+    .where(eq(schema.subscriptions.id, subscription.id));
+  await db.update(schema.users).set({ plan: 'free' }).where(eq(schema.users.id, userId));
+  const paused = await enforceMeterCap(db, userId, 'free');
+  return { status: 200, body: { ok: true, pausedMeters: paused } };
+}
+
+/** Poll DESCO for one meter right now, store the reading, and hand back the balance. */
+async function recheckMeter(
+  db: Db,
+  userId: number,
+  meterId: number
+): Promise<{ status: number; body: unknown }> {
+  const [meter] = await db
+    .select()
+    .from(schema.meters)
+    .where(and(eq(schema.meters.id, meterId), eq(schema.meters.userId, userId)));
+  if (!meter) {
+    return { status: 404, body: { error: 'No such meter.' } };
+  }
+  try {
+    const data = await getProvider(meter.provider).getBalance({
+      accountNo: meter.accountNo,
+      meterNo: meter.meterNo,
+    });
+    await db.insert(schema.readings).values({ meterId, balance: data.balance });
+    return { status: 200, body: { ok: true, balance: data.balance } };
+  } catch (error) {
+    // tell "DESCO is down" (retry) apart from "bad numbers" (won't fix itself)
+    if (error instanceof ProviderUnavailableError) {
+      return { status: 502, body: { error: 'DESCO is unavailable right now. Try again shortly.' } };
+    }
+    return {
+      status: 400,
+      body: { error: "DESCO doesn't recognize that account/meter combo." },
+    };
+  }
+}
+
 /** Append a row to the operator action trail. Best-effort: a failed write is
  *  logged but never blocks the action it records. */
 async function recordAudit(
   db: Db,
   action: string,
-  targetUserId: number,
+  targetUserId: number | null,
   ip: string,
   detail: string | null
 ): Promise<void> {
@@ -396,14 +697,18 @@ async function recordAudit(
   }
 }
 
-async function auditList(db: Db) {
+async function auditList(db: Db, page: number) {
   const rows = await db
     .select()
     .from(schema.adminAudit)
     .orderBy(desc(schema.adminAudit.createdAt))
-    .limit(AUDIT_SHOWN);
+    .limit(PAGE_SIZE + 1)
+    .offset(page * PAGE_SIZE);
+  const hasMore = rows.length > PAGE_SIZE;
   return {
-    entries: rows.map(r => ({
+    page,
+    hasMore,
+    entries: rows.slice(0, PAGE_SIZE).map(r => ({
       action: r.action,
       targetUserId: r.targetUserId,
       detail: r.detail,
@@ -425,7 +730,8 @@ export async function handleAdminRequest(
   res: http.ServerResponse,
   deps: AdminDeps
 ): Promise<boolean> {
-  const { db, config, subscriptions, loginLimiter, loginGlobalLimiter } = deps;
+  const { db, config, subscriptions, loginLimiter, loginGlobalLimiter, recheckLimiter, scheduler } =
+    deps;
   const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
   const path = url.pathname;
 
@@ -485,12 +791,54 @@ export async function handleAdminRequest(
     }
 
     if (path === '/admin/api/overview' && method === 'GET') {
-      json(res, 200, await overview(db));
+      const data = await overview(db);
+      json(res, 200, { ...data, poll: pollStatus(scheduler, config.pollIntervalHours) });
+      return true;
+    }
+
+    if (path === '/admin/api/deadletters' && method === 'GET') {
+      json(res, 200, await deadLetters(db));
+      return true;
+    }
+
+    if (path === '/admin/api/poll' && method === 'POST') {
+      const csrfHeader = req.headers['x-csrf-token'];
+      const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
+      if (!verifyCsrf(cookie, csrf, secret)) {
+        json(res, 403, { error: 'Bad or missing CSRF token.' });
+        return true;
+      }
+      if (scheduler.isPolling) {
+        json(res, 200, { ok: true, alreadyRunning: true });
+        return true;
+      }
+      void scheduler.runOnce();
+      await recordAudit(db, 'poll-run', null, clientIp(req), null);
+      json(res, 200, { ok: true, started: true });
+      return true;
+    }
+
+    // requeue-all must be matched before the :id form
+    const requeueMatch = /^\/admin\/api\/alerts\/(requeue-all|(\d+)\/requeue)$/.exec(path);
+    if (requeueMatch && method === 'POST') {
+      const csrfHeader = req.headers['x-csrf-token'];
+      const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
+      if (!verifyCsrf(cookie, csrf, secret)) {
+        json(res, 403, { error: 'Bad or missing CSRF token.' });
+        return true;
+      }
+      const id = requeueMatch[2] ? parseInt(requeueMatch[2]) : null;
+      const result = await requeueDeadLetters(db, id);
+      if (result.status === 200) {
+        await recordAudit(db, 'requeue', null, clientIp(req), id === null ? 'all' : `alert ${id}`);
+      }
+      json(res, result.status, result.body);
       return true;
     }
 
     if (path === '/admin/api/audit' && method === 'GET') {
-      json(res, 200, await auditList(db));
+      const page = Math.max(0, parseInt(url.searchParams.get('page') ?? '0') || 0);
+      json(res, 200, await auditList(db, page));
       return true;
     }
 
@@ -500,18 +848,54 @@ export async function handleAdminRequest(
     }
 
     if (path === '/admin/api/deliveries' && method === 'GET') {
-      json(res, 200, await deliveries(db));
+      const dStatus = url.searchParams.get('status') ?? 'all';
+      const dChannel = url.searchParams.get('channel') ?? 'all';
+      json(res, 200, await deliveries(db, dStatus, dChannel));
       return true;
     }
 
     if (path === '/admin/api/users' && method === 'GET') {
       const q = (url.searchParams.get('q') ?? '').trim().slice(0, 100);
       const page = Math.max(0, parseInt(url.searchParams.get('page') ?? '0') || 0);
-      json(res, 200, await userList(db, q, page));
+      const filter = url.searchParams.get('filter') ?? 'all';
+      json(res, 200, await userList(db, q, page, filter, config.pollIntervalHours));
       return true;
     }
 
-    const userMatch = /^\/admin\/api\/users\/(\d+)(?:\/(grant|pause|erase))?$/.exec(path);
+    // Per-meter actions: pause / resume one meter, or re-poll DESCO for it.
+    const meterMatch = /^\/admin\/api\/users\/(\d+)\/meters\/(\d+)\/(pause|resume|recheck)$/.exec(
+      path
+    );
+    if (meterMatch && method === 'POST') {
+      const csrfHeader = req.headers['x-csrf-token'];
+      const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
+      if (!verifyCsrf(cookie, csrf, secret)) {
+        json(res, 403, { error: 'Bad or missing CSRF token.' });
+        return true;
+      }
+      const userId = parseInt(meterMatch[1]);
+      const meterId = parseInt(meterMatch[2]);
+      const meterAction = meterMatch[3];
+      let result: { status: number; body: unknown };
+      if (meterAction === 'recheck') {
+        if (!recheckLimiter.allow(String(meterId))) {
+          json(res, 429, { error: 'Too many re-checks for this meter. Give it a few minutes.' });
+          return true;
+        }
+        result = await recheckMeter(db, userId, meterId);
+      } else {
+        result = await setMeterActive(db, userId, meterId, meterAction === 'resume');
+      }
+      if (result.status === 200) {
+        await recordAudit(db, `meter-${meterAction}`, userId, clientIp(req), `meter ${meterId}`);
+      }
+      json(res, result.status, result.body);
+      return true;
+    }
+
+    const userMatch = /^\/admin\/api\/users\/(\d+)(?:\/(grant|pause|erase|resume|revoke))?$/.exec(
+      path
+    );
     if (userMatch) {
       const userId = parseInt(userMatch[1]);
       const action = userMatch[2];
@@ -537,12 +921,16 @@ export async function handleAdminRequest(
         let result: { status: number; body: unknown };
         let detail: string | null = null;
         if (action === 'grant') {
-          // read the stream once: grant validates it, the audit row records it
           const bodyText = await readBody(req);
-          detail = bodyText.slice(0, 200);
           result = await grant(db, subscriptions, userId, bodyText);
+          // record a readable detail (plan / days / operator reason), not raw JSON
+          detail = grantAuditDetail(bodyText);
         } else if (action === 'pause') {
           result = await pause(db, userId);
+        } else if (action === 'resume') {
+          result = await resumeAllMeters(db, userId);
+        } else if (action === 'revoke') {
+          result = await revoke(db, subscriptions, userId);
         } else {
           result = await erase(db, userId);
         }

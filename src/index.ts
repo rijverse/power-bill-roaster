@@ -40,7 +40,7 @@ async function main(): Promise<void> {
     logger.info(`Email channel enabled (from ${mailer.from})`);
   }
   const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
-  const bot = createBot(db, config, subscriptions, smsGateway);
+  const bot = createBot(db, config, subscriptions, smsGateway, mailer);
   const telegramSender = {
     sendTelegram: async (chatId: number, text: string, buttons?: AlertButton[][]) => {
       await bot.api.sendMessage(chatId, text, {
@@ -110,13 +110,16 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-  // log and exit non-zero on uncaught errors - docker's restart policy is
-  // better than a wedged process.
+  // An uncaught exception leaves the process in an undefined state - log it and
+  // exit non-zero so docker's restart policy hands us a clean one, rather than
+  // limping along wedged. Rejections we only log; one bad promise usually isn't
+  // grounds to tear down the whole process.
   process.on('unhandledRejection', reason => {
     logger.error('Unhandled promise rejection', reason);
   });
   process.on('uncaughtException', error => {
     logger.error('Uncaught exception', error);
+    process.exit(1);
   });
 
   scheduler.start();
@@ -133,6 +136,8 @@ async function main(): Promise<void> {
       { command: 'threshold', description: 'Set alert levels' },
       { command: 'nickname', description: 'Name your meter' },
       { command: 'sms', description: 'Get alerts by SMS (paid plans)' },
+      { command: 'discord', description: 'Get alerts in Discord (free)' },
+      { command: 'email', description: 'Use the web app with this account' },
       { command: 'plan', description: 'Your current plan' },
       { command: 'upgrade', description: 'More meters, SMS alerts' },
       { command: 'meters', description: 'List your meters' },

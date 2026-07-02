@@ -14,7 +14,15 @@ import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
 import { normalizeTone } from '../core/tone';
 import { SmsGateway } from '../notifications/sms';
+import { isValidDiscordWebhookUrl, sendDiscordAlert } from '../notifications/discord';
+import { Mailer } from '../services/mailer';
+import { mergeAccounts, chooseSurvivor } from '../core/merge-accounts';
+import { signMagicLink, magicCode, signLinkToken, verifyLinkToken } from '../web/user-auth';
+import { sendMagicLink } from '../web/app';
+import { logger, maskWebhookUrl } from '../logger';
 import crypto from 'crypto';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
 const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
@@ -46,6 +54,14 @@ const SMS_OTP_SENDS_PER_HOUR = 3;
 const DESCO_LOOKUPS_PER_WINDOW = 6;
 const DESCO_LOOKUP_WINDOW_MS = 10 * 60 * 1000;
 
+// Discord webhook test sends are free but still worth a light throttle.
+const DISCORD_TESTS_PER_WINDOW = 5;
+const DISCORD_TEST_WINDOW_MS = 10 * 60 * 1000;
+
+// /email link sends go to an inbox, so throttle like magic links.
+const EMAIL_LINKS_PER_WINDOW = 5;
+const EMAIL_LINK_WINDOW_MS = 15 * 60 * 1000;
+
 const HELP_TEXT = [
   '⚡ *Power Roast* - your brutally honest prepaid balance watchdog.',
   '',
@@ -54,6 +70,8 @@ const HELP_TEXT = [
   '/threshold <low> <critical> - set alert levels (e.g. /threshold 200 100)',
   '/nickname <name> - name your meter (e.g. "Flat 3B")',
   '/sms <phone> - get alerts by SMS too (paid plans)',
+  '/discord <url> - get alerts in a Discord channel (free)',
+  '/email <address> - use the web app with this account',
   '/plan - your current plan',
   '/upgrade - more meters, SMS alerts',
   '/dashboard - balance history charts in your browser',
@@ -69,7 +87,7 @@ const HELP_TEXT = [
 const PRIVACY_TEXT = [
   '🔒 *Privacy, the short version*',
   '',
-  '*What I store:* your Telegram chat id, the account & meter numbers you register, and the balance history I read for them.',
+  '*What I store:* your Telegram chat id, the account & meter numbers you register, the balance history I read for them, and any alert channel you add (e.g. a Discord webhook URL - /delete removes it).',
   '*Why:* that is literally the product - I cannot watch a balance without them.',
   '*What I never do:* sell or share your data, message anyone but you, or store DESCO credentials (there are none - balances are read with just the account/meter numbers).',
   '*Leaving:* /stop pauses all monitoring immediately. /delete erases your account and every byte of your data - no questions, no email required.',
@@ -81,7 +99,8 @@ export function createBot(
   db: Db,
   config: ServerConfig,
   subscriptions: SubscriptionService,
-  smsGateway: SmsGateway | null
+  smsGateway: SmsGateway | null,
+  mailer: Mailer | null = null
 ): Bot {
   const bot = new Bot(
     config.telegramBotToken,
@@ -94,6 +113,8 @@ export function createBot(
   const pendingInput = new Map<number, { kind: 'quiet' | 'threshold' }>();
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
   const otpSends = new RateLimiter(SMS_OTP_SENDS_PER_HOUR, 60 * 60 * 1000);
+  const discordTests = new RateLimiter(DISCORD_TESTS_PER_WINDOW, DISCORD_TEST_WINDOW_MS);
+  const emailLinks = new RateLimiter(EMAIL_LINKS_PER_WINDOW, EMAIL_LINK_WINDOW_MS);
   // Free-only launch: paid plans are off until a real gateway is configured.
   const billingLive = config.billing.provider !== 'none';
 
@@ -114,13 +135,89 @@ export function createBot(
       .then(rows => rows.map(r => r.meter));
   }
 
-  function mainMenuKeyboard(): InlineKeyboard {
-    return new InlineKeyboard()
+  // A user with no meters yet gets a prominent register button up top; everyone
+  // else gets the usual quick actions.
+  function mainMenuKeyboard(hasMeters: boolean): InlineKeyboard {
+    const kb = new InlineKeyboard();
+    if (!hasMeters) {
+      kb.text('➕ Register my meter', 'menu:register').row();
+    }
+    return kb
       .text('💰 Balance', 'menu:balance')
       .text('⚙️ Settings', 'menu:settings')
       .row()
       .text('📊 Dashboard', 'menu:dashboard')
       .text('🎟️ Plan', 'menu:plan');
+  }
+
+  // Start the add-a-meter flow, honoring the plan's meter cap. Shared by the
+  // /register command and the menu / raw-number buttons.
+  async function beginRegistration(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
+    const user = await findUser(ctx.chat.id);
+    const meters = await userMeters(ctx.chat.id);
+    const limit = maxMetersFor(user?.plan ?? 'free');
+    if (meters.length >= limit) {
+      await ctx.reply(
+        `The free plan watches ${limit} meter - and you're already using it. Multi-meter support is coming with paid plans. (/stop frees the slot if you want to switch meters.)`
+      );
+      return;
+    }
+    pending.set(ctx.chat.id, { step: 'account' });
+    await ctx.reply(
+      "Send me your DESCO *account number* (it's on your bill or the DESCO portal).",
+      {
+        parse_mode: 'Markdown',
+      }
+    );
+  }
+
+  // Handle a "/start link_<token>" deep link from the web app's Connect Telegram
+  // button: link this chat to that web account, or merge if this chat already has
+  // its own account.
+  async function handleLinkPayload(ctx: Context, token: string): Promise<void> {
+    if (!ctx.chat) return;
+    const webUserId = verifyLinkToken(token, config.dashboardSecret);
+    if (webUserId === null) {
+      await ctx.reply(
+        "That connect link expired or isn't valid. Open the web app and tap Connect Telegram for a fresh one."
+      );
+      return;
+    }
+    const [webUser] = await db.select().from(schema.users).where(eq(schema.users.id, webUserId));
+    if (!webUser) {
+      await ctx.reply(
+        'That account no longer exists. Try Connect Telegram again from the web app.'
+      );
+      return;
+    }
+    const chatId = ctx.chat.id;
+    const botUser = await findUser(chatId);
+    if (!botUser) {
+      await db
+        .update(schema.users)
+        .set({ telegramChatId: chatId })
+        .where(eq(schema.users.id, webUserId));
+      await ctx.reply(
+        "Linked ✅ You'll get alerts here now - this chat and the web app are the same account."
+      );
+      return;
+    }
+    if (botUser.id === webUserId) {
+      await ctx.reply("You're already linked ✅ Same account on Telegram and the web app.");
+      return;
+    }
+    // Two separate accounts for the same person: merge them into one.
+    const webHasSub = (await subscriptions.activeFor(webUserId)) !== null;
+    const botHasSub = (await subscriptions.activeFor(botUser.id)) !== null;
+    const { survivorId, loserId } = chooseSurvivor(
+      { id: webUserId, hasSubscription: webHasSub },
+      { id: botUser.id, hasSubscription: botHasSub }
+    );
+    await mergeAccounts(db, survivorId, loserId, chatId);
+    await ctx.reply(
+      'Linked ✅ Merged your Telegram and web accounts - your meters and plan are all in one place now.'
+    );
   }
 
   // Apply thresholds to every meter the user has (the bot keeps them in sync,
@@ -303,10 +400,24 @@ export function createBot(
   }
 
   bot.command('start', async ctx => {
-    await ctx.reply(
-      `Welcome to Power Roast. I watch your prepaid electricity balance and roast you before the lights go out.\n\n${HELP_TEXT}\n\n_By registering a meter you agree to /privacy._`,
-      { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard() }
-    );
+    const payload = (ctx.match ?? '').trim();
+    if (payload.startsWith('link_')) {
+      await handleLinkPayload(ctx, payload.slice('link_'.length));
+      return;
+    }
+    const meters = await userMeters(ctx.chat.id);
+    if (meters.length === 0) {
+      // brand-new: keep it short and point at the one thing to do next
+      await ctx.reply(
+        "Welcome to Power Roast ⚡ I watch your prepaid electricity balance and roast you before the lights go out.\n\nLet's add your DESCO meter to get started - tap below, or send /register anytime. Full command list: /help.\n\n_By registering a meter you agree to /privacy._",
+        { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard(false) }
+      );
+      return;
+    }
+    await ctx.reply(`Welcome back to Power Roast.\n\n${HELP_TEXT}`, {
+      parse_mode: 'Markdown',
+      reply_markup: mainMenuKeyboard(true),
+    });
   });
 
   bot.command('help', async ctx => {
@@ -318,7 +429,10 @@ export function createBot(
   });
 
   bot.command('menu', async ctx => {
-    await ctx.reply('What do you want to do?', { reply_markup: mainMenuKeyboard() });
+    const meters = await userMeters(ctx.chat.id);
+    await ctx.reply('What do you want to do?', {
+      reply_markup: mainMenuKeyboard(meters.length > 0),
+    });
   });
 
   bot.command('settings', async ctx => {
@@ -326,20 +440,7 @@ export function createBot(
   });
 
   bot.command('register', async ctx => {
-    const user = await findUser(ctx.chat.id);
-    const meters = await userMeters(ctx.chat.id);
-    const limit = maxMetersFor(user?.plan ?? 'free');
-    if (meters.length >= limit) {
-      await ctx.reply(
-        `The free plan watches ${limit} meter - and you're already using it. Multi-meter support is coming with paid plans. (/stop frees the slot if you want to switch meters.)`
-      );
-      return;
-    }
-    pending.set(ctx.chat.id, { step: 'account' });
-    await ctx.reply(
-      "Send me your DESCO *account number* (it's on your bill or the DESCO portal).",
-      { parse_mode: 'Markdown' }
-    );
+    await beginRegistration(ctx);
   });
 
   bot.command('balance', async ctx => {
@@ -519,6 +620,136 @@ export function createBot(
     );
   });
 
+  bot.command('discord', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('Register a meter first with /register.');
+      return;
+    }
+
+    const [existing] = await db
+      .select()
+      .from(schema.channels)
+      .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'discord')));
+
+    const arg = (ctx.match ?? '').trim();
+    const howTo =
+      'In Discord: Server Settings > Integrations > Webhooks > New Webhook > Copy URL, then send /discord <that url>.';
+
+    // no args: show current status
+    if (!arg) {
+      if (existing?.enabled) {
+        await ctx.reply(
+          `Discord alerts are on → ${maskWebhookUrl(existing.address)}\n/discord off to stop, or /discord <url> to point them somewhere else.`
+        );
+      } else if (existing) {
+        await ctx.reply(
+          `Discord alerts are set up but paused. Send /discord <url> to turn them back on.`
+        );
+      } else {
+        await ctx.reply(`No Discord webhook connected yet. ${howTo}`);
+      }
+      return;
+    }
+
+    // /discord off: pause the channel without forgetting the URL
+    if (arg.toLowerCase() === 'off') {
+      if (!existing || !existing.enabled) {
+        await ctx.reply("Discord alerts aren't on, so there's nothing to turn off.");
+        return;
+      }
+      await db
+        .update(schema.channels)
+        .set({ enabled: false })
+        .where(eq(schema.channels.id, existing.id));
+      await ctx.reply('Discord alerts paused. Send /discord <url> to turn them back on.');
+      return;
+    }
+
+    // otherwise treat the arg as a webhook URL: validate, test-send, then save
+    if (!isValidDiscordWebhookUrl(arg)) {
+      await ctx.reply(`That doesn't look like a Discord webhook URL. ${howTo}`);
+      return;
+    }
+    if (!discordTests.allow(ctx.chat.id)) {
+      await ctx.reply('Too many Discord test sends. Give it a few minutes and try again.');
+      return;
+    }
+    try {
+      await sendDiscordAlert(arg, {
+        title: 'Power Roast connected ✅',
+        description:
+          "Low-balance alerts for your meter(s) will land here. If you're reading this, it works.",
+        color: 0x3ba55d,
+      });
+    } catch (error) {
+      logger.error(
+        `Discord test send failed for chat ${ctx.chat.id}`,
+        error instanceof Error ? error.message : error
+      );
+      await ctx.reply(
+        "Couldn't post to that webhook - Discord rejected it. Make sure the URL is current (webhooks can be deleted) and try again."
+      );
+      return;
+    }
+
+    if (existing) {
+      await db
+        .update(schema.channels)
+        .set({ address: arg, verified: true, enabled: true })
+        .where(eq(schema.channels.id, existing.id));
+    } else {
+      await db.insert(schema.channels).values({
+        userId: user.id,
+        type: 'discord',
+        address: arg,
+        verified: true,
+        enabled: true,
+      });
+    }
+    await ctx.reply(
+      "Sent a test message to your Discord ✅ If you saw it, you're all set - alerts will go there too."
+    );
+  });
+
+  bot.command('email', async ctx => {
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.reply('Register a meter first with /register.');
+      return;
+    }
+    if (!mailer) {
+      await ctx.reply("Email sign-in isn't set up on this bot.");
+      return;
+    }
+    const email = (ctx.match ?? '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) {
+      await ctx.reply('Usage: /email you@example.com - links this account to the web app.');
+      return;
+    }
+    if (!emailLinks.allow(ctx.chat.id)) {
+      await ctx.reply('Too many email requests. Try again in a few minutes.');
+      return;
+    }
+    try {
+      await sendMagicLink(
+        mailer,
+        config.publicBaseUrl,
+        email,
+        signMagicLink(email, config.dashboardSecret),
+        magicCode(email, config.dashboardSecret),
+        signLinkToken(user.id, config.dashboardSecret)
+      );
+    } catch (error) {
+      logger.error('Bot /email send failed', error instanceof Error ? error.message : error);
+      await ctx.reply("Couldn't send that email right now. Try again in a bit.");
+      return;
+    }
+    await ctx.reply(
+      `Sent a sign-in link to ${email}. Open it to connect this account to the web app (manage meters in a browser too).`
+    );
+  });
+
   bot.command('nickname', async ctx => {
     const args = (ctx.match ?? '').trim();
     const meters = await userMeters(ctx.chat.id);
@@ -648,6 +879,21 @@ export function createBot(
 
   // ---- inline button callbacks ----
 
+  bot.callbackQuery('menu:register', async ctx => {
+    await ctx.answerCallbackQuery();
+    await beginRegistration(ctx);
+  });
+  // "Yes, register it" after we spot a bare account number - jump straight to
+  // asking for the meter number with the account step already answered.
+  bot.callbackQuery(/^reg:(\d{6,20})$/, async ctx => {
+    await ctx.answerCallbackQuery();
+    if (!ctx.chat) return;
+    pending.set(ctx.chat.id, { step: 'meter', accountNo: ctx.match[1] });
+    await ctx.reply('Great - now send your DESCO *meter number* for that account.', {
+      parse_mode: 'Markdown',
+    });
+  });
+
   bot.callbackQuery('menu:balance', async ctx => {
     await ctx.answerCallbackQuery();
     await showBalance(ctx);
@@ -749,6 +995,61 @@ export function createBot(
         set: { remindersSnoozedUntil: until, updatedAt: new Date() },
       });
     await ctx.answerCallbackQuery("Snoozed reminders for 3 days. I'll still shout if it recovers.");
+  });
+
+  // "Check again" on an alert: re-poll DESCO for that meter on demand.
+  bot.callbackQuery(/^recheck:(\d+)$/, async ctx => {
+    if (!ctx.chat) return;
+    const user = await findUser(ctx.chat.id);
+    if (!user) {
+      await ctx.answerCallbackQuery('Register a meter first.');
+      return;
+    }
+    const meterId = Number(ctx.match[1]);
+    const [meter] = await db
+      .select()
+      .from(schema.meters)
+      .where(and(eq(schema.meters.id, meterId), eq(schema.meters.userId, user.id)));
+    if (!meter) {
+      await ctx.answerCallbackQuery('That meter is not yours.');
+      return;
+    }
+    if (!descoLookups.allow(ctx.chat.id)) {
+      await ctx.answerCallbackQuery(
+        "You've checked plenty - give DESCO a breather and try again in a few minutes."
+      );
+      return;
+    }
+    await ctx.answerCallbackQuery('Checking...');
+    const tone = normalizeTone(user.tonePref);
+    const label = meter.nickname ?? `meter ${meter.meterNo}`;
+    try {
+      const data = await getProvider(meter.provider).getBalance({
+        accountNo: meter.accountNo,
+        meterNo: meter.meterNo,
+      });
+      const bal = data.balance;
+      if (bal >= meter.lowThreshold) {
+        await ctx.reply(
+          tone === 'mild'
+            ? `${label}: ৳${bal.toFixed(2)} now - you're back in the clear.`
+            : `৳${bal.toFixed(2)} now - crisis averted 👏 ${label} lives to bill another day.`
+        );
+      } else {
+        const stillCritical = bal < meter.criticalThreshold;
+        await ctx.reply(
+          tone === 'mild'
+            ? `${label}: still ${stillCritical ? 'critically ' : ''}low at ৳${bal.toFixed(2)}. Worth a top-up.`
+            : `Still ৳${bal.toFixed(2)} on ${label}${stillCritical ? ' - DEFCON 1' : ''}. The meter didn't recharge itself while you tapped a button. Shocking.`
+        );
+      }
+    } catch (error) {
+      await ctx.reply(
+        error instanceof ProviderUnavailableError
+          ? "DESCO isn't answering right now - try again in a few minutes."
+          : `Couldn't read ${label} just now. Try again in a bit.`
+      );
+    }
   });
 
   // plain text drives the registration conversation
@@ -860,6 +1161,18 @@ export function createBot(
 
     const state = pending.get(ctx.chat.id);
     if (!state) {
+      // Someone with no meters pastes a bare account number without /register
+      // first - recognize it and offer a one-tap start instead of a help dump.
+      const text = ctx.message.text.trim();
+      if (/^\d{6,20}$/.test(text)) {
+        const meters = await userMeters(ctx.chat.id);
+        if (meters.length === 0) {
+          await ctx.reply('That looks like a DESCO account number - want me to register it?', {
+            reply_markup: new InlineKeyboard().text('✅ Yes, register it', `reg:${text}`),
+          });
+          return;
+        }
+      }
       await ctx.reply(`Not sure what you mean.\n\n${HELP_TEXT}`, {
         parse_mode: 'Markdown',
       });
@@ -952,7 +1265,10 @@ export function createBot(
         '',
         `I'll check every ${config.pollIntervalHours} hours and roast you below ৳${config.defaultThresholds.low} (full meltdown below ৳${config.defaultThresholds.critical}).`,
         'Tune with /threshold <low> <critical>.',
-      ].join('\n')
+        '',
+        'Want to name this meter? Send `/nickname Flat 3B` (optional).',
+      ].join('\n'),
+      { parse_mode: 'Markdown' }
     );
   });
 

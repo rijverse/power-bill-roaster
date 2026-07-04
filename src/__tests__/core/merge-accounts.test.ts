@@ -80,16 +80,33 @@ describe('partitionMeters', () => {
 });
 
 describe('mergedIdentity', () => {
-  it('keeps the survivor email/plan when it has them', () => {
+  it('keeps the survivor email/discord id/plan when it has them', () => {
     expect(
-      mergedIdentity({ email: 'a@b.com', plan: 'plus' }, { email: 'c@d.com', plan: 'free' })
-    ).toEqual({ email: 'a@b.com', plan: 'plus' });
+      mergedIdentity(
+        { email: 'a@b.com', discordUserId: '111', plan: 'plus' },
+        { email: 'c@d.com', discordUserId: '222', plan: 'free' }
+      )
+    ).toEqual({ email: 'a@b.com', discordUserId: '111', plan: 'plus' });
   });
 
-  it('inherits the loser email and paid plan when the survivor lacks them', () => {
-    // survivor has no email and is free; the loser's paid plan and email survive
+  it('inherits the loser email, discord id, and paid plan when the survivor lacks them', () => {
+    // survivor has no email/discord and is free; the loser's identities and paid plan survive
     expect(
-      mergedIdentity({ email: null, plan: 'free' }, { email: 'c@d.com', plan: 'business' })
-    ).toEqual({ email: 'c@d.com', plan: 'business' });
+      mergedIdentity(
+        { email: null, discordUserId: null, plan: 'free' },
+        { email: 'c@d.com', discordUserId: '222', plan: 'business' }
+      )
+    ).toEqual({ email: 'c@d.com', discordUserId: '222', plan: 'business' });
+  });
+
+  it('never drops a discord identity in a telegram+web merge', () => {
+    // regression: the survivor is a web account, the loser a telegram account
+    // that had already linked Discord - the discord id must carry over
+    expect(
+      mergedIdentity(
+        { email: 'a@b.com', discordUserId: null, plan: 'free' },
+        { email: null, discordUserId: '333', plan: 'free' }
+      ).discordUserId
+    ).toBe('333');
   });
 });

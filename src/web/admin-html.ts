@@ -1,11 +1,13 @@
 // Operator admin panel: the password login screen and the signed-in console.
 // Both share the Power·Roast design system (theme.ts). The console is one
-// document with three client-routed screens (Revenue & health, Users & meters,
-// Delivery logs) that talk to /admin/api/*. Real aggregates, the searchable user
-// table and the per-user detail drawer (grant / pause / erase, balance charts,
-// alerts, payments) are fully wired; metrics the backend doesn't compute yet
-// (MRR / ARPU / churn, per-send delivery logs) are reproduced from the design
-// but clearly marked as samples. Mutations echo the CSRF token from the page.
+// document with four client-routed screens (Revenue & health, Users & meters,
+// Delivery logs, Audit trail) that talk to /admin/api/*. The statCard helper
+// still takes a `sample` flag for cases we haven't wired to the backend yet,
+// but every screen here currently renders live data: aggregates (MRR / ARPU /
+// churn), the searchable user table, the per-user detail drawer (grant /
+// pause / erase, balance charts, alerts, payments), per-send delivery logs,
+// and ops controls (poll now, dead-letter requeue). Mutations echo the CSRF
+// token from the page.
 
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
@@ -40,14 +42,17 @@ const AIC = {
   logs: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"></path><path d="M8 8h8M8 12h8M8 16h5"></path></svg>',
 };
 
-export function adminAppHtml(csrf: string): string {
+export function adminAppHtml(csrf: string, billingLive = true): string {
+  // During a free-only launch there's no money to report, so the landing
+  // screen leads with usage + ops instead of an all-zero revenue board.
+  const homeLabel = billingLive ? 'Revenue &amp; health' : 'Ops &amp; health';
   const body = `<div class="pr-shell">
   <div id="pr-scrim"></div>
   <aside class="pr-sidebar" id="pr-sidebar">
     <div style="display:flex;align-items:center;gap:9px;padding:6px 8px 22px">${logo()} ${ADMIN_BADGE}</div>
     <nav class="pr-nav">
       <div class="pr-nav-label">Operator</div>
-      <button class="pr-navbtn active" type="button" data-screen="revenue">${AIC.revenue}Revenue &amp; health</button>
+      <button class="pr-navbtn active" type="button" data-screen="revenue">${AIC.revenue}${homeLabel}</button>
       <button class="pr-navbtn" type="button" data-screen="users">${AIC.users}Users &amp; meters</button>
       <button class="pr-navbtn" type="button" data-screen="logs">${AIC.logs}Delivery logs</button>
       <button class="pr-navbtn" type="button" data-screen="audit">${AIC.logs}Audit trail</button>
@@ -65,7 +70,7 @@ export function adminAppHtml(csrf: string): string {
   <div class="pr-main">
     <header class="pr-topbar">
       <button id="pr-hamburger" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
-      <div class="titles"><div class="t" id="topTitle">Revenue &amp; health</div><div class="s" id="topSub">operator console, everything is fine, mostly</div></div>
+      <div class="titles"><div class="t" id="topTitle">${homeLabel}</div><div class="s" id="topSub">operator console, everything is fine, mostly</div></div>
       <button class="pr-btn gold" id="refreshBtn" type="button"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B1020" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span>Refresh</span></button>
     </header>
     <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading...</div></div></main>
@@ -74,10 +79,11 @@ export function adminAppHtml(csrf: string): string {
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script>
 const CSRF = ${JSON.stringify(csrf)};
+const BILLING_LIVE = ${JSON.stringify(billingLive)};
 ${CLIENT_HELPERS}
 ${CHART_SCRIPT}
 
-let SCREEN = 'revenue', page = 0, query = '', OVERVIEW = null, HEALTH = null, DETAIL = null, auditPage = 0, filter = 'all', logStatus = 'all', logChannel = 'all';
+let SCREEN = 'revenue', page = 0, query = '', OVERVIEW = null, HEALTH = null, DETAIL = null, auditPage = 0, filter = 'all', logStatus = 'all', logChannel = 'all', logPage = 0;
 let CHARTS = [];
 const host = document.getElementById('host');
 
@@ -104,13 +110,43 @@ async function meterAction(id, meterId, verb) {
   return postAdmin('/users/' + id + '/meters/' + meterId + '/' + verb);
 }
 function clearCharts() { CHARTS.forEach(c => { try { c.destroy(); } catch (e) {} }); CHARTS = []; }
+// Styled stand-in for confirm()/prompt(): resolves true on confirm. With
+// requireText set, the confirm button stays disabled until it's typed exactly.
+function prModal(opts) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(4,8,20,0.6);backdrop-filter:blur(2px);display:grid;place-items:center;padding:20px';
+    ov.innerHTML = '<div class="pr-card" style="max-width:430px;width:100%" role="dialog" aria-modal="true">' +
+      '<div style="font-size:15px;font-weight:800;color:var(--text);margin-bottom:8px">' + esc(opts.title) + '</div>' +
+      '<p class="muted" style="font-size:13px;line-height:1.55;margin:0 0 14px">' + esc(opts.body) + '</p>' +
+      (opts.requireText ? '<input class="pr-input mono" id="prModalInput" placeholder="Type ' + esc(opts.requireText) + ' to confirm" autocomplete="off" style="margin-bottom:12px">' : '') +
+      '<div class="row" style="justify-content:flex-end;gap:8px">' +
+        '<button class="pr-btn ghost" type="button" id="prModalCancel">Cancel</button>' +
+        '<button class="pr-btn ' + (opts.danger ? 'danger' : 'gold') + '" type="button" id="prModalOk"' + (opts.requireText ? ' disabled' : '') + '>' + esc(opts.confirmLabel || 'Confirm') + '</button>' +
+      '</div></div>';
+    document.body.appendChild(ov);
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+    function done(v) { document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); }
+    document.addEventListener('keydown', onKey, true);
+    const ok = ov.querySelector('#prModalOk');
+    const input = ov.querySelector('#prModalInput');
+    ov.querySelector('#prModalCancel').onclick = () => done(false);
+    ov.onclick = e => { if (e.target === ov) done(false); };
+    ok.onclick = () => done(true);
+    if (input) {
+      input.focus();
+      input.oninput = () => { ok.disabled = input.value.trim() !== opts.requireText; };
+      input.onkeydown = e => { if (e.key === 'Enter' && !ok.disabled) done(true); };
+    } else { ok.focus(); }
+  });
+}
 function planPill(plan) { return '<span class="pr-pill ' + (plan === 'free' ? '' : 'low') + '">' + esc(plan) + '</span>'; }
 function copyChip(label, value) { return '<button class="pr-btn ghost sm copyBtn" type="button" data-copy="' + esc(value) + '">' + label + '</button>'; }
 function balanceClass(m) { return m.balance === null ? 'muted' : m.balance < m.criticalThreshold ? 'critical' : m.balance < m.lowThreshold ? 'low' : 'ok'; }
 
 // ---- chrome --------------------------------------------------------------
 const TITLES = {
-  revenue: ['Revenue & health', 'operator console, everything is fine, mostly'],
+  revenue: [BILLING_LIVE ? 'Revenue & health' : 'Ops & health', 'operator console, everything is fine, mostly'],
   users: ['Users & meters', null],
   logs: ['Delivery logs', 'alert delivery, last 24 hours'],
   audit: ['Audit trail', 'every operator action, newest first'],
@@ -158,38 +194,62 @@ function revPayments(payments) {
 }
 function renderRevenue() {
   const o = OVERVIEW || {};
-  const free = Math.max(0, (o.users || 0) - (o.activeSubscriptions || 0));
-  let h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
-    statCard('MRR', fmt(o.mrr ?? 0), 'monthly recurring', '') +
-    statCard('Paid subscribers', String(o.activeSubscriptions ?? 0), free.toLocaleString() + ' on free / self-host', '') +
-    statCard('ARPU', fmt(o.arpu ?? 0), 'per paid / month', '') +
-    statCard('Churn', (o.churnPct ?? 0) + '%', 'last 30 days', (o.churnPct ?? 0) > 5 ? 'red' : 'gold') +
-  '</div>';
-
-  h += '<div class="pr-grid pr-2col">' +
-    '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Monthly recurring revenue</div><div class="mono" style="font-size:12px;color:var(--faint)">last 12 months, collected, BDT</div></div><span class="mono" style="font-size:12px;font-weight:700;color:var(--green)">' + fmt(o.totalPaidBdt ?? 0) + ' all-time</span></div>' +
-      '<div id="mrrChart"><div class="pr-empty" style="padding:48px 0">Loading...</div></div></div>' +
-    '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px">System health</div><div class="pr-list">' +
-      healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : 'n/a', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#6E7790') +
-      healthRow('Alerts sent', 'rolling 24 hours', (o.alerts24h ?? 0) + ' / 24h', '#34D399') +
-      healthRow('Readings stored', 'all-time data points', (o.readings ?? 0).toLocaleString(), '#8FA8FF') +
-      healthRow('Past-due subscriptions', 'active but period ended', String(o.pastDue ?? 0), (o.pastDue ?? 0) > 0 ? '#FF8077' : '#34D399') +
-    '</div></div></div>';
-
   const poll = o.poll || {};
-  h += '<div class="pr-grid pr-2col" style="margin-top:18px">' +
-    '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">Poll cycle</span><button class="pr-btn ghost sm" id="pollBtn" type="button">Run now</button></div><div class="pr-list">' +
-      healthRow('Last completed', poll.lastCycleAt ? relWhen(poll.lastCycleAt) : 'never', poll.overdue ? 'Overdue' : (poll.running ? 'Running' : 'OK'), poll.overdue ? '#FF5247' : (poll.running ? '#FBB024' : '#34D399')) +
-      healthRow('Interval', 'configured', (poll.intervalHours ?? '?') + 'h', '#8FA8FF') +
-    '</div><p class="mono muted" id="pollMsg" style="font-size:12px;margin-top:8px"></p></div>' +
-    '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">Dead letters</span><button class="pr-btn ghost sm" id="requeueAll" type="button">Requeue all</button></div><div id="deadBody"><div class="pr-empty" style="padding:12px 0">Loading...</div></div></div>' +
-  '</div>';
 
-  h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:8px"><span class="pr-card-title">Recent payments</span><span class="mono muted" style="font-size:12px">latest first</span></div>' +
-    '<div id="payFeed"><div class="pr-empty" style="padding:18px 0">Loading...</div></div></div>';
+  const descoRow = healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : 'n/a', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#6E7790');
+  const pollRows =
+    healthRow('Last completed', poll.lastCycleAt ? relWhen(poll.lastCycleAt) : 'never', poll.overdue ? 'Overdue' : (poll.running ? 'Running' : 'OK'), poll.overdue ? '#FF5247' : (poll.running ? '#FBB024' : '#34D399')) +
+    healthRow('Interval', 'configured', (poll.intervalHours ?? '?') + 'h', '#8FA8FF');
+  const deadCard = '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">Dead letters</span><button class="pr-btn ghost sm" id="requeueAll" type="button">Requeue all</button></div><div id="deadBody"><div class="pr-empty" style="padding:12px 0">Loading...</div></div></div>';
+
+  let h;
+  if (BILLING_LIVE) {
+    const free = Math.max(0, (o.users || 0) - (o.activeSubscriptions || 0));
+    h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
+      statCard('MRR', fmt(o.mrr ?? 0), 'monthly recurring', '') +
+      statCard('Paid subscribers', String(o.activeSubscriptions ?? 0), free.toLocaleString() + ' on free / self-host', '') +
+      statCard('ARPU', fmt(o.arpu ?? 0), 'per paid / month', '') +
+      statCard('Churn', (o.churnPct ?? 0) + '%', 'last 30 days', (o.churnPct ?? 0) > 5 ? 'red' : 'gold') +
+    '</div>';
+
+    h += '<div class="pr-grid pr-2col">' +
+      '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:14px"><div><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:3px">Monthly recurring revenue</div><div class="mono" style="font-size:12px;color:var(--faint)">last 12 months, collected, BDT</div></div><span class="mono" style="font-size:12px;font-weight:700;color:var(--green)">' + fmt(o.totalPaidBdt ?? 0) + ' all-time</span></div>' +
+        '<div id="mrrChart"><div class="pr-empty" style="padding:48px 0">Loading...</div></div></div>' +
+      '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px">System health</div><div class="pr-list">' +
+        descoRow +
+        healthRow('Alerts sent', 'rolling 24 hours', (o.alerts24h ?? 0) + ' / 24h', '#34D399') +
+        healthRow('Readings stored', 'all-time data points', (o.readings ?? 0).toLocaleString(), '#8FA8FF') +
+        healthRow('Past-due subscriptions', 'active but period ended', String(o.pastDue ?? 0), (o.pastDue ?? 0) > 0 ? '#FF8077' : '#34D399') +
+      '</div></div></div>';
+
+    h += '<div class="pr-grid pr-2col" style="margin-top:18px">' +
+      '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">Poll cycle</span><button class="pr-btn ghost sm" id="pollBtn" type="button">Run now</button></div><div class="pr-list">' + pollRows +
+      '</div><p class="mono muted" id="pollMsg" style="font-size:12px;margin-top:8px"></p></div>' +
+      deadCard +
+    '</div>';
+
+    h += '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:8px"><span class="pr-card-title">Recent payments</span><span class="mono muted" style="font-size:12px">latest first</span></div>' +
+      '<div id="payFeed"><div class="pr-empty" style="padding:18px 0">Loading...</div></div></div>';
+  } else {
+    // free-only launch: no revenue to stare at - usage stats up top, then one
+    // ops card (health + poll) beside the dead-letter queue.
+    h = '<div class="pr-statrow" style="--cols:4;margin-bottom:18px">' +
+      statCard('Users', (o.users ?? 0).toLocaleString(), '', '') +
+      statCard('Meters tracked', (o.activeMeters ?? 0).toLocaleString(), '', '') +
+      statCard('Alerts sent', String(o.alerts24h ?? 0), 'last 24 hours', 'gold') +
+      statCard('Readings stored', (o.readings ?? 0).toLocaleString(), 'all-time data points', '') +
+    '</div>';
+
+    h += '<div class="pr-grid pr-2col">' +
+      '<div class="pr-card" style="padding:20px"><div class="pr-section-head" style="margin-bottom:12px"><span class="pr-card-title">System health</span><button class="pr-btn ghost sm" id="pollBtn" type="button">Run poll now</button></div><div class="pr-list">' +
+        descoRow + pollRows +
+      '</div><p class="mono muted" id="pollMsg" style="font-size:12px;margin-top:8px"></p></div>' +
+      deadCard +
+    '</div>';
+  }
 
   host.innerHTML = h;
-  getJSON('/revenue').then(rev => {
+  if (BILLING_LIVE) getJSON('/revenue').then(rev => {
     const c = host.querySelector('#mrrChart'); if (c) c.innerHTML = mrrSvg(rev.mrrSeries);
     const f = host.querySelector('#payFeed'); if (f) f.innerHTML = revPayments(rev.payments);
   }).catch(() => {});
@@ -267,7 +327,7 @@ async function loadList() {
       '<div style="display:grid;grid-template-columns:2fr 0.8fr 1.1fr 1fr 1fr;gap:12px;padding:11px 14px;border-bottom:1px solid var(--border-soft)" class="mono"><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">User</span><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">Meters</span><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">Plan</span><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">Last reading</span><span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">Status</span></div>' +
       data.users.map(u => {
         const initial = (u.email || '?').charAt(0).toUpperCase();
-        const handle = u.telegramChatId ? ('chat ' + u.telegramChatId) : 'no telegram';
+        const handle = u.telegramChatId ? ('chat ' + u.telegramChatId) : u.discordUserId ? ('discord ' + u.discordUserId) : 'no chat linked';
         const status = u.plan === 'free' ? '<span class="pr-pill">Free</span>' : '<span class="pr-pill ok">Active</span>';
         return '<div class="pr-rowitem userRow" data-id="' + u.id + '" style="display:grid;grid-template-columns:2fr 0.8fr 1.1fr 1fr 1fr;gap:12px;align-items:center;padding:13px 14px;cursor:pointer">' +
           '<div style="display:flex;align-items:center;gap:11px;min-width:0"><span class="pr-avatar" style="width:30px;height:30px;font-size:12px">' + initial + '</span><div style="min-width:0"><div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(u.email || 'no email') + '</div><div class="mono" style="font-size:11px;color:var(--faint)">' + esc(handle) + '</div></div></div>' +
@@ -300,11 +360,12 @@ async function openDetail(id) {
     '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:10px">' +
       '<div style="display:flex;align-items:center;gap:10px"><span class="pr-card-title">' + esc(u.email || ('Customer #' + u.id)) + '</span>' + planPill(u.plan) + '</div>' +
       '<button class="pr-btn ghost sm" type="button" id="closeDetail">Close</button></div>' +
-      '<p class="muted" style="font-size:13px" title="' + esc(when(u.createdAt)) + '">#' + u.id + ', chat ' + esc(u.telegramChatId ?? 'n/a') + ', joined ' + relWhen(u.createdAt) + ', tone ' + esc(u.tonePref) + '</p>' +
+      '<p class="muted" style="font-size:13px" title="' + esc(when(u.createdAt)) + '">#' + u.id + ', ' + esc([u.telegramChatId != null ? 'chat ' + u.telegramChatId : null, u.discordUserId ? 'discord ' + u.discordUserId : null].filter(Boolean).join(', ') || 'no chat linked') + ', joined ' + relWhen(u.createdAt) + ', tone ' + esc(u.tonePref) + '</p>' +
       // t.me can't deep-link a bot *to* a user, so we offer copy buttons, not links
       '<div class="row" style="gap:6px;margin-top:6px;flex-wrap:wrap">' +
         (u.email ? copyChip('Copy email', u.email) : '') +
         (u.telegramChatId != null ? copyChip('Copy chat id', String(u.telegramChatId)) : '') +
+        (u.discordUserId ? copyChip('Copy discord id', u.discordUserId) : '') +
       '</div>' +
       '<p class="muted" style="font-size:13px;margin-top:8px">Subscription: ' + sub + ', meter cap ' + esc(d.limits.maxMeters) + ', SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
       '<div class="row" style="margin-top:14px;gap:10px;flex-wrap:wrap">' +
@@ -352,7 +413,7 @@ async function openDetail(id) {
     det.appendChild(c);
     const pMsg = c.querySelector('.pMsg');
     c.querySelector('#resumeAll').onclick = async () => {
-      try { const r = await action(u.id, 'resume'); if (r.stillPaused) alert(r.stillPaused + ' meter(s) stayed paused (plan cap full).'); await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
+      try { const r = await action(u.id, 'resume'); if (r.stillPaused) pMsg.textContent = r.stillPaused + ' meter(s) stayed paused (plan cap full).'; await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
     };
     c.querySelectorAll('.pResume').forEach(b => b.onclick = async () => {
       try { await meterAction(u.id, b.dataset.mid, 'resume'); await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
@@ -382,18 +443,18 @@ async function openDetail(id) {
   };
   const revokeBtn = host.querySelector('#revokeBtn');
   if (revokeBtn) revokeBtn.onclick = async () => {
-    if (!confirm('Cancel this customer\\'s plan and drop them to free? Meters beyond the free cap will be paused.')) return;
+    if (!(await prModal({ title: 'Revoke plan', body: 'Cancel this customer\\'s plan and drop them to free? Meters beyond the free cap will be paused.', confirmLabel: 'Revoke plan', danger: true }))) return;
     err.textContent = '';
     try { await action(u.id, 'revoke'); await loadOverview(); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#pauseBtn').onclick = async () => {
-    if (!confirm('Pause monitoring for every meter this customer has?')) return;
+    if (!(await prModal({ title: 'Pause monitoring', body: 'Pause monitoring for every meter this customer has?', confirmLabel: 'Pause all meters' }))) return;
     err.textContent = '';
     try { await action(u.id, 'pause'); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#eraseBtn').onclick = async () => {
     const im = d.impact || { meters: 0, readings: 0, payments: 0 };
-    if (prompt('This ERASES customer #' + u.id + ': ' + im.meters + ' meter(s), ' + im.readings + ' reading(s), ' + im.payments + ' payment(s). No undo. Type ERASE to confirm.') !== 'ERASE') return;
+    if (!(await prModal({ title: 'Erase customer #' + u.id, body: 'This permanently erases ' + im.meters + ' meter(s), ' + im.readings + ' reading(s), and ' + im.payments + ' payment record(s). No undo.', confirmLabel: 'Erase forever', danger: true, requireText: 'ERASE' }))) return;
     err.textContent = '';
     try { await action(u.id, 'erase'); DETAIL = null; det.innerHTML = ''; history.replaceState(null, '', '#users'); await loadOverview(); await loadList(); renderChrome(); } catch (e) { err.textContent = e.message; }
   };
@@ -415,7 +476,7 @@ function deliveryRow(l) {
   const statusPill = l.status === 'sent'
     ? '<span class="pr-pill ok">Delivered</span>'
     : '<span class="pr-pill crit">Failed</span>';
-  const chan = l.channel.charAt(0).toUpperCase() + l.channel.slice(1);
+  const chan = l.channel === 'discord-dm' ? 'Discord DM' : l.channel.charAt(0).toUpperCase() + l.channel.slice(1);
   return '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;align-items:center;padding:13px 22px;border-bottom:1px solid var(--border-soft)">' +
     '<span class="mono" style="font-size:12px;color:var(--muted)">' + date + ' ' + time + '</span>' +
     '<span class="mono" style="font-size:12px;color:var(--text-2)">' + esc(l.meterNo) + '</span>' +
@@ -432,22 +493,25 @@ function renderLogs() {
 
   const sChip = (key, label) => '<button class="pr-btn ' + (logStatus === key ? '' : 'ghost') + ' sm lchip" type="button" data-status="' + key + '">' + label + '</button>';
   const chOpt = (key, label) => '<option value="' + key + '"' + (logChannel === key ? ' selected' : '') + '>' + label + '</option>';
-  h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">latest 40, real</span></div>' +
+  h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">newest first</span></div>' +
     '<div class="row" style="padding:0 22px 12px;gap:8px;flex-wrap:wrap">' + sChip('all', 'All') + sChip('sent', 'Sent') + sChip('failed', 'Failed') +
-      '<select id="chanSel" class="pr-input sm" style="width:auto;min-width:130px">' + chOpt('all', 'All channels') + chOpt('telegram', 'Telegram') + chOpt('email', 'Email') + chOpt('sms', 'SMS') + chOpt('discord', 'Discord') + '</select></div>' +
+      '<select id="chanSel" class="pr-input sm" style="width:auto;min-width:130px">' + chOpt('all', 'All channels') + chOpt('telegram', 'Telegram') + chOpt('email', 'Email') + chOpt('sms', 'SMS') + chOpt('discord', 'Discord webhook') + chOpt('discord-dm', 'Discord DM') + '</select></div>' +
     '<div class="pr-tableshell" style="overflow-x:auto"><div style="min-width:760px">' +
     '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;padding:11px 22px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)" class="mono">' +
     ['Time', 'Meter', 'Recipient', 'Channel', 'Type', 'Status'].map(c => '<span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">' + c + '</span>').join('') + '</div>' +
-    '<div id="logRows"><div class="pr-empty" style="padding:24px 0">Loading...</div></div></div></div></div>';
+    '<div id="logRows"><div class="pr-empty" style="padding:24px 0">Loading...</div></div></div></div>' +
+    '<div class="row" style="padding:12px 22px"><button id="lPrev" class="pr-btn ghost sm" type="button">‹ Prev</button><span id="lPageLabel" class="mono muted" style="font-size:12px"></span><button id="lNext" class="pr-btn ghost sm" type="button">Next ›</button></div></div>';
 
   host.innerHTML = h;
-  host.querySelectorAll('.lchip').forEach(c => c.onclick = () => { logStatus = c.dataset.status; renderLogs(); });
-  host.querySelector('#chanSel').onchange = e => { logChannel = e.target.value; renderLogs(); };
+  host.querySelectorAll('.lchip').forEach(c => c.onclick = () => { logStatus = c.dataset.status; logPage = 0; renderLogs(); });
+  host.querySelector('#chanSel').onchange = e => { logChannel = e.target.value; logPage = 0; renderLogs(); };
+  host.querySelector('#lPrev').onclick = () => { if (logPage > 0) { logPage--; loadDeliveries(); } };
+  host.querySelector('#lNext').onclick = () => { logPage++; loadDeliveries(); };
   loadDeliveries();
 }
 async function loadDeliveries() {
   let d;
-  try { d = await getJSON('/deliveries?status=' + logStatus + '&channel=' + logChannel); }
+  try { d = await getJSON('/deliveries?status=' + logStatus + '&channel=' + logChannel + '&page=' + logPage); }
   catch (e) { const rows = host.querySelector('#logRows'); if (rows) rows.innerHTML = '<div class="pr-empty" style="padding:24px 0">Could not load deliveries.</div>'; return; }
   const total = d.delivered24h + d.failed24h;
   const rate = total > 0 ? Math.round((d.delivered24h / total) * 1000) / 10 + '%' : 'n/a';
@@ -459,9 +523,13 @@ async function loadDeliveries() {
     statCard('Success rate', rate, 'last 24 hours', 'gold');
   const rows = host.querySelector('#logRows');
   if (rows) {
-    rows.innerHTML = d.rows.length ? d.rows.map(deliveryRow).join('') : '<div class="pr-empty" style="padding:24px 0">No matching deliveries.</div>';
+    rows.innerHTML = d.rows.length ? d.rows.map(deliveryRow).join('') : '<div class="pr-empty" style="padding:24px 0">' + (logPage > 0 ? 'No more deliveries.' : 'No matching deliveries.') + '</div>';
     rows.querySelectorAll('.logUser').forEach(a => a.onclick = ev => { ev.preventDefault(); go('user/' + a.dataset.uid); });
   }
+  const lPrev = host.querySelector('#lPrev'), lNext = host.querySelector('#lNext'), lLabel = host.querySelector('#lPageLabel');
+  if (lPrev) lPrev.disabled = logPage === 0;
+  if (lNext) lNext.disabled = !d.hasMore;
+  if (lLabel) lLabel.textContent = 'page ' + (logPage + 1);
 }
 
 // ---- screen: audit trail -------------------------------------------------
@@ -512,6 +580,7 @@ function parseHashClient(h) {
 function applyRoute(r) {
   SCREEN = r.screen; DETAIL = r.detail; query = r.query; logStatus = r.logStatus;
   if (r.screen === 'audit') auditPage = 0;
+  if (r.screen === 'logs') logPage = 0;
   renderChrome(); renderScreen(); // renderUsers opens DETAIL when set
   window.scrollTo(0, 0);
 }

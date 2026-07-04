@@ -52,11 +52,13 @@ CREATE TABLE "readings" (
 CREATE TABLE "users" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"telegram_chat_id" bigint,
+	"discord_user_id" text,
 	"email" text,
 	"tone_pref" text DEFAULT 'roast' NOT NULL,
 	"plan" text DEFAULT 'free' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "users_telegram_chat_id_unique" UNIQUE("telegram_chat_id")
+	CONSTRAINT "users_telegram_chat_id_unique" UNIQUE("telegram_chat_id"),
+	CONSTRAINT "users_discord_user_id_unique" UNIQUE("discord_user_id")
 );
 --> statement-breakpoint
 ALTER TABLE "alert_state" ADD CONSTRAINT "alert_state_meter_id_meters_id_fk" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

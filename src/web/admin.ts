@@ -26,6 +26,7 @@ import { enforceMeterCap } from '../core/meter-cap';
 import { isPurchasablePlan, maxMetersFor, smsPerMonthFor, priceBdtFor } from '../core/plans';
 import { getProvider, ProviderUnavailableError } from '../providers';
 import { dashboardData } from './queries';
+import { maskWebhookUrl } from '../logger';
 import { adminAppHtml, adminLoginHtml } from './admin-html';
 import {
   ADMIN_COOKIE,
@@ -40,6 +41,7 @@ import {
 const MAX_BODY_BYTES = 16 * 1024;
 const PAGE_SIZE = 25;
 const PAYMENTS_SHOWN = 20;
+const DELIVERIES_PAGE = 40;
 
 export interface AdminDeps {
   db: Db;
@@ -201,8 +203,8 @@ async function revenue(db: Db) {
   };
 }
 
-/** Delivery logs: real per-send rows from alerts_log + 24h delivery counts, filterable. */
-async function deliveries(db: Db, status: string, channel: string) {
+/** Delivery logs: real per-send rows from alerts_log + 24h delivery counts, filterable and paged. */
+async function deliveries(db: Db, status: string, channel: string, page: number) {
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const [delivered24h, failed24h] = await Promise.all([
     db.$count(
@@ -221,7 +223,12 @@ async function deliveries(db: Db, status: string, channel: string) {
   // telegram rides users.telegram_chat_id with no channel row, so match a null type
   if (channel === 'telegram') {
     conds.push(sql`${schema.channels.type} is null`);
-  } else if (channel === 'email' || channel === 'sms' || channel === 'discord') {
+  } else if (
+    channel === 'email' ||
+    channel === 'sms' ||
+    channel === 'discord' ||
+    channel === 'discord-dm'
+  ) {
     conds.push(eq(schema.channels.type, channel));
   }
   const rows = await db
@@ -242,15 +249,23 @@ async function deliveries(db: Db, status: string, channel: string) {
     .leftJoin(schema.channels, eq(schema.alertsLog.channelId, schema.channels.id))
     .where(conds.length > 0 ? and(...conds) : undefined)
     .orderBy(desc(schema.alertsLog.sentAt))
-    .limit(40);
+    .limit(DELIVERIES_PAGE + 1)
+    .offset(page * DELIVERIES_PAGE);
+  const hasMore = rows.length > DELIVERIES_PAGE;
   return {
     delivered24h,
     failed24h,
-    rows: rows.map(r => ({
+    page,
+    hasMore,
+    rows: rows.slice(0, DELIVERIES_PAGE).map(r => ({
       sentAt: r.sentAt.toISOString(),
       meterNo: r.meterNo,
       channel: r.chType ?? 'telegram',
-      recipient: r.chAddr ?? (r.tgChat !== null ? `chat ${r.tgChat}` : 'n/a'),
+      // webhook URLs carry a secret token - mask them even for the operator
+      recipient:
+        r.chType === 'discord' && r.chAddr
+          ? maskWebhookUrl(r.chAddr)
+          : (r.chAddr ?? (r.tgChat !== null ? `chat ${r.tgChat}` : 'n/a')),
       level: r.level,
       action: r.action,
       status: r.deliveryStatus,
@@ -331,6 +346,8 @@ async function userList(
     const meterConds = [ilike(schema.meters.nickname, `%${q}%`)];
     if (/^\d+$/.test(q)) {
       ors.push(eq(schema.users.telegramChatId, Number(q)));
+      // discord snowflakes are numeric too (stored as text)
+      ors.push(eq(schema.users.discordUserId, q));
       meterConds.push(
         ilike(schema.meters.accountNo, `%${q}%`),
         ilike(schema.meters.meterNo, `%${q}%`)
@@ -429,6 +446,7 @@ async function userList(
     users: pageRows.map(u => ({
       id: u.id,
       telegramChatId: u.telegramChatId,
+      discordUserId: u.discordUserId,
       email: u.email,
       plan: u.plan,
       createdAt: u.createdAt.toISOString(),
@@ -464,6 +482,7 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
     user: {
       id: user.id,
       telegramChatId: user.telegramChatId,
+      discordUserId: user.discordUserId,
       email: user.email,
       plan: user.plan,
       tonePref: user.tonePref,
@@ -550,6 +569,10 @@ function grantAuditDetail(bodyText: string): string | null {
 }
 
 async function pause(db: Db, userId: number): Promise<{ status: number; body: unknown }> {
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!user) {
+    return { status: 404, body: { error: 'No such user.' } };
+  }
   await db.update(schema.meters).set({ active: false }).where(eq(schema.meters.userId, userId));
   return { status: 200, body: { ok: true } };
 }
@@ -753,7 +776,7 @@ export async function handleAdminRequest(
   // --- auth pages & actions ---
   if (path === '/admin' && method === 'GET') {
     if (authed) {
-      html(res, 200, adminAppHtml(csrfFor(cookie, secret)));
+      html(res, 200, adminAppHtml(csrfFor(cookie, secret), config.billing.provider !== 'none'));
     } else {
       html(res, 200, adminLoginHtml(url.searchParams.has('error')));
     }
@@ -850,7 +873,8 @@ export async function handleAdminRequest(
     if (path === '/admin/api/deliveries' && method === 'GET') {
       const dStatus = url.searchParams.get('status') ?? 'all';
       const dChannel = url.searchParams.get('channel') ?? 'all';
-      json(res, 200, await deliveries(db, dStatus, dChannel));
+      const dPage = Math.max(0, parseInt(url.searchParams.get('page') ?? '0') || 0);
+      json(res, 200, await deliveries(db, dStatus, dChannel, dPage));
       return true;
     }
 

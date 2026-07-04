@@ -18,8 +18,12 @@ export async function eraseUser(db: Db, userId: number): Promise<void> {
       await tx.delete(schema.alertsLog).where(inArray(schema.alertsLog.meterId, meterIds));
       await tx.delete(schema.alertState).where(inArray(schema.alertState.meterId, meterIds));
       await tx.delete(schema.readings).where(inArray(schema.readings.meterId, meterIds));
+      // outbox rows FK both meters and users with no cascade - without this,
+      // erasing any user who ever had an alert queued dies on the constraint
+      await tx.delete(schema.pendingAlerts).where(inArray(schema.pendingAlerts.meterId, meterIds));
       await tx.delete(schema.meters).where(inArray(schema.meters.id, meterIds));
     }
+    await tx.delete(schema.pendingAlerts).where(eq(schema.pendingAlerts.userId, userId));
     await tx.delete(schema.channels).where(eq(schema.channels.userId, userId));
     await tx.delete(schema.subscriptions).where(eq(schema.subscriptions.userId, userId));
     await tx.delete(schema.users).where(eq(schema.users.id, userId));

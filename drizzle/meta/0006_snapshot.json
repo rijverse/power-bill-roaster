@@ -698,6 +698,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "discord_user_id": {
+          "name": "discord_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "email": {
           "name": "email",
           "type": "text",
@@ -764,6 +770,13 @@
           "nullsNotDistinct": false,
           "columns": [
             "telegram_chat_id"
+          ]
+        },
+        "users_discord_user_id_unique": {
+          "name": "users_discord_user_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "discord_user_id"
           ]
         }
       },

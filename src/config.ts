@@ -60,6 +60,18 @@ export interface ServerConfig {
     | { gateway: null }
     | { gateway: 'console' }
     | { gateway: 'bulksmsbd'; bulksmsbd: { apiKey: string; senderId: string; baseUrl: string } };
+  /**
+   * Discord bot (slash commands over the interactions endpoint + DM alerts).
+   * null = the Discord bot is off; the per-user webhook channel still works.
+   */
+  discord: {
+    appId: string;
+    /** hex-encoded ed25519 key from the dev portal; verifies interaction signatures */
+    publicKey: string;
+    botToken: string;
+    /** override the Discord REST root (mock servers). Null = https://discord.com/api/v10 */
+    apiBaseUrl: string | null;
+  } | null;
   billing:
     | { provider: 'none' }
     | { provider: 'sandbox' }
@@ -173,6 +185,34 @@ function getMailConfig(): ServerConfig['mail'] {
   };
 }
 
+// The Discord bot is all-or-nothing, like the email block: a half-filled set
+// is almost certainly a typo, so name what's missing instead of silently
+// running without the bot.
+const DISCORD_BOT_VARS = ['DISCORD_APP_ID', 'DISCORD_PUBLIC_KEY', 'DISCORD_BOT_TOKEN'] as const;
+
+function getDiscordConfig(): ServerConfig['discord'] {
+  const set = DISCORD_BOT_VARS.filter(key => process.env[key]);
+  if (set.length === 0) {
+    return null;
+  }
+  if (set.length < DISCORD_BOT_VARS.length) {
+    const missing = DISCORD_BOT_VARS.filter(key => !process.env[key]);
+    throw new Error(`Incomplete Discord bot config - also set: ${missing.join(', ')}`);
+  }
+  const publicKey = process.env.DISCORD_PUBLIC_KEY!;
+  if (!/^[0-9a-fA-F]{64}$/.test(publicKey)) {
+    throw new Error(
+      'DISCORD_PUBLIC_KEY must be the 64-char hex ed25519 key from the Discord developer portal'
+    );
+  }
+  return {
+    appId: process.env.DISCORD_APP_ID!,
+    publicKey,
+    botToken: process.env.DISCORD_BOT_TOKEN!,
+    apiBaseUrl: process.env.DISCORD_API_BASE_URL || null,
+  };
+}
+
 const REQUIRED_SERVER_ENV_VARS = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN'] as const;
 
 export function getServerConfig(): ServerConfig {
@@ -222,6 +262,7 @@ export function getServerConfig(): ServerConfig {
     // or a mirror; the default is the public DESCO portal.
     rechargeUrl: process.env.RECHARGE_URL || 'https://prepaid.desco.org.bd/',
     sms: getSmsConfig(),
+    discord: getDiscordConfig(),
     billing: getBillingConfig(publicBaseUrl),
   };
 }

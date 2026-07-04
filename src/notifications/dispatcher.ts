@@ -8,7 +8,7 @@ import { renderAlert, MeterContext } from './telegram-templates';
 import { smsAlertText } from './sms-templates';
 import { emailAlert } from './email-templates';
 import { discordAlertEmbed } from './discord-templates';
-import { sendDiscordAlert as postDiscordWebhook } from './discord';
+import { sendDiscordAlert as postDiscordWebhook, DiscordEmbed } from './discord';
 import { SmsGateway } from './sms';
 import { Mailer } from '../services/mailer';
 import { logger, maskEmail, maskPhone, maskWebhookUrl } from '../logger';
@@ -18,6 +18,11 @@ export type AlertButton = { text: string; url: string } | { text: string; callba
 
 export interface TelegramSender {
   sendTelegram(chatId: number, text: string, buttons?: AlertButton[][]): Promise<void>;
+}
+
+/** DMs a Discord user (the Discord bot's REST client in production). */
+export interface DiscordDmSender {
+  sendDm(discordUserId: string, embed: DiscordEmbed): Promise<void>;
 }
 
 // Fallback only - the scheduler always sets ctx.rechargeUrl from config.
@@ -55,7 +60,8 @@ export class Dispatcher {
     private db: Db,
     private telegram: TelegramSender,
     private sms: SmsGateway | null,
-    private mailer: Mailer | null = null
+    private mailer: Mailer | null = null,
+    private discordDm: DiscordDmSender | null = null
   ) {}
 
   async dispatchAlert(
@@ -85,6 +91,9 @@ export class Dispatcher {
       ),
       await this.runChannel('discord', () =>
         this.sendDiscordAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+      ),
+      await this.runChannel('discord-dm', () =>
+        this.sendDiscordDmAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
     ];
     return {
@@ -338,6 +347,68 @@ export class Dispatcher {
       } else {
         failed.push(key);
       }
+    }
+    return { delivered, failed };
+  }
+
+  // The Discord *bot* channel. Same idea as the webhook channel - free, full
+  // action set - but delivery is a DM through the bot instead of a webhook
+  // post. The 'discord-dm' channel row is created verified at registration
+  // (running a slash command proves the user controls that snowflake).
+  // The DM itself can still fail (closed DMs, bot blocked). That's a failed
+  // delivery, the outbox retries it.
+  private async sendDiscordDmAlert(
+    user: schema.User,
+    meter: schema.Meter,
+    action: AlertAction,
+    level: AlertLevel,
+    ctx: MeterContext,
+    tone: Tone,
+    alreadyDelivered: ReadonlySet<string>
+  ): Promise<DispatchResult> {
+    if (!this.discordDm) {
+      return empty();
+    }
+    const embed = discordAlertEmbed(action, ctx, tone);
+    if (!embed) {
+      return empty();
+    }
+    const dmChannels = await this.db
+      .select()
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.userId, user.id),
+          eq(schema.channels.type, 'discord-dm'),
+          eq(schema.channels.enabled, true),
+          eq(schema.channels.verified, true)
+        )
+      );
+    const delivered: string[] = [];
+    const failed: string[] = [];
+    for (const channel of dmChannels) {
+      const key = `discord-dm:${channel.id}`;
+      if (alreadyDelivered.has(key)) {
+        continue; // delivered on a previous attempt - don't resend
+      }
+      let ok = true;
+      try {
+        await this.discordDm.sendDm(channel.address, embed);
+      } catch (error) {
+        ok = false;
+        logger.error(
+          `Discord DM alert failed for meter ${meter.id}`,
+          error instanceof Error ? error.message : error
+        );
+      }
+      await this.logDelivery({
+        meterId: meter.id,
+        channelId: channel.id,
+        level,
+        action,
+        deliveryStatus: ok ? 'sent' : 'failed',
+      });
+      (ok ? delivered : failed).push(key);
     }
     return { delivered, failed };
   }

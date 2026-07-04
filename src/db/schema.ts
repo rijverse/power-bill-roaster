@@ -17,6 +17,9 @@ export const users = pgTable(
   {
     id: serial('id').primaryKey(),
     telegramChatId: bigint('telegram_chat_id', { mode: 'number' }).unique(),
+    // Discord snowflakes are full 64-bit values that overflow JS safe integers,
+    // so unlike telegram_chat_id this is text, not bigint-as-number.
+    discordUserId: text('discord_user_id').unique(),
     email: text('email'),
     tonePref: text('tone_pref').notNull().default('roast'),
     // Quiet hours (local Asia/Dhaka, 0-23). Both null = always-on. During quiet
@@ -101,8 +104,8 @@ export const channels = pgTable('channels', {
   userId: integer('user_id')
     .notNull()
     .references(() => users.id),
-  type: text('type').notNull(), // telegram | email | sms
-  address: text('address').notNull(), // chat id, email address, or phone number
+  type: text('type').notNull(), // telegram | email | sms | discord (webhook) | discord-dm
+  address: text('address').notNull(), // chat id, email, phone, webhook URL, or discord user id
   verified: boolean('verified').notNull().default(false),
   enabled: boolean('enabled').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

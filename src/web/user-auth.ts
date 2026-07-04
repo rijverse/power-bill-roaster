@@ -144,6 +144,36 @@ export function verifyLinkToken(token: string, secret: string, now = Date.now())
   return userId;
 }
 
+// Discord-linking token: proves the sender controls a Discord account (the bot
+// only hands it to that user, ephemerally). Carried in the same Telegram deep
+// link as tg-link tokens; carries the Discord user id (a snowflake string, not
+// one of our account ids) so it works before the Discord side has an account.
+export function signDiscordLinkToken(
+  discordUserId: string,
+  secret: string,
+  expiresAtMs = Date.now() + LINK_TTL_MS
+): string {
+  return sign('discord-link', `${discordUserId}\n${expiresAtMs}`, secret);
+}
+
+/** Returns the Discord user id for a valid, unexpired discord-link token, else null. */
+export function verifyDiscordLinkToken(
+  token: string,
+  secret: string,
+  now = Date.now()
+): string | null {
+  const data = unsign('discord-link', token, secret);
+  if (data === null) {
+    return null;
+  }
+  const [discordUserId, expiresRaw] = data.split('\n');
+  const expiresAtMs = parseInt(expiresRaw);
+  if (!/^\d{5,25}$/.test(discordUserId) || !Number.isFinite(expiresAtMs) || now > expiresAtMs) {
+    return null;
+  }
+  return discordUserId;
+}
+
 /** CSRF token bound to the session cookie (same scheme as the admin panel). */
 export function csrfFor(sessionToken: string, secret: string): string {
   return hmac('user-csrf', sessionToken, secret);

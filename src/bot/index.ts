@@ -17,7 +17,14 @@ import { SmsGateway } from '../notifications/sms';
 import { isValidDiscordWebhookUrl, sendDiscordAlert } from '../notifications/discord';
 import { Mailer } from '../services/mailer';
 import { mergeAccounts, chooseSurvivor } from '../core/merge-accounts';
-import { signMagicLink, magicCode, signLinkToken, verifyLinkToken } from '../web/user-auth';
+import { ensureUser, upsertMeter, applyThresholdsForUser } from '../core/meter-usecases';
+import {
+  signMagicLink,
+  magicCode,
+  signLinkToken,
+  verifyLinkToken,
+  verifyDiscordLinkToken,
+} from '../web/user-auth';
 import { sendMagicLink } from '../web/app';
 import { logger, maskWebhookUrl } from '../logger';
 import crypto from 'crypto';
@@ -175,12 +182,83 @@ export function createBot(
   // Handle a "/start link_<token>" deep link from the web app's Connect Telegram
   // button: link this chat to that web account, or merge if this chat already has
   // its own account.
+  // Link this chat to a Discord identity (from the Discord bot's /telegram
+  // command). Unlike the web flow, the token carries a Discord user id, not an
+  // account id - the Discord side may not have an account yet.
+  async function handleDiscordLinkPayload(ctx: Context, discordUserId: string): Promise<void> {
+    if (!ctx.chat) return;
+    const chatId = ctx.chat.id;
+    const [discordUser] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.discordUserId, discordUserId));
+    const botUser = await findUser(chatId);
+
+    if (discordUser && botUser) {
+      if (discordUser.id === botUser.id) {
+        await ctx.reply("You're already linked ✅ Same account on Telegram and Discord.");
+        return;
+      }
+      const discordHasSub = (await subscriptions.activeFor(discordUser.id)) !== null;
+      const botHasSub = (await subscriptions.activeFor(botUser.id)) !== null;
+      const { survivorId, loserId } = chooseSurvivor(
+        { id: discordUser.id, hasSubscription: discordHasSub },
+        { id: botUser.id, hasSubscription: botHasSub }
+      );
+      await mergeAccounts(db, survivorId, loserId, chatId);
+      await ctx.reply(
+        'Linked ✅ Merged your Telegram and Discord accounts - meters, plan, and alerts are all in one place now.'
+      );
+      return;
+    }
+    if (discordUser) {
+      await db
+        .update(schema.users)
+        .set({ telegramChatId: chatId })
+        .where(eq(schema.users.id, discordUser.id));
+      await ctx.reply(
+        "Linked ✅ You'll get alerts here too - Telegram and Discord are the same account now."
+      );
+      return;
+    }
+    // No Discord-side account yet: stamp the Discord id on this chat's account
+    // (creating it if needed) and open the DM alert channel - the /telegram
+    // command only hands the token to that Discord user, which proves the id.
+    const owner = botUser ?? (await ensureUser(db, { kind: 'telegram', chatId }));
+    await db
+      .update(schema.users)
+      .set({ discordUserId })
+      .where(eq(schema.users.id, owner.id));
+    const [existingDm] = await db
+      .select()
+      .from(schema.channels)
+      .where(
+        and(eq(schema.channels.userId, owner.id), eq(schema.channels.type, 'discord-dm'))
+      );
+    if (!existingDm) {
+      await db.insert(schema.channels).values({
+        userId: owner.id,
+        type: 'discord-dm',
+        address: discordUserId,
+        verified: true,
+      });
+    }
+    await ctx.reply(
+      'Linked ✅ Your Discord is connected - alerts and slash commands work in both apps now.'
+    );
+  }
+
   async function handleLinkPayload(ctx: Context, token: string): Promise<void> {
     if (!ctx.chat) return;
     const webUserId = verifyLinkToken(token, config.dashboardSecret);
     if (webUserId === null) {
+      const discordUserId = verifyDiscordLinkToken(token, config.dashboardSecret);
+      if (discordUserId !== null) {
+        await handleDiscordLinkPayload(ctx, discordUserId);
+        return;
+      }
       await ctx.reply(
-        "That connect link expired or isn't valid. Open the web app and tap Connect Telegram for a fresh one."
+        "That connect link expired or isn't valid. Get a fresh one: Connect Telegram in the web app, or /telegram in the Discord bot."
       );
       return;
     }
@@ -223,14 +301,11 @@ export function createBot(
   // Apply thresholds to every meter the user has (the bot keeps them in sync,
   // mirroring the /threshold command). Returns how many meters were updated.
   async function applyThresholds(chatId: number, low: number, critical: number): Promise<number> {
-    const meters = await userMeters(chatId);
-    for (const meter of meters) {
-      await db
-        .update(schema.meters)
-        .set({ lowThreshold: low, criticalThreshold: critical })
-        .where(eq(schema.meters.id, meter.id));
+    const user = await findUser(chatId);
+    if (!user) {
+      return 0;
     }
-    return meters.length;
+    return applyThresholdsForUser(db, user.id, low, critical);
   }
 
   async function settingsView(
@@ -244,7 +319,7 @@ export function createBot(
     const tone = normalizeTone(user.tonePref);
     const quiet =
       user.quietStart !== null && user.quietEnd !== null
-        ? `${user.quietStart}:00–${user.quietEnd}:00 (Dhaka)`
+        ? `${user.quietStart}:00-${user.quietEnd}:00 (Dhaka)`
         : 'off';
     const thresholds = meters[0]
       ? `৳${meters[0].lowThreshold} / ৳${meters[0].criticalThreshold}`
@@ -265,8 +340,8 @@ export function createBot(
       )
       .row()
       .text('🔕 Quiet off', 'quiet:off')
-      .text('🌙 10pm–7am', 'quiet:22-7')
-      .text('🌙 11pm–6am', 'quiet:23-6')
+      .text('🌙 10pm-7am', 'quiet:22-7')
+      .text('🌙 11pm-6am', 'quiet:23-6')
       .text('✏️ Custom', 'quiet:custom')
       .row()
       .text('⚖️ 150/100', 'thr:150-100')
@@ -929,7 +1004,7 @@ export function createBot(
     pendingInput.set(ctx.chat.id, { kind: 'quiet' });
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      'Send your quiet hours as two numbers (24h, Dhaka time): start then end, e.g. `22 7` for 10pm–7am. Or send `off`.',
+      'Send your quiet hours as two numbers (24h, Dhaka time): start then end, e.g. `22 7` for 10pm-7am. Or send `off`.',
       { parse_mode: 'Markdown' }
     );
   });
@@ -1085,7 +1160,7 @@ export function createBot(
           .set({ quietStart: s, quietEnd: e })
           .where(eq(schema.users.id, user.id));
         await ctx.reply(
-          `Quiet hours set: ${s}:00–${e}:00 (Dhaka). I'll hold non-critical alerts until then.`
+          `Quiet hours set: ${s}:00-${e}:00 (Dhaka). I'll hold non-critical alerts until then.`
         );
         return;
       }
@@ -1223,40 +1298,8 @@ export function createBot(
       return;
     }
 
-    let user = await findUser(ctx.chat.id);
-    if (!user) {
-      [user] = await db.insert(schema.users).values({ telegramChatId: ctx.chat.id }).returning();
-      await db.insert(schema.channels).values({
-        userId: user.id,
-        type: 'telegram',
-        address: String(ctx.chat.id),
-        verified: true,
-      });
-    }
-
-    const [existing] = await db
-      .select()
-      .from(schema.meters)
-      .where(
-        and(
-          eq(schema.meters.userId, user.id),
-          eq(schema.meters.accountNo, accountNo),
-          eq(schema.meters.meterNo, meterNo)
-        )
-      );
-
-    if (existing) {
-      await db.update(schema.meters).set({ active: true }).where(eq(schema.meters.id, existing.id));
-    } else {
-      await db.insert(schema.meters).values({
-        userId: user.id,
-        provider: 'desco',
-        accountNo,
-        meterNo,
-        lowThreshold: config.defaultThresholds.low,
-        criticalThreshold: config.defaultThresholds.critical,
-      });
-    }
+    const user = await ensureUser(db, { kind: 'telegram', chatId: ctx.chat.id });
+    await upsertMeter(db, user.id, accountNo, meterNo, config.defaultThresholds);
 
     pending.delete(ctx.chat.id);
     await ctx.reply(

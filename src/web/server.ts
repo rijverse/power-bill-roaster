@@ -13,6 +13,7 @@ import { handleAppRequest } from './app';
 import { homeHtml } from './home-html';
 import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
+import { handleDiscordInteraction, DiscordInteractionDeps } from '../discord/interactions';
 
 const MAX_BODY_BYTES = 64 * 1024;
 // cap the db ping so a stalled connection doesn't make /health hang past
@@ -187,7 +188,8 @@ export function createWebServer(
   scheduler: Scheduler,
   config: ServerConfig,
   subscriptions: SubscriptionService,
-  mailer: Mailer | null = null
+  mailer: Mailer | null = null,
+  discordInteractions: DiscordInteractionDeps | null = null
 ): http.Server {
   const startedAt = Date.now();
   const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
@@ -224,6 +226,22 @@ export function createWebServer(
           loginLimiter: appLoginLimiter,
           meterLimiter: appMeterLimiter,
         });
+        return;
+      }
+
+      // Discord's interactions endpoint. Signature verification needs the raw
+      // body, so it's read here (with the shared size cap) and passed down.
+      if (url.pathname === '/discord/interactions') {
+        if (!discordInteractions) {
+          res.writeHead(404).end();
+          return;
+        }
+        if (req.method !== 'POST') {
+          res.writeHead(405).end();
+          return;
+        }
+        const rawBody = await readBody(req);
+        await handleDiscordInteraction(req, res, rawBody, discordInteractions);
         return;
       }
 

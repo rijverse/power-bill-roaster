@@ -2,12 +2,17 @@ import { getServerConfig } from './config';
 import { createDb } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
-import { Dispatcher, AlertButton } from './notifications/dispatcher';
+import { Dispatcher, AlertButton, DiscordDmSender } from './notifications/dispatcher';
 import { AlertDispatcherWorker } from './core/alert-dispatcher';
 import { createSmsGateway } from './notifications/sms';
 import { createMailer } from './services/mailer';
 import { createPaymentProvider, SubscriptionService } from './billing';
 import { createWebServer } from './web/server';
+import { DiscordApi } from './discord/api';
+import { createDiscordBot } from './discord/bot';
+import { DISCORD_COMMANDS } from './discord/command-defs';
+import { discordPublicKey } from './discord/verify';
+import { DiscordInteractionDeps } from './discord/interactions';
 import { logger } from './logger';
 import { InlineKeyboard } from 'grammy';
 
@@ -66,7 +71,26 @@ async function main(): Promise<void> {
     );
   };
 
-  const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer);
+  // Discord bot: slash commands land on /discord/interactions, alerts go out
+  // as DMs. Everything stays null when the DISCORD_* vars aren't set.
+  let discordInteractions: DiscordInteractionDeps | null = null;
+  let discordApi: DiscordApi | null = null;
+  let discordDm: DiscordDmSender | null = null;
+  if (config.discord) {
+    const api = new DiscordApi(config.discord.botToken, config.discord.apiBaseUrl ?? undefined);
+    discordApi = api;
+    // one DM route shared by alert dispatch and the bot's register-time test
+    discordDm = { sendDm: (userId, embed) => api.sendDm(userId, { embeds: [embed] }) };
+    discordInteractions = {
+      bot: createDiscordBot(db, config, subscriptions, discordDm),
+      api,
+      appId: config.discord.appId,
+      publicKey: discordPublicKey(config.discord.publicKey),
+    };
+    logger.info('Discord bot enabled (POST /discord/interactions)');
+  }
+
+  const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer, discordDm);
   // outbox drain worker - flips rows to 'sent' / 'failed' and pings admin on
   // dead letters. owns dispatch end-to-end.
   const alertWorker = new AlertDispatcherWorker({
@@ -77,7 +101,14 @@ async function main(): Promise<void> {
   });
   const scheduler = new Scheduler(db, pool, telegramSender, config, subscriptions);
 
-  const healthServer = createWebServer(db, scheduler, config, subscriptions, mailer);
+  const healthServer = createWebServer(
+    db,
+    scheduler,
+    config,
+    subscriptions,
+    mailer,
+    discordInteractions
+  );
   healthServer.listen(config.port, () => {
     logger.info(`Web server on :${config.port} (/health, /dash, /app, /admin, /pay)`);
   });
@@ -148,6 +179,17 @@ async function main(): Promise<void> {
     ]);
   } catch (error) {
     logger.warn('setMyCommands failed (fine in mock mode)', error);
+  }
+
+  // Discord's equivalent of setMyCommands: bulk-overwrite the global slash
+  // commands. Idempotent, so every boot converges on command-defs.ts.
+  if (discordApi && config.discord) {
+    try {
+      await discordApi.setCommands(config.discord.appId, DISCORD_COMMANDS);
+      logger.info('Discord slash commands registered');
+    } catch (error) {
+      logger.warn('Registering Discord slash commands failed', error);
+    }
   }
 
   logger.info('Starting Telegram bot (long polling)…');

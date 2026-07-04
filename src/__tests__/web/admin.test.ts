@@ -43,6 +43,7 @@ function startServer(opts: Opts = {}) {
     publicBaseUrl: 'http://localhost',
     adminPassword: opts.adminPassword === undefined ? PASSWORD : opts.adminPassword,
     adminSessionSecret: SECRET,
+    billing: { provider: 'none' },
   } as unknown as ServerConfig;
 
   const server = createWebServer(db, scheduler, config, subscriptions);

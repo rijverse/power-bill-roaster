@@ -35,13 +35,14 @@ export function partitionMeters(
   return { dupIds, moveIds };
 }
 
-/** The survivor's post-merge email and plan: keep its own, else inherit the loser's (so a paid plan / email survives). */
+/** The survivor's post-merge identity: keep its own email/discord id, else inherit the loser's, and keep whichever plan is paid - so no login or paid plan is lost in a merge. */
 export function mergedIdentity(
-  survivor: { email: string | null; plan: string },
-  loser: { email: string | null; plan: string }
-): { email: string | null; plan: string } {
+  survivor: { email: string | null; discordUserId: string | null; plan: string },
+  loser: { email: string | null; discordUserId: string | null; plan: string }
+): { email: string | null; discordUserId: string | null; plan: string } {
   return {
     email: survivor.email ?? loser.email,
+    discordUserId: survivor.discordUserId ?? loser.discordUserId,
     plan: survivor.plan !== 'free' ? survivor.plan : loser.plan,
   };
 }
@@ -107,13 +108,13 @@ export async function mergeAccounts(
       .set({ userId: survivorId })
       .where(eq(schema.pendingAlerts.userId, loserId));
 
-    const { email, plan } = mergedIdentity(survivor, loser);
-    // Delete the loser first so its telegram_chat_id / lower(email) uniques are
-    // free before we stamp them onto the survivor.
+    const { email, discordUserId, plan } = mergedIdentity(survivor, loser);
+    // Delete the loser first so its telegram_chat_id / discord_user_id /
+    // lower(email) uniques are free before we stamp them onto the survivor.
     await tx.delete(schema.users).where(eq(schema.users.id, loserId));
     await tx
       .update(schema.users)
-      .set({ telegramChatId, email, plan })
+      .set({ telegramChatId, discordUserId, email, plan })
       .where(eq(schema.users.id, survivorId));
     return plan;
   });

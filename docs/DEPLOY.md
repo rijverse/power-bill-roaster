@@ -57,7 +57,7 @@ Optional features (see `.env.example` for the full reference):
 - **Billing**: `BILLING_PROVIDER` defaults to `none` - paid plans are off and
   `/upgrade` replies "coming soon" (the free-only launch default). `bkash` and
   `sslcommerz` are live gateways; `sandbox` auto-approves upgrades for free and is
-  for dev only. See [Billing](#7-billing-paid-plans).
+  for dev only. See [Billing](#8-billing-paid-plans).
 - **DESCO upstream TLS**: `DESCO_TLS_INSECURE=1` skips certificate verification
   on calls to `prepaid.desco.org.bd` only. Leave unset in production unless
   DESCO's certificate chain breaks; the bypass is scoped to the DESCO client.
@@ -178,7 +178,61 @@ channel webhook URL into `/discord <url>` in the bot (or the web app's Alerts
 screen); the app validates it, fires a test message, and stores the URL against
 their account. Deleting the account (or `/discord off`) removes it.
 
-## 7. Billing (paid plans)
+## 7. Discord bot (optional)
+
+The same product as the Telegram bot, on Discord: users run slash commands
+(`/register`, `/balance`, `/threshold`, …) and get their alerts as DMs from the
+bot. It's off until the three `DISCORD_*` variables are set. The per-user
+webhook channel (`/discord` in Telegram, `/webhook` in Discord) works with or
+without it.
+
+Setup, once:
+
+1. Create an app at <https://discord.com/developers/applications>. From
+   **General Information**, copy the **Application ID** and **Public Key**;
+   from **Bot**, copy the **token**. Put them in `.env`:
+
+   ```env
+   DISCORD_APP_ID=...
+   DISCORD_PUBLIC_KEY=...
+   DISCORD_BOT_TOKEN=...
+   ```
+
+2. Restart the app. It bulk-registers the slash-command set at boot (watch for
+   `Discord slash commands registered` in the logs; the set lives in
+   `src/discord/command-defs.ts`).
+
+3. Back in the portal, set **General Information → Interactions Endpoint URL**
+   to `https://<your PUBLIC_BASE_URL host>/discord/interactions`. Discord
+   immediately probes it with signed (and deliberately mis-signed) requests, so
+   the app must already be running and reachable over HTTPS - do this after
+   step 2, with the section-4 Caddy setup in place. The endpoint rejects
+   anything that fails ed25519 signature verification.
+
+4. Generate an invite from **Installation** (or OAuth2 URL generator) with the
+   `bot` + `applications.commands` scopes - no bot permissions are needed
+   beyond DMs. Users invite it to a server (or install it) and run `/register`.
+
+Operational notes:
+
+- **DM delivery can fail** for users who block DMs from server members. The
+  bot test-DMs on `/register` and warns right there (pointing at `/webhook` as
+  the fallback); if it fails later anyway, the outbox marks the delivery
+  failed and retries like any other channel.
+- **One account across platforms**: `/telegram` in Discord replies with a
+  `t.me/<bot>?start=link_...` deep link (set `BOT_USERNAME` so it renders as a
+  tappable link). Opening it connects or merges the accounts; meters, plan,
+  and alert channels all carry over. The web app's Connect Telegram flow
+  chains into the same account.
+- The bot **never reads messages** - it only receives slash-command
+  interactions on the HTTPS endpoint, so there's no gateway connection to
+  babysit and no privileged intents to request.
+- **Local dev:** Discord must reach the endpoint, so use a tunnel
+  (`cloudflared tunnel --url http://localhost:3000`) and point the portal at
+  the tunnel URL, or just test through the unit suite - the endpoint,
+  signature check, and commands are all covered.
+
+## 8. Billing (paid plans)
 
 `BILLING_PROVIDER=none` (default) keeps paid plans off - `/upgrade` replies
 "coming soon", so you can launch free-only without a merchant account. Switch to
@@ -227,7 +281,7 @@ Requirements:
 
 Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment.
 
-## 8. Operations runbook
+## 9. Operations runbook
 
 - **App won't start with "Missing required environment variables"**: set
   `DATABASE_URL` and `TELEGRAM_BOT_TOKEN` (server mode) or the seven

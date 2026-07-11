@@ -1,5 +1,4 @@
-import http from 'http';
-import { AddressInfo } from 'net';
+import { listen, closeServers } from '../helpers/http-server';
 import { createWebServer } from '../../web/server';
 import { Scheduler } from '../../core/scheduler';
 import { SubscriptionService } from '../../billing';
@@ -23,7 +22,7 @@ interface Opts {
   user?: { id: number } | null;
 }
 
-function startServer(opts: Opts = {}) {
+async function startServer(opts: Opts = {}) {
   const subscriptions = {
     grant: jest.fn(async () => undefined),
     activeFor: jest.fn(async () => null),
@@ -47,60 +46,47 @@ function startServer(opts: Opts = {}) {
   } as unknown as ServerConfig;
 
   const server = createWebServer(db, scheduler, config, subscriptions);
-  return new Promise<{
-    server: http.Server;
-    base: string;
-    subscriptions: SubscriptionService;
-    insert: jest.Mock;
-  }>(resolve => {
-    server.listen(0, () => {
-      const { port } = server.address() as AddressInfo;
-      resolve({ server, base: `http://127.0.0.1:${port}`, subscriptions, insert });
-    });
-  });
+  return { base: await listen(server), subscriptions, insert };
 }
 
+afterEach(closeServers);
 afterEach(() => jest.clearAllMocks());
 
 describe('admin panel - access control', () => {
   it('is a 404 entirely when no ADMIN_PASSWORD is set', async () => {
-    const { server, base } = await startServer({ adminPassword: null });
+    const { base } = await startServer({ adminPassword: null });
     const res = await fetch(`${base}/admin`);
     expect(res.status).toBe(404);
     const api = await fetch(`${base}/admin/api/overview`);
     expect(api.status).toBe(404);
-    server.close();
   });
 
   it('serves the login page when signed out', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin`);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Operator sign-in');
-    server.close();
   });
 
   it('serves the app shell when the session cookie is valid', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin`, { headers: { Cookie: COOKIE } });
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain('Power');
     expect(body).toContain('/admin/api');
-    server.close();
   });
 
   it('rejects /admin/api/* without a session (401)', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin/api/overview`);
     expect(res.status).toBe(401);
-    server.close();
   });
 });
 
 describe('admin panel - login', () => {
   it('rejects the wrong password and sets no cookie', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -110,11 +96,10 @@ describe('admin panel - login', () => {
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/admin?error=1');
     expect(res.headers.get('set-cookie')).toBeNull();
-    server.close();
   });
 
   it('accepts the right password and sets a hardened cookie', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -127,11 +112,10 @@ describe('admin panel - login', () => {
     expect(setCookie).toContain('pr_admin=');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('SameSite=Strict');
-    server.close();
   });
 
   it('rate-limits brute-force login attempts', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const attempt = () =>
       fetch(`${base}/admin/login`, {
         method: 'POST',
@@ -144,35 +128,32 @@ describe('admin panel - login', () => {
       last = (await attempt()).status;
     }
     expect(last).toBe(429);
-    server.close();
   });
 });
 
 describe('admin panel - actions', () => {
   it('refuses a mutating POST without the CSRF token (403)', async () => {
-    const { server, base, subscriptions } = await startServer();
+    const { base, subscriptions } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/pause`, {
       method: 'POST',
       headers: { Cookie: COOKIE },
     });
     expect(res.status).toBe(403);
     expect(subscriptions.grant).not.toHaveBeenCalled();
-    server.close();
   });
 
   it('pauses a customer with a valid session + CSRF', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/pause`, {
       method: 'POST',
       headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF },
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    server.close();
   });
 
   it('grants a plan through the subscription service', async () => {
-    const { server, base, subscriptions } = await startServer();
+    const { base, subscriptions } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/grant`, {
       method: 'POST',
       headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF, 'Content-Type': 'application/json' },
@@ -180,11 +161,10 @@ describe('admin panel - actions', () => {
     });
     expect(res.status).toBe(200);
     expect(subscriptions.grant).toHaveBeenCalledWith(7, 'plus', 30);
-    server.close();
   });
 
   it('rejects an unknown plan on grant (400)', async () => {
-    const { server, base, subscriptions } = await startServer();
+    const { base, subscriptions } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/grant`, {
       method: 'POST',
       headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF, 'Content-Type': 'application/json' },
@@ -192,39 +172,35 @@ describe('admin panel - actions', () => {
     });
     expect(res.status).toBe(400);
     expect(subscriptions.grant).not.toHaveBeenCalled();
-    server.close();
   });
 
   it('erases a customer through eraseUser', async () => {
-    const { server, base } = await startServer();
+    const { base } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/erase`, {
       method: 'POST',
       headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF },
     });
     expect(res.status).toBe(200);
     expect(eraseUser as jest.Mock).toHaveBeenCalledWith(expect.anything(), 7);
-    server.close();
   });
 
   it('writes an audit row when an action succeeds', async () => {
-    const { server, base, insert } = await startServer();
+    const { base, insert } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/pause`, {
       method: 'POST',
       headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF },
     });
     expect(res.status).toBe(200);
     expect(insert).toHaveBeenCalled();
-    server.close();
   });
 
   it('writes no audit row when the CSRF check fails', async () => {
-    const { server, base, insert } = await startServer();
+    const { base, insert } = await startServer();
     const res = await fetch(`${base}/admin/api/users/7/pause`, {
       method: 'POST',
       headers: { Cookie: COOKIE },
     });
     expect(res.status).toBe(403);
     expect(insert).not.toHaveBeenCalled();
-    server.close();
   });
 });

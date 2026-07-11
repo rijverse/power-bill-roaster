@@ -1,5 +1,4 @@
-import http from 'http';
-import { AddressInfo } from 'net';
+import { listen, closeServers } from '../helpers/http-server';
 import { createWebServer } from '../../web/server';
 import { Scheduler } from '../../core/scheduler';
 import { SubscriptionService } from '../../billing';
@@ -43,7 +42,7 @@ function q(rows: unknown[]) {
   return b;
 }
 
-function startServer(state: State) {
+async function startServer(state: State) {
   const inserts: { table: unknown; values: unknown }[] = [];
   const updates: { values: unknown }[] = [];
   const meters = state.meters ?? [];
@@ -72,17 +71,7 @@ function startServer(state: State) {
     adminSessionSecret: SECRET,
   } as unknown as ServerConfig;
   const server = createWebServer(db, scheduler, config, subscriptions);
-  return new Promise<{
-    server: http.Server;
-    base: string;
-    inserts: typeof inserts;
-    updates: typeof updates;
-  }>(resolve => {
-    server.listen(0, () => {
-      const { port } = server.address() as AddressInfo;
-      resolve({ server, base: `http://127.0.0.1:${port}`, inserts, updates });
-    });
-  });
+  return { base: await listen(server), inserts, updates };
 }
 
 function post(base: string, path: string, body?: unknown) {
@@ -101,52 +90,42 @@ const meter = (id: number, active: boolean) => ({
   meterNo: 'M' + id,
 });
 
+afterEach(closeServers);
+
 describe('admin resume', () => {
   it('resumes oldest-first up to the plan cap and reports the rest paused', async () => {
-    const { server, base } = await startServer({
+    const { base } = await startServer({
       user: { id: 7, plan: 'free' },
       meters: [meter(1, false), meter(2, false), meter(3, false)],
     });
-    try {
-      const r = (await (await post(base, '/admin/api/users/7/resume')).json()) as {
-        resumed: number;
-        stillPaused: number;
-      };
-      expect(r.resumed).toBe(1); // free cap is 1, nothing active yet
-      expect(r.stillPaused).toBe(2);
-    } finally {
-      server.close();
-    }
+    const r = (await (await post(base, '/admin/api/users/7/resume')).json()) as {
+      resumed: number;
+      stillPaused: number;
+    };
+    expect(r.resumed).toBe(1); // free cap is 1, nothing active yet
+    expect(r.stillPaused).toBe(2);
   });
 });
 
 describe('admin revoke', () => {
   it('downgrades, pauses excess meters, and writes an audit row', async () => {
-    const { server, base, inserts } = await startServer({
+    const { base, inserts } = await startServer({
       user: { id: 7, plan: 'plus' },
       meters: [meter(1, true), meter(2, true)],
       activeSub: { id: 5, plan: 'plus' },
     });
-    try {
-      const r = (await (await post(base, '/admin/api/users/7/revoke')).json()) as {
-        pausedMeters: number;
-      };
-      expect(r.pausedMeters).toBe(1); // free cap 1, two active -> one paused
-      const audit = inserts.find(i => i.table === schema.adminAudit);
-      expect((audit?.values as { action: string }).action).toBe('revoke');
-    } finally {
-      server.close();
-    }
+    const r = (await (await post(base, '/admin/api/users/7/revoke')).json()) as {
+      pausedMeters: number;
+    };
+    expect(r.pausedMeters).toBe(1); // free cap 1, two active -> one paused
+    const audit = inserts.find(i => i.table === schema.adminAudit);
+    expect((audit?.values as { action: string }).action).toBe('revoke');
   });
 
   it('refuses when there is no active subscription', async () => {
-    const { server, base } = await startServer({ user: { id: 7, plan: 'free' }, activeSub: null });
-    try {
-      const res = await post(base, '/admin/api/users/7/revoke');
-      expect(res.status).toBe(400);
-    } finally {
-      server.close();
-    }
+    const { base } = await startServer({ user: { id: 7, plan: 'free' }, activeSub: null });
+    const res = await post(base, '/admin/api/users/7/revoke');
+    expect(res.status).toBe(400);
   });
 });
 
@@ -155,77 +134,61 @@ describe('admin re-check', () => {
 
   it('stores a fresh reading and returns the balance', async () => {
     mockGetProvider.mockReturnValue({ getBalance: async () => ({ balance: 500 }) });
-    const { server, base, inserts } = await startServer({
+    const { base, inserts } = await startServer({
       user: { id: 7, plan: 'free' },
       meters: [meter(1, true)],
     });
-    try {
-      const r = (await (await post(base, '/admin/api/users/7/meters/1/recheck')).json()) as {
-        balance: number;
-      };
-      expect(r.balance).toBe(500);
-      expect(inserts.some(i => i.table === schema.readings)).toBe(true);
-    } finally {
-      server.close();
-    }
+    const r = (await (await post(base, '/admin/api/users/7/meters/1/recheck')).json()) as {
+      balance: number;
+    };
+    expect(r.balance).toBe(500);
+    expect(inserts.some(i => i.table === schema.readings)).toBe(true);
   });
 
   it('distinguishes DESCO-down (502) from bad numbers (400)', async () => {
-    const { server, base } = await startServer({
+    const { base } = await startServer({
       user: { id: 7, plan: 'free' },
       meters: [meter(1, true)],
     });
-    try {
-      mockGetProvider.mockReturnValue({
-        getBalance: async () => {
-          throw new ProviderUnavailableError('down');
-        },
-      });
-      expect((await post(base, '/admin/api/users/7/meters/1/recheck')).status).toBe(502);
-      mockGetProvider.mockReturnValue({
-        getBalance: async () => {
-          throw new Error('bad numbers');
-        },
-      });
-      expect((await post(base, '/admin/api/users/7/meters/1/recheck')).status).toBe(400);
-    } finally {
-      server.close();
-    }
+    mockGetProvider.mockReturnValue({
+      getBalance: async () => {
+        throw new ProviderUnavailableError('down');
+      },
+    });
+    expect((await post(base, '/admin/api/users/7/meters/1/recheck')).status).toBe(502);
+    mockGetProvider.mockReturnValue({
+      getBalance: async () => {
+        throw new Error('bad numbers');
+      },
+    });
+    expect((await post(base, '/admin/api/users/7/meters/1/recheck')).status).toBe(400);
   });
 
   it('rate-limits repeated re-checks of a meter', async () => {
     mockGetProvider.mockReturnValue({ getBalance: async () => ({ balance: 1 }) });
-    const { server, base } = await startServer({
+    const { base } = await startServer({
       user: { id: 7, plan: 'free' },
       meters: [meter(1, true)],
     });
-    try {
-      let last = 200;
-      for (let i = 0; i < 11; i++) {
-        last = (await post(base, '/admin/api/users/7/meters/1/recheck')).status;
-      }
-      expect(last).toBe(429); // cap is 10 per window
-    } finally {
-      server.close();
+    let last = 200;
+    for (let i = 0; i < 11; i++) {
+      last = (await post(base, '/admin/api/users/7/meters/1/recheck')).status;
     }
+    expect(last).toBe(429); // cap is 10 per window
   });
 });
 
 describe('admin grant', () => {
   it('records the operator reason in the audit detail', async () => {
-    const { server, base, inserts } = await startServer({ user: { id: 7, plan: 'free' } });
-    try {
-      await post(base, '/admin/api/users/7/grant', {
-        plan: 'plus',
-        days: 90,
-        reason: 'beta tester',
-      });
-      const audit = inserts.find(i => i.table === schema.adminAudit);
-      const detail = (audit?.values as { detail: string }).detail;
-      expect(detail).toContain('reason=beta tester');
-      expect(detail).toContain('plan=plus');
-    } finally {
-      server.close();
-    }
+    const { base, inserts } = await startServer({ user: { id: 7, plan: 'free' } });
+    await post(base, '/admin/api/users/7/grant', {
+      plan: 'plus',
+      days: 90,
+      reason: 'beta tester',
+    });
+    const audit = inserts.find(i => i.table === schema.adminAudit);
+    const detail = (audit?.values as { detail: string }).detail;
+    expect(detail).toContain('reason=beta tester');
+    expect(detail).toContain('plan=plus');
   });
 });

@@ -1,5 +1,4 @@
-import http from 'http';
-import { AddressInfo } from 'net';
+import { listen, closeServers } from '../helpers/http-server';
 import { createWebServer } from '../../web/server';
 import { Scheduler } from '../../core/scheduler';
 import { SubscriptionService } from '../../billing';
@@ -19,7 +18,7 @@ const auditRow = (i: number) => ({
 });
 
 // auditList runs select().from().orderBy().limit(n).offset(o); serve a slice.
-function startServer(allRows: unknown[]) {
+async function startServer(allRows: unknown[]) {
   const db = {
     select: () => ({
       from: () => ({
@@ -39,32 +38,25 @@ function startServer(allRows: unknown[]) {
     adminSessionSecret: SECRET,
   } as unknown as ServerConfig;
   const server = createWebServer(db, scheduler, config, {} as unknown as SubscriptionService);
-  return new Promise<{ server: http.Server; base: string }>(resolve => {
-    server.listen(0, () => {
-      const { port } = server.address() as AddressInfo;
-      resolve({ server, base: `http://127.0.0.1:${port}` });
-    });
-  });
+  return { base: await listen(server) };
 }
+
+afterEach(closeServers);
 
 describe('/admin/api/audit pagination', () => {
   it('caps a page at PAGE_SIZE, flags hasMore, and stops on the last page', async () => {
     const rows = Array.from({ length: 30 }, (_, i) => auditRow(i));
-    const { server, base } = await startServer(rows);
-    try {
-      const p0 = (await (
-        await fetch(`${base}/admin/api/audit?page=0`, { headers: { Cookie: COOKIE } })
-      ).json()) as { entries: unknown[]; hasMore: boolean };
-      expect(p0.entries).toHaveLength(25);
-      expect(p0.hasMore).toBe(true);
+    const { base } = await startServer(rows);
+    const p0 = (await (
+      await fetch(`${base}/admin/api/audit?page=0`, { headers: { Cookie: COOKIE } })
+    ).json()) as { entries: unknown[]; hasMore: boolean };
+    expect(p0.entries).toHaveLength(25);
+    expect(p0.hasMore).toBe(true);
 
-      const p1 = (await (
-        await fetch(`${base}/admin/api/audit?page=1`, { headers: { Cookie: COOKIE } })
-      ).json()) as { entries: unknown[]; hasMore: boolean };
-      expect(p1.entries).toHaveLength(5);
-      expect(p1.hasMore).toBe(false);
-    } finally {
-      server.close();
-    }
+    const p1 = (await (
+      await fetch(`${base}/admin/api/audit?page=1`, { headers: { Cookie: COOKIE } })
+    ).json()) as { entries: unknown[]; hasMore: boolean };
+    expect(p1.entries).toHaveLength(5);
+    expect(p1.hasMore).toBe(false);
   });
 });

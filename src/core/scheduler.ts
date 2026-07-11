@@ -211,6 +211,11 @@ export class Scheduler {
         `Poll cycle done in ${Math.round((Date.now() - startedAt) / 1000)}s: ${ok} ok, ${failed} failed`
       );
       this.lastCycleCompletedAt = new Date();
+    } catch (error) {
+      // runOnce is fired via `void`, so without this the rejection would only
+      // surface in the unhandledRejection log. lastCycleCompletedAt stays
+      // stale on purpose - the watchdog restarts us if this keeps happening.
+      logger.error('Poll cycle failed', error);
     } finally {
       if (locked) {
         try {

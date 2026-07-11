@@ -10,6 +10,7 @@
 // token from the page.
 
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
+import { CLIENT_PARSE_HASH } from './admin-hash';
 
 const ADMIN_BADGE = `<span class="pr-pill low" style="font-size:10px;padding:3px 9px">admin</span>`;
 
@@ -62,7 +63,7 @@ export function adminAppHtml(csrf: string, billingLive = true): string {
       <div class="pr-user">
         <span class="pr-avatar">⚡</span>
         <div class="who"><div class="n">Operator</div><div class="m">admin console</div></div>
-        <form method="POST" action="/admin/logout" style="margin:0"><button class="pr-iconbtn" type="submit" title="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></form>
+        <form method="POST" action="/admin/logout" style="margin:0"><input type="hidden" name="csrf" value="${csrf}"><button class="pr-iconbtn" type="submit" title="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></form>
       </div>
     </div>
   </aside>
@@ -567,19 +568,7 @@ function renderScreen() {
   else if (SCREEN === 'audit') renderAudit();
   else renderRevenue();
 }
-// mirrors parseHash() in admin-hash.ts (this script is inlined, can't import)
-// like its server twin, a malformed %-escape must not throw out of the
-// hashchange handler - fall back to the raw text
-function decodeHash(s) { try { return decodeURIComponent(s); } catch { return s; } }
-function parseHashClient(h) {
-  h = (h || '').replace(/^#/, '');
-  const i = h.indexOf('/'), head = i === -1 ? h : h.slice(0, i), tail = i === -1 ? '' : h.slice(i + 1);
-  if (head === 'user' && /^\\d+$/.test(tail)) return { screen: 'users', detail: tail, query: '', logStatus: 'all' };
-  if (head === 'users') return { screen: 'users', detail: null, query: tail.indexOf('q=') === 0 ? decodeHash(tail.slice(2)) : '', logStatus: 'all' };
-  if (head === 'logs') return { screen: 'logs', detail: null, query: '', logStatus: (tail === 'failed' || tail === 'sent') ? tail : 'all' };
-  if (head === 'audit') return { screen: 'audit', detail: null, query: '', logStatus: 'all' };
-  return { screen: 'revenue', detail: null, query: '', logStatus: 'all' };
-}
+${CLIENT_PARSE_HASH}
 function applyRoute(r) {
   SCREEN = r.screen; DETAIL = r.detail; query = r.query; logStatus = r.logStatus;
   if (r.screen === 'audit') auditPage = 0;

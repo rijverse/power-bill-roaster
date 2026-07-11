@@ -14,8 +14,9 @@ import { homeHtml } from './home-html';
 import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 import { handleDiscordInteraction, DiscordInteractionDeps } from '../discord/interactions';
+import { json, readBody } from './http-utils';
+import { pollIsStale } from '../core/health';
 
-const MAX_BODY_BYTES = 64 * 1024;
 // cap the db ping so a stalled connection doesn't make /health hang past
 // what an uptime monitor is willing to wait.
 const DB_PING_TIMEOUT_MS = 2_000;
@@ -34,11 +35,6 @@ const APP_METER_WINDOW_MS = 10 * 60 * 1000;
 // Operator "re-check balance now" politeness cap toward DESCO, keyed per meter.
 const ADMIN_RECHECKS = 10;
 const ADMIN_RECHECK_WINDOW_MS = 10 * 60 * 1000;
-
-function json(res: http.ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
-}
 
 function escapeHtml(s: string): string {
   return s.replace(
@@ -111,24 +107,6 @@ function expiredDashPage(res: http.ServerResponse, config: ServerConfig): void {
     `</div></div>`;
   res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(pageDoc(title, body));
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error('Request body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
 }
 
 /** Pull a field from the query string or, for POST callbacks, the form body. */
@@ -266,10 +244,7 @@ export function createWebServer(
         }
         const intervalMs = config.pollIntervalHours * 60 * 60 * 1000;
         const last = scheduler.lastCycleCompletedAt;
-        // allow one full interval of grace before the first cycle completes
-        const overdue = last
-          ? Date.now() - last.getTime() > intervalMs * 2
-          : Date.now() - startedAt > intervalMs;
+        const overdue = pollIsStale(last, startedAt, intervalMs);
         json(res, overdue ? 503 : 200, {
           status: overdue ? 'stale' : 'ok',
           lastPollCycleAt: last?.toISOString() ?? null,

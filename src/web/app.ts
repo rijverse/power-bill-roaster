@@ -12,13 +12,25 @@ import {
   priceBdtFor,
   isPurchasablePlan,
   PURCHASABLE_PLANS,
+  billingLive,
 } from '../core/plans';
-import { normalizeTone, TONES } from '../core/tone';
+import { Tone, normalizeTone, TONES } from '../core/tone';
+import { setTone } from '../core/meter-usecases';
 import { SubscriptionService } from '../billing';
 import { getProvider } from '../providers';
-import { isValidDiscordWebhookUrl, sendDiscordAlert } from '../notifications/discord';
+import { connectDiscordWebhook } from '../core/discord-connect';
 import { maskWebhookUrl } from '../logger';
 import { dashboardData } from './queries';
+import {
+  clientIp,
+  csrfHeader,
+  html,
+  isMutating,
+  json,
+  parseJson,
+  readBody,
+  redirect,
+} from './http-utils';
 import { readCookie } from './admin-session';
 import { appShellHtml, loginHtml } from './app-html';
 import {
@@ -36,7 +48,6 @@ import {
   userCookie,
 } from './user-auth';
 
-const MAX_BODY_BYTES = 16 * 1024;
 const MAX_NICKNAME_LENGTH = 30;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const METER_NO_RE = /^\d{5,20}$/;
@@ -63,68 +74,6 @@ function planCatalog() {
     maxMeters: maxMetersFor(id),
     smsPerMonth: smsPerMonthFor(id),
   }));
-}
-
-function json(res: http.ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
-}
-
-function htmlPage(res: http.ServerResponse, status: number, body: string): void {
-  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(body);
-}
-
-function redirect(res: http.ServerResponse, location: string, setCookie?: string): void {
-  const headers: http.OutgoingHttpHeaders = { Location: location };
-  if (setCookie) {
-    headers['Set-Cookie'] = setCookie;
-  }
-  res.writeHead(302, headers);
-  res.end();
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error('Request body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
-
-// Only honor X-Forwarded-For behind a proxy we control (TRUST_PROXY=1). Exposed
-// directly, the header is client-controlled and someone could rotate it to slip
-// past the per-IP rate limiters, so we fall back to the socket address.
-const trustProxy = process.env.TRUST_PROXY === '1';
-
-function clientIp(req: http.IncomingMessage): string {
-  if (trustProxy) {
-    const fwd = req.headers['x-forwarded-for'];
-    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
-    if (first) return first;
-  }
-  return req.socket.remoteAddress || 'unknown';
-}
-
-async function parseJson(req: http.IncomingMessage): Promise<Record<string, unknown> | null> {
-  try {
-    const parsed: unknown = JSON.parse((await readBody(req)) || '{}');
-    return typeof parsed === 'object' && parsed !== null
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 // ---- account / channel helpers -------------------------------------------
@@ -233,7 +182,7 @@ async function ownedMeter(db: Db, userId: number, meterId: number): Promise<sche
 
 // ---- account data + actions ----------------------------------------------
 
-async function me(db: Db, userId: number, billingLive = false) {
+async function me(db: Db, userId: number, live = false) {
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
   if (!user) {
     return null;
@@ -277,7 +226,7 @@ async function me(db: Db, userId: number, billingLive = false) {
         address: discord ? maskWebhookUrl(discord.address) : null,
       },
     },
-    billingLive,
+    billingLive: live,
     ...(await dashboardData(db, userId)),
   };
 }
@@ -288,13 +237,16 @@ async function setSettings(
   userId: number,
   body: Record<string, unknown>
 ): Promise<{ status: number; body: unknown }> {
-  const patch: { tonePref?: string; quietStart?: number | null; quietEnd?: number | null } = {};
+  // Tone goes through the core use-case (the sole writer of tone_pref); quiet
+  // hours are web-only, so they stay here.
+  let tone: Tone | undefined;
   if (body.tone !== undefined) {
     if (typeof body.tone !== 'string' || !TONES.includes(body.tone as never)) {
       return { status: 400, body: { error: 'Tone must be savage or mild.' } };
     }
-    patch.tonePref = body.tone;
+    tone = normalizeTone(body.tone);
   }
+  const patch: { quietStart?: number | null; quietEnd?: number | null } = {};
   if (body.quietStart !== undefined || body.quietEnd !== undefined) {
     const start = body.quietStart;
     const end = body.quietEnd;
@@ -309,10 +261,15 @@ async function setSettings(
     patch.quietStart = off ? null : (start as number);
     patch.quietEnd = off ? null : (end as number);
   }
-  if (Object.keys(patch).length === 0) {
+  if (tone === undefined && Object.keys(patch).length === 0) {
     return { status: 400, body: { error: 'Nothing to update.' } };
   }
-  await db.update(schema.users).set(patch).where(eq(schema.users.id, userId));
+  if (tone !== undefined) {
+    await setTone(db, userId, tone);
+  }
+  if (Object.keys(patch).length > 0) {
+    await db.update(schema.users).set(patch).where(eq(schema.users.id, userId));
+  }
   return { status: 200, body: { ok: true } };
 }
 
@@ -379,51 +336,25 @@ async function setChannel(
   return { status: 200, body: { ok: true, enabled } };
 }
 
-/**
- * Save (or replace) a user's Discord webhook. Validates the URL, fires a test
- * embed to prove the webhook is live, then upserts the channel as verified and
- * enabled - mirroring the bot's /discord flow.
- */
+/** Save (or replace) a user's Discord webhook; the mechanism is shared with both bots. */
 async function setDiscordWebhook(
   db: Db,
   user: schema.User,
   url: unknown
 ): Promise<{ status: number; body: unknown }> {
-  if (typeof url !== 'string' || !isValidDiscordWebhookUrl(url)) {
-    return { status: 400, body: { error: "That doesn't look like a Discord webhook URL." } };
-  }
-  try {
-    await sendDiscordAlert(url, {
-      title: 'Power Roast connected ✅',
-      description:
-        "Low-balance alerts for your meter(s) will land here. If you're reading this, it works.",
-      color: 0x3ba55d,
-    });
-  } catch {
+  const result = await connectDiscordWebhook(db, user.id, url);
+  if (!result.ok) {
     return {
       status: 400,
-      body: { error: "Couldn't post to that webhook - check the URL is current and try again." },
+      body: {
+        error:
+          result.reason === 'invalid-url'
+            ? "That doesn't look like a Discord webhook URL."
+            : "Couldn't post to that webhook - check the URL is current and try again.",
+      },
     };
   }
-  const [existing] = await db
-    .select()
-    .from(schema.channels)
-    .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'discord')));
-  if (existing) {
-    await db
-      .update(schema.channels)
-      .set({ address: url, verified: true, enabled: true })
-      .where(eq(schema.channels.id, existing.id));
-  } else {
-    await db.insert(schema.channels).values({
-      userId: user.id,
-      type: 'discord',
-      address: url,
-      verified: true,
-      enabled: true,
-    });
-  }
-  return { status: 200, body: { ok: true, address: maskWebhookUrl(url) } };
+  return { status: 200, body: { ok: true, address: maskWebhookUrl(result.address) } };
 }
 
 // ---- billing --------------------------------------------------------------
@@ -432,7 +363,7 @@ async function billing(
   db: Db,
   subscriptions: SubscriptionService,
   userId: number,
-  billingLive: boolean
+  live: boolean
 ) {
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
   if (!user) {
@@ -446,7 +377,7 @@ async function billing(
     .orderBy(desc(schema.payments.createdAt))
     .limit(20);
   return {
-    live: billingLive,
+    live,
     plan: user.plan,
     priceBdt: priceBdtFor(user.plan),
     limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
@@ -476,7 +407,7 @@ async function checkout(
   body: Record<string, unknown>
 ): Promise<{ status: number; body: unknown }> {
   const { db, subscriptions, config } = deps;
-  if (config.billing.provider === 'none') {
+  if (!billingLive(config.billing)) {
     return { status: 400, body: { error: "Paid plans aren't switched on yet." } };
   }
   const plan = typeof body.plan === 'string' ? body.plan : '';
@@ -662,9 +593,9 @@ export async function handleAppRequest(
   // --- auth pages & actions ---
   if (path === '/app' && method === 'GET') {
     if (authed) {
-      htmlPage(res, 200, appShellHtml(csrfFor(cookie, secret), config.rechargeUrl));
+      html(res, 200, appShellHtml(csrfFor(cookie, secret), config.rechargeUrl));
     } else {
-      htmlPage(res, 200, loginHtml(mailEnabled, url.searchParams.get('status')));
+      html(res, 200, loginHtml(mailEnabled, url.searchParams.get('status')));
     }
     return true;
   }
@@ -757,6 +688,13 @@ export async function handleAppRequest(
   }
 
   if (path === '/app/logout' && method === 'POST') {
+    // Plain form POST, so the token is in the body rather than the header the
+    // API routes echo. Sits above the /app/api/ choke point, so it needs its own.
+    const csrf = new URLSearchParams(await readBody(req)).get('csrf') ?? '';
+    if (!verifyCsrf(cookie, csrf, secret)) {
+      redirect(res, '/app');
+      return true;
+    }
     redirect(res, '/app', userCookie('', secure, 0));
     return true;
   }
@@ -769,7 +707,7 @@ export async function handleAppRequest(
     }
 
     if (path === '/app/api/me' && method === 'GET') {
-      const data = await me(db, userId, config.billing.provider !== 'none');
+      const data = await me(db, userId, billingLive(config.billing));
       if (!data) {
         json(res, 404, { error: 'Account not found.' });
       } else {
@@ -790,7 +728,7 @@ export async function handleAppRequest(
         db,
         deps.subscriptions,
         userId,
-        config.billing.provider !== 'none'
+        billingLive(config.billing)
       );
       if (!data) {
         json(res, 404, { error: 'Account not found.' });
@@ -800,14 +738,12 @@ export async function handleAppRequest(
       return true;
     }
 
-    // every mutation past here needs the CSRF token echoed from the page
-    if (method === 'POST') {
-      const header = req.headers['x-csrf-token'];
-      const csrf = Array.isArray(header) ? header[0] : (header ?? '');
-      if (!verifyCsrf(cookie, csrf, secret)) {
-        json(res, 403, { error: 'Bad or missing CSRF token.' });
-        return true;
-      }
+    // Every mutation past here needs the CSRF token echoed from the page. Gated
+    // on the method rather than on POST specifically, so a future PUT/PATCH/
+    // DELETE route can't ship unprotected just by being forgotten here.
+    if (isMutating(method) && !verifyCsrf(cookie, csrfHeader(req), secret)) {
+      json(res, 403, { error: 'Bad or missing CSRF token.' });
+      return true;
     }
 
     if (path === '/app/api/meters' && method === 'POST') {

@@ -23,10 +23,17 @@ import { Scheduler } from '../core/scheduler';
 import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
 import { enforceMeterCap } from '../core/meter-cap';
-import { isPurchasablePlan, maxMetersFor, smsPerMonthFor, priceBdtFor } from '../core/plans';
+import {
+  isPurchasablePlan,
+  maxMetersFor,
+  smsPerMonthFor,
+  priceBdtFor,
+  billingLive,
+} from '../core/plans';
 import { getProvider, ProviderUnavailableError } from '../providers';
 import { dashboardData } from './queries';
 import { maskWebhookUrl } from '../logger';
+import { clientIp, csrfHeader, html, isMutating, json, readBody, redirect } from './http-utils';
 import { adminAppHtml, adminLoginHtml } from './admin-html';
 import {
   ADMIN_COOKIE,
@@ -38,7 +45,6 @@ import {
   sessionCookie,
 } from './admin-session';
 
-const MAX_BODY_BYTES = 16 * 1024;
 const PAGE_SIZE = 25;
 const PAYMENTS_SHOWN = 20;
 const DELIVERIES_PAGE = 40;
@@ -55,61 +61,6 @@ export interface AdminDeps {
   recheckLimiter: RateLimiter;
   /** the poll scheduler, so the panel can show cycle health and trigger a run */
   scheduler: Scheduler;
-}
-
-function json(res: http.ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body));
-}
-
-function html(res: http.ServerResponse, status: number, body: string, setCookie?: string): void {
-  const headers: http.OutgoingHttpHeaders = { 'Content-Type': 'text/html; charset=utf-8' };
-  if (setCookie) {
-    headers['Set-Cookie'] = setCookie;
-  }
-  res.writeHead(status, headers);
-  res.end(body);
-}
-
-function redirect(res: http.ServerResponse, location: string, setCookie?: string): void {
-  const headers: http.OutgoingHttpHeaders = { Location: location };
-  if (setCookie) {
-    headers['Set-Cookie'] = setCookie;
-  }
-  res.writeHead(302, headers);
-  res.end();
-}
-
-function readBody(req: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error('Request body too large'));
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    req.on('error', reject);
-  });
-}
-
-// Only honor the forwarded address behind a proxy we control (TRUST_PROXY=1).
-// Exposed directly it's client-spoofable and would defeat the rate-limit keying,
-// so fall back to the socket address.
-const trustProxy = process.env.TRUST_PROXY === '1';
-
-function clientIp(req: http.IncomingMessage): string {
-  if (trustProxy) {
-    const fwd = req.headers['x-forwarded-for'];
-    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
-    if (first) return first;
-  }
-  return req.socket.remoteAddress || 'unknown';
 }
 
 // ---- data assembly -------------------------------------------------------
@@ -776,7 +727,7 @@ export async function handleAdminRequest(
   // --- auth pages & actions ---
   if (path === '/admin' && method === 'GET') {
     if (authed) {
-      html(res, 200, adminAppHtml(csrfFor(cookie, secret), config.billing.provider !== 'none'));
+      html(res, 200, adminAppHtml(csrfFor(cookie, secret), billingLive(config.billing)));
     } else {
       html(res, 200, adminLoginHtml(url.searchParams.has('error')));
     }
@@ -802,6 +753,14 @@ export async function handleAdminRequest(
   }
 
   if (path === '/admin/logout' && method === 'POST') {
+    // A plain form POST (no JS), so the token rides in the body rather than the
+    // X-CSRF-Token header the API routes use. Without this a cross-site POST
+    // could sign an operator out.
+    const csrf = new URLSearchParams(await readBody(req)).get('csrf') ?? '';
+    if (!verifyCsrf(cookie, csrf, secret)) {
+      redirect(res, '/admin');
+      return true;
+    }
     redirect(res, '/admin', sessionCookie('', secure, 0));
     return true;
   }
@@ -810,6 +769,15 @@ export async function handleAdminRequest(
   if (path.startsWith('/admin/api/')) {
     if (!authed) {
       json(res, 401, { error: 'Not signed in.' });
+      return true;
+    }
+
+    // One CSRF gate for every mutating API route. This used to be pasted into
+    // each mutating branch, so a new route shipped unprotected if you forgot -
+    // and nothing would have caught it. Gated on the method, not on POST, so a
+    // future PUT/PATCH/DELETE is covered by default.
+    if (isMutating(method) && !verifyCsrf(cookie, csrfHeader(req), secret)) {
+      json(res, 403, { error: 'Bad or missing CSRF token.' });
       return true;
     }
 
@@ -825,12 +793,6 @@ export async function handleAdminRequest(
     }
 
     if (path === '/admin/api/poll' && method === 'POST') {
-      const csrfHeader = req.headers['x-csrf-token'];
-      const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
-      if (!verifyCsrf(cookie, csrf, secret)) {
-        json(res, 403, { error: 'Bad or missing CSRF token.' });
-        return true;
-      }
       if (scheduler.isPolling) {
         json(res, 200, { ok: true, alreadyRunning: true });
         return true;
@@ -844,12 +806,6 @@ export async function handleAdminRequest(
     // requeue-all must be matched before the :id form
     const requeueMatch = /^\/admin\/api\/alerts\/(requeue-all|(\d+)\/requeue)$/.exec(path);
     if (requeueMatch && method === 'POST') {
-      const csrfHeader = req.headers['x-csrf-token'];
-      const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
-      if (!verifyCsrf(cookie, csrf, secret)) {
-        json(res, 403, { error: 'Bad or missing CSRF token.' });
-        return true;
-      }
       const id = requeueMatch[2] ? parseInt(requeueMatch[2]) : null;
       const result = await requeueDeadLetters(db, id);
       if (result.status === 200) {
@@ -891,12 +847,6 @@ export async function handleAdminRequest(
       path
     );
     if (meterMatch && method === 'POST') {
-      const csrfHeader = req.headers['x-csrf-token'];
-      const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
-      if (!verifyCsrf(cookie, csrf, secret)) {
-        json(res, 403, { error: 'Bad or missing CSRF token.' });
-        return true;
-      }
       const userId = parseInt(meterMatch[1]);
       const meterId = parseInt(meterMatch[2]);
       const meterAction = meterMatch[3];
@@ -936,12 +886,6 @@ export async function handleAdminRequest(
 
       if (action && method === 'POST') {
         // Mutations need the CSRF token echoed back from the page.
-        const csrfHeader = req.headers['x-csrf-token'];
-        const csrf = Array.isArray(csrfHeader) ? csrfHeader[0] : (csrfHeader ?? '');
-        if (!verifyCsrf(cookie, csrf, secret)) {
-          json(res, 403, { error: 'Bad or missing CSRF token.' });
-          return true;
-        }
         let result: { status: number; body: unknown };
         let detail: string | null = null;
         if (action === 'grant') {

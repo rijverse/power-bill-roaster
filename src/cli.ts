@@ -1,9 +1,9 @@
 import { getConfig } from './config';
 import { DescoApiClient, EmailService } from './services';
-import { generateCriticalEmail, generateWarningEmail } from './templates';
 import { sendDiscordAlert } from './notifications/discord';
 import { discordAlertEmbed } from './notifications/discord-templates';
-import { MeterContext } from './notifications/telegram-templates';
+import { emailAlert } from './notifications/email-templates';
+import { MeterContext } from './notifications/alert-copy';
 import { logger, maskAccount, maskWebhookUrl } from './logger';
 
 // self hosted mode: one balance check, fanned out to every configured channel
@@ -77,21 +77,10 @@ async function main(): Promise<void> {
       channels.push({
         label: 'email',
         send: async () => {
-          const content =
-            action === 'critical-alert'
-              ? generateCriticalEmail(
-                  balance,
-                  config.desco.accountNo,
-                  config.desco.meterNo,
-                  config.rechargeUrl
-                )
-              : generateWarningEmail(
-                  balance,
-                  config.desco.accountNo,
-                  config.desco.meterNo,
-                  config.rechargeUrl
-                );
-          await new EmailService(email).send(content);
+          const content = emailAlert(action, ctx, config.tone);
+          if (content) {
+            await new EmailService(email).send(content);
+          }
         },
       });
     }
@@ -100,7 +89,7 @@ async function main(): Promise<void> {
       channels.push({
         label: `Discord (${maskWebhookUrl(webhookUrl)})`,
         send: async () => {
-          const embed = discordAlertEmbed(action, ctx);
+          const embed = discordAlertEmbed(action, ctx, config.tone);
           if (embed) {
             await sendDiscordAlert(webhookUrl, embed);
           }

@@ -1,69 +1,9 @@
-import { EmailContent } from '../types';
+// The shared HTML email card. One compact card, inline styles only, table
+// layout, solid hex colors (no rgba - Outlook's Word engine drops it) - the
+// lowest common denominator that renders in Gmail, Outlook and Apple Mail alike.
+// The wording comes from alert-copy.ts; this only lays it out.
 
-export function generateCriticalEmail(
-  balance: number,
-  accountNo: string,
-  meterNo: string,
-  rechargeUrl: string = 'https://prepaid.desco.org.bd/'
-): EmailContent {
-  return {
-    subject: "💀 EMERGENCY: You're About to Live in the Stone Age",
-    text: generateText(balance, accountNo, meterNo, rechargeUrl),
-    html: generateHtml(balance, accountNo, meterNo, rechargeUrl),
-  };
-}
-
-function generateText(
-  balance: number,
-  accountNo: string,
-  meterNo: string,
-  rechargeUrl: string
-): string {
-  return `💀 POWER EMERGENCY - THIS IS NOT A DRILL
-
-Current Balance: ৳${balance.toFixed(2)} (CRITICALLY LOW)
-Account: ${accountNo}
-Meter: ${meterNo}
-
-That balance has two digits. TWO. Your fridge is writing its will. Your WiFi
-router is updating its resume. DESCO has its finger on the switch and is
-mouthing "do it" at you.
-
-When the lights die you'll be the grown adult charging a phone at McDonald's,
-nursing one cold fry, calling it "working remotely." Your ancestors survived
-famine and war so you could forget to top up a meter.
-
-RECHARGE NOW → ${rechargeUrl}
-
-P.S. The dark is free. The shame is too. Your neighbors already know.`;
-}
-
-function generateHtml(
-  balance: number,
-  accountNo: string,
-  meterNo: string,
-  rechargeUrl: string
-): string {
-  return renderEmail({
-    accent: '#dc2626',
-    bg: '#1a0a0a',
-    badge: '💀⚡',
-    title: 'Power Emergency',
-    preheader: `৳${balance.toFixed(2)} left. DESCO is about to pull the plug.`,
-    balance,
-    balanceLabel: 'Critically low',
-    pitch:
-      '<strong>This is not a drill.</strong> Two digits. DESCO has its finger on the switch and is mouthing "do it" at you.',
-    roast:
-      'Lights go out and you become the grown adult charging a phone at McDonald\'s, nursing one cold fry, calling it "working remotely."<br><br>Your ancestors survived famine and war so you could forget to top up a meter. Make them proud. Or don\'t - the dark is free.',
-    accountNo,
-    meterNo,
-    footer: 'P.S. The shame is free too. Your neighbors already know. 👀',
-    rechargeUrl,
-  });
-}
-
-interface EmailParts {
+export interface EmailParts {
   accent: string;
   bg: string;
   badge: string;
@@ -79,9 +19,6 @@ interface EmailParts {
   rechargeUrl: string;
 }
 
-// Single compact card. Inline styles only, table layout, solid hex colors (no
-// rgba - Outlook's Word engine drops it) - the lowest common denominator that
-// renders in Gmail, Outlook and Apple Mail alike.
 export function renderEmail(p: EmailParts): string {
   return `<!DOCTYPE html>
 <html lang="en">

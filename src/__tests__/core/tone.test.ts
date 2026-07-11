@@ -1,5 +1,6 @@
 import { normalizeTone } from '../../core/tone';
-import { renderAlert, MeterContext } from '../../notifications/telegram-templates';
+import { renderAlert } from '../../notifications/telegram-templates';
+import { MeterContext } from '../../notifications/alert-copy';
 import { emailAlert } from '../../notifications/email-templates';
 import { smsAlertText } from '../../notifications/sms-templates';
 

@@ -242,6 +242,8 @@ export function homeHtml(): string {
       </div>
       <div class="lp-roast crit">
         <span class="tag">💀 DEFCON 1, below ৳100</span>
+        <!-- Marketing copy, deliberately NOT wired to alert-copy.ts: the landing
+             page shouldn't silently rewrite itself when alert tone is tuned. -->
         <div class="q">"You're About to Live in the Stone Age."</div>
         <div class="a">Light a candle. Sharpen a stick. This is DEFCON 1 and your meter is not bluffing.</div>
         <div class="thr">below ৳100</div>

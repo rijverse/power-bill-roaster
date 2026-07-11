@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import crypto from 'crypto';
 import { isValidDiscordWebhookUrl } from './notifications/discord';
+import { DEFAULT_RECHARGE_URL } from './core/recharge';
+import { Tone, normalizeTone } from './core/tone';
 
 /** SMTP host + addresses for the self-hosted email channel. */
 export interface EmailConfig {
@@ -26,6 +28,9 @@ export interface Config {
   };
   /** The DESCO recharge URL embedded in email/SMS templates. */
   rechargeUrl: string;
+  /** Roast intensity for this deploy. The hosted app stores it per user; a
+   *  self-hosted run has a single owner, so it's one env var. */
+  tone: Tone;
 }
 
 export interface ServerConfig {
@@ -263,7 +268,7 @@ export function getServerConfig(): ServerConfig {
     },
     // DESCO recharge URL embedded in alert messages. Override only for tests
     // or a mirror; the default is the public DESCO portal.
-    rechargeUrl: process.env.RECHARGE_URL || 'https://prepaid.desco.org.bd/',
+    rechargeUrl: process.env.RECHARGE_URL || DEFAULT_RECHARGE_URL,
     sms: getSmsConfig(),
     discord: getDiscordConfig(),
     billing: getBillingConfig(publicBaseUrl),
@@ -328,6 +333,7 @@ export function getConfig(): Config {
       low: parseInt(process.env.LOW_THRESHOLD || '150'),
       critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
     },
-    rechargeUrl: process.env.RECHARGE_URL || 'https://prepaid.desco.org.bd/',
+    rechargeUrl: process.env.RECHARGE_URL || DEFAULT_RECHARGE_URL,
+    tone: normalizeTone(process.env.ALERT_TONE),
   };
 }

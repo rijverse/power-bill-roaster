@@ -4,7 +4,7 @@ import {
   DiscordEmbed,
 } from '../../notifications/discord';
 import { discordAlertEmbed } from '../../notifications/discord-templates';
-import { MeterContext } from '../../notifications/telegram-templates';
+import { MeterContext } from '../../notifications/alert-copy';
 import { RunOutPrediction } from '../../core/prediction';
 import { maskWebhookUrl } from '../../logger';
 

@@ -6,6 +6,7 @@
 // (in-app recharge, paid plans, roast intensity, quiet hours) are reproduced
 // faithfully but clearly marked as previews. Mutations echo the CSRF token.
 
+import { DEFAULT_RECHARGE_URL } from '../core/recharge';
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
 const LOGIN_STATUS: Record<string, { cls: string; msg: string }> = {
@@ -142,10 +143,7 @@ const IC = {
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M2 10h20"></path></svg>',
 };
 
-export function appShellHtml(
-  csrf: string,
-  rechargeUrl: string = 'https://prepaid.desco.org.bd/'
-): string {
+export function appShellHtml(csrf: string, rechargeUrl: string = DEFAULT_RECHARGE_URL): string {
   const body = `<div class="pr-shell">
   <div id="pr-scrim"></div>
   <aside class="pr-sidebar" id="pr-sidebar">
@@ -162,7 +160,7 @@ export function appShellHtml(
       <div class="pr-user">
         <span class="pr-avatar" id="navAvatar"></span>
         <div class="who"><div class="n" id="navName">...</div><div class="m" id="navPlan"></div></div>
-        <form method="POST" action="/app/logout" style="margin:0"><button class="pr-iconbtn" type="submit" title="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></form>
+        <form method="POST" action="/app/logout" style="margin:0"><input type="hidden" name="csrf" value="${csrf}"><button class="pr-iconbtn" type="submit" title="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></form>
       </div>
     </div>
   </aside>

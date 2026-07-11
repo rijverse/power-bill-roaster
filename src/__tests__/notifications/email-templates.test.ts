@@ -1,5 +1,5 @@
 import { emailAlert } from '../../notifications/email-templates';
-import { MeterContext } from '../../notifications/telegram-templates';
+import { MeterContext } from '../../notifications/alert-copy';
 
 const ctx: MeterContext = {
   nickname: 'Flat 3B',

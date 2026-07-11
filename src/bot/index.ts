@@ -5,8 +5,13 @@ import { getProvider, ProviderUnavailableError } from '../providers';
 import { ServerConfig } from '../config';
 import { balanceStatusMessage } from '../notifications/telegram-templates';
 import { RateLimiter } from '../core/rate-limiter';
-import { maxMetersFor, smsPerMonthFor, priceBdtFor, isPurchasablePlan } from '../core/plans';
-import { predictRunOut } from '../core/prediction';
+import {
+  maxMetersFor,
+  smsPerMonthFor,
+  priceBdtFor,
+  isPurchasablePlan,
+  billingLive,
+} from '../core/plans';
 import { normalizeBdPhone } from '../core/phone';
 import { SubscriptionService } from '../billing';
 import { signDashboardToken } from '../web/token';
@@ -14,10 +19,24 @@ import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
 import { normalizeTone } from '../core/tone';
 import { SmsGateway } from '../notifications/sms';
-import { isValidDiscordWebhookUrl, sendDiscordAlert } from '../notifications/discord';
+import { isValidDiscordWebhookUrl } from '../notifications/discord';
+import {
+  connectDiscordWebhook,
+  disableDiscordWebhook,
+  discordWebhook,
+} from '../core/discord-connect';
 import { Mailer } from '../services/mailer';
 import { mergeAccounts, chooseSurvivor } from '../core/merge-accounts';
-import { ensureUser, upsertMeter, applyThresholdsForUser } from '../core/meter-usecases';
+import {
+  ensureUser,
+  upsertMeter,
+  applyThresholdsForUser,
+  recentPrediction,
+  setTone,
+  stopMonitoring,
+  STOP_CONFIRMED,
+  STOP_NOTHING_TO_DO,
+} from '../core/meter-usecases';
 import {
   signMagicLink,
   magicCode,
@@ -36,7 +55,6 @@ const DELETE_CONFIRM_WINDOW_MS = 60 * 1000;
 // how long an alert-button "snooze" mutes reminders for that meter
 const SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
 
-const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
 
 interface PendingRegistration {
@@ -123,7 +141,7 @@ export function createBot(
   const discordTests = new RateLimiter(DISCORD_TESTS_PER_WINDOW, DISCORD_TEST_WINDOW_MS);
   const emailLinks = new RateLimiter(EMAIL_LINKS_PER_WINDOW, EMAIL_LINK_WINDOW_MS);
   // Free-only launch: paid plans are off until a real gateway is configured.
-  const billingLive = config.billing.provider !== 'none';
+  const live = billingLive(config.billing);
 
   async function findUser(chatId: number) {
     const [user] = await db
@@ -231,16 +249,11 @@ export function createBot(
     // (creating it if needed) and open the DM alert channel - the /telegram
     // command only hands the token to that Discord user, which proves the id.
     const owner = botUser ?? (await ensureUser(db, { kind: 'telegram', chatId }));
-    await db
-      .update(schema.users)
-      .set({ discordUserId })
-      .where(eq(schema.users.id, owner.id));
+    await db.update(schema.users).set({ discordUserId }).where(eq(schema.users.id, owner.id));
     const [existingDm] = await db
       .select()
       .from(schema.channels)
-      .where(
-        and(eq(schema.channels.userId, owner.id), eq(schema.channels.type, 'discord-dm'))
-      );
+      .where(and(eq(schema.channels.userId, owner.id), eq(schema.channels.type, 'discord-dm')));
     if (!existingDm) {
       await db.insert(schema.channels).values({
         userId: owner.id,
@@ -408,15 +421,6 @@ export function createBot(
           accountNo: meter.accountNo,
           meterNo: meter.meterNo,
         });
-        const recentReadings = await db
-          .select({ balance: schema.readings.balance, fetchedAt: schema.readings.fetchedAt })
-          .from(schema.readings)
-          .where(
-            and(
-              eq(schema.readings.meterId, meter.id),
-              gte(schema.readings.fetchedAt, new Date(Date.now() - PREDICTION_WINDOW_MS))
-            )
-          );
         await ctx.reply(
           balanceStatusMessage({
             nickname: meter.nickname,
@@ -425,10 +429,7 @@ export function createBot(
             balance: data.balance,
             lowThreshold: meter.lowThreshold,
             criticalThreshold: meter.criticalThreshold,
-            prediction: predictRunOut(
-              recentReadings.map(r => ({ balance: r.balance, at: r.fetchedAt })),
-              data.balance
-            ),
+            prediction: await recentPrediction(db, meter.id, data.balance),
           })
         );
       } catch {
@@ -478,7 +479,7 @@ export function createBot(
     if (user.plan === 'free') {
       lines.push(
         '',
-        billingLive
+        live
           ? 'Want SMS alerts and more meters? /upgrade'
           : 'SMS alerts and more meters are coming soon.'
       );
@@ -566,7 +567,7 @@ export function createBot(
       await ctx.reply('No account yet - /register a meter first.');
       return;
     }
-    if (!billingLive) {
+    if (!live) {
       await ctx.reply(
         "💸 Paid plans aren't switched on yet - everyone's on *free* for now (1 meter, Telegram alerts). SMS alerts and multi-meter support are coming soon; I'll announce it right here.",
         { parse_mode: 'Markdown' }
@@ -714,10 +715,7 @@ export function createBot(
       return;
     }
 
-    const [existing] = await db
-      .select()
-      .from(schema.channels)
-      .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'discord')));
+    const existing = await discordWebhook(db, user.id);
 
     const arg = (ctx.match ?? '').trim();
     const howTo =
@@ -741,58 +739,33 @@ export function createBot(
 
     // /discord off: pause the channel without forgetting the URL
     if (arg.toLowerCase() === 'off') {
-      if (!existing || !existing.enabled) {
+      if ((await disableDiscordWebhook(db, user.id)) === 'not-on') {
         await ctx.reply("Discord alerts aren't on, so there's nothing to turn off.");
         return;
       }
-      await db
-        .update(schema.channels)
-        .set({ enabled: false })
-        .where(eq(schema.channels.id, existing.id));
       await ctx.reply('Discord alerts paused. Send /discord <url> to turn them back on.');
       return;
     }
 
-    // otherwise treat the arg as a webhook URL: validate, test-send, then save
+    // Reject a malformed URL before the throttle, so a typo doesn't cost the user
+    // one of their test sends.
     if (!isValidDiscordWebhookUrl(arg)) {
       await ctx.reply(`That doesn't look like a Discord webhook URL. ${howTo}`);
       return;
     }
+    // The test send costs Discord a request, so throttle before we make it.
     if (!discordTests.allow(ctx.chat.id)) {
       await ctx.reply('Too many Discord test sends. Give it a few minutes and try again.');
       return;
     }
-    try {
-      await sendDiscordAlert(arg, {
-        title: 'Power Roast connected ✅',
-        description:
-          "Low-balance alerts for your meter(s) will land here. If you're reading this, it works.",
-        color: 0x3ba55d,
-      });
-    } catch (error) {
-      logger.error(
-        `Discord test send failed for chat ${ctx.chat.id}`,
-        error instanceof Error ? error.message : error
-      );
+    const result = await connectDiscordWebhook(db, user.id, arg);
+    if (!result.ok) {
       await ctx.reply(
-        "Couldn't post to that webhook - Discord rejected it. Make sure the URL is current (webhooks can be deleted) and try again."
+        result.reason === 'invalid-url'
+          ? `That doesn't look like a Discord webhook URL. ${howTo}`
+          : "Couldn't post to that webhook - Discord rejected it. Make sure the URL is current (webhooks can be deleted) and try again."
       );
       return;
-    }
-
-    if (existing) {
-      await db
-        .update(schema.channels)
-        .set({ address: arg, verified: true, enabled: true })
-        .where(eq(schema.channels.id, existing.id));
-    } else {
-      await db.insert(schema.channels).values({
-        userId: user.id,
-        type: 'discord',
-        address: arg,
-        verified: true,
-        enabled: true,
-      });
     }
     await ctx.reply(
       "Sent a test message to your Discord ✅ If you saw it, you're all set - alerts will go there too."
@@ -930,14 +903,12 @@ export function createBot(
   bot.command('stop', async ctx => {
     const user = await findUser(ctx.chat.id);
     if (!user) {
-      await ctx.reply('Nothing to stop - you have no registered meters.');
+      await ctx.reply(STOP_NOTHING_TO_DO);
       return;
     }
-    await db.update(schema.meters).set({ active: false }).where(eq(schema.meters.userId, user.id));
+    await stopMonitoring(db, user.id);
     pending.delete(ctx.chat.id);
-    await ctx.reply(
-      'Monitoring paused for all your meters. Use /register to start again. Good luck out there. 🕯️'
-    );
+    await ctx.reply(STOP_CONFIRMED);
   });
 
   // operator-only metrics; silent for everyone else
@@ -1005,8 +976,8 @@ export function createBot(
       await ctx.answerCallbackQuery('Register a meter first.');
       return;
     }
-    const tone = ctx.match[1];
-    await db.update(schema.users).set({ tonePref: tone }).where(eq(schema.users.id, user.id));
+    const tone = normalizeTone(ctx.match[1]);
+    await setTone(db, user.id, tone);
     await ctx.answerCallbackQuery(`Tone set to ${tone}.`);
     await refreshSettings(ctx);
   });

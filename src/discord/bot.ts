@@ -1,27 +1,37 @@
-import { and, eq, gte } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { getProvider, ProviderUnavailableError } from '../providers';
 import { RateLimiter } from '../core/rate-limiter';
-import { maxMetersFor, smsPerMonthFor } from '../core/plans';
+import { maxMetersFor, smsPerMonthFor, billingLive } from '../core/plans';
 import { predictRunOut, formatDaysLeft } from '../core/prediction';
 import { signDashboardToken } from '../web/token';
 import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
 import { normalizeTone } from '../core/tone';
-import { isValidDiscordWebhookUrl, sendDiscordAlert, DiscordEmbed } from '../notifications/discord';
+import { isValidDiscordWebhookUrl, DiscordEmbed } from '../notifications/discord';
+import {
+  connectDiscordWebhook,
+  disableDiscordWebhook,
+  discordWebhook,
+} from '../core/discord-connect';
 import {
   findUserByIdentity,
   ensureUser,
   activeMeters,
   upsertMeter,
   applyThresholdsForUser,
+  recentPrediction,
+  setTone,
+  stopMonitoring,
+  STOP_CONFIRMED,
+  STOP_NOTHING_TO_DO,
 } from '../core/meter-usecases';
 import { SubscriptionService } from '../billing';
 import { signDiscordLinkToken } from '../web/user-auth';
 import { DiscordDmSender } from '../notifications/dispatcher';
 import { DiscordMessagePayload } from './api';
-import { logger, maskWebhookUrl } from '../logger';
+import { maskWebhookUrl } from '../logger';
 
 // The Discord counterpart of src/bot (Telegram). Slash commands replace the
 // Telegram bot's conversational flows - options are typed and required, so
@@ -37,7 +47,6 @@ const DEFERRED_CHANNEL_MESSAGE = 5;
 const EPHEMERAL = 1 << 6;
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
-const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NICKNAME_LENGTH = 30;
 
 // Same politeness caps as the Telegram bot, keyed by Discord user id.
@@ -139,7 +148,7 @@ export function createDiscordBot(
 ): DiscordBot {
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
   const webhookTests = new RateLimiter(WEBHOOK_TESTS_PER_WINDOW, WEBHOOK_TEST_WINDOW_MS);
-  const billingLive = config.billing.provider !== 'none';
+  const live = billingLive(config.billing);
 
   const identity = (discordUserId: string) => ({ kind: 'discord' as const, discordUserId });
 
@@ -277,19 +286,7 @@ export function createDiscordBot(
             accountNo: meter.accountNo,
             meterNo: meter.meterNo,
           });
-          const recentReadings = await db
-            .select({ balance: schema.readings.balance, fetchedAt: schema.readings.fetchedAt })
-            .from(schema.readings)
-            .where(
-              and(
-                eq(schema.readings.meterId, meter.id),
-                gte(schema.readings.fetchedAt, new Date(Date.now() - PREDICTION_WINDOW_MS))
-              )
-            );
-          const prediction = predictRunOut(
-            recentReadings.map(r => ({ balance: r.balance, at: r.fetchedAt })),
-            data.balance
-          );
+          const prediction = await recentPrediction(db, meter.id, data.balance);
           embeds.push(balanceEmbed(meter, data.balance, prediction, mild));
         } catch {
           failures.push(`Couldn't reach DESCO for meter ${meter.meterNo} right now.`);
@@ -386,7 +383,7 @@ export function createDiscordBot(
     if (user.plan === 'free') {
       lines.push(
         '',
-        billingLive
+        live
           ? 'Upgrades (SMS alerts, more meters) currently happen through the Telegram bot.'
           : 'SMS alerts and more meters are coming soon.'
       );
@@ -417,8 +414,8 @@ export function createDiscordBot(
     if (!user) {
       return reply('No account yet - /register a meter first.');
     }
-    const tone = style === 'mild' ? 'mild' : 'savage';
-    await db.update(schema.users).set({ tonePref: tone }).where(eq(schema.users.id, user.id));
+    const tone = normalizeTone(style);
+    await setTone(db, user.id, tone);
     return reply(
       tone === 'mild'
         ? 'Tone set to mild 🥛 - gentle nudges only.'
@@ -437,10 +434,7 @@ export function createDiscordBot(
     if (!user) {
       return reply('Register a meter first with /register.');
     }
-    const [existing] = await db
-      .select()
-      .from(schema.channels)
-      .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'discord')));
+    const existing = await discordWebhook(db, user.id);
     const howTo =
       'In Discord: Server Settings > Integrations > Webhooks > New Webhook > Copy URL, then run /webhook with that url.';
 
@@ -451,22 +445,21 @@ export function createDiscordBot(
         );
       }
       if (existing) {
-        return reply('Webhook alerts are set up but paused. Pass the url again to turn them back on.');
+        return reply(
+          'Webhook alerts are set up but paused. Pass the url again to turn them back on.'
+        );
       }
       return reply(`No channel webhook connected yet. ${howTo}`);
     }
 
     if (url.toLowerCase() === 'off') {
-      if (!existing || !existing.enabled) {
+      if ((await disableDiscordWebhook(db, user.id)) === 'not-on') {
         return reply("Webhook alerts aren't on, so there's nothing to turn off.");
       }
-      await db
-        .update(schema.channels)
-        .set({ enabled: false })
-        .where(eq(schema.channels.id, existing.id));
       return reply('Webhook alerts paused. Pass the url again to turn them back on.');
     }
 
+    // Reject a malformed URL before the throttle, so a typo doesn't cost a test send.
     if (!isValidDiscordWebhookUrl(url)) {
       return reply(`That doesn't look like a Discord webhook URL. ${howTo}`);
     }
@@ -475,36 +468,12 @@ export function createDiscordBot(
     }
     // the test send is a network call - defer like the other slow paths
     return deferred(async () => {
-      try {
-        await sendDiscordAlert(url, {
-          title: 'Power Roast connected ✅',
-          description:
-            "Low-balance alerts for your meter(s) will land here. If you're reading this, it works.",
-          color: COLOR.ok,
-        });
-      } catch (error) {
-        logger.error(
-          `Discord webhook test send failed for discord user`,
-          error instanceof Error ? error.message : error
-        );
+      const result = await connectDiscordWebhook(db, user.id, url);
+      if (!result.ok) {
         return {
           content:
             "Couldn't post to that webhook - Discord rejected it. Make sure the URL is current (webhooks can be deleted) and try again.",
         };
-      }
-      if (existing) {
-        await db
-          .update(schema.channels)
-          .set({ address: url, verified: true, enabled: true })
-          .where(eq(schema.channels.id, existing.id));
-      } else {
-        await db.insert(schema.channels).values({
-          userId: user.id,
-          type: 'discord',
-          address: url,
-          verified: true,
-          enabled: true,
-        });
       }
       return {
         content:
@@ -521,7 +490,7 @@ export function createDiscordBot(
     const user = await findUserByIdentity(db, identity(discordUserId));
     if (user?.telegramChatId != null) {
       return reply(
-        "Already connected ✅ Telegram and Discord are the same account here - alerts and commands work from either."
+        'Already connected ✅ Telegram and Discord are the same account here - alerts and commands work from either.'
       );
     }
     const token = signDiscordLinkToken(discordUserId, config.dashboardSecret);
@@ -546,12 +515,10 @@ export function createDiscordBot(
   async function handleStop(discordUserId: string): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     if (!user) {
-      return reply('Nothing to stop - you have no registered meters.');
+      return reply(STOP_NOTHING_TO_DO);
     }
-    await db.update(schema.meters).set({ active: false }).where(eq(schema.meters.userId, user.id));
-    return reply(
-      'Monitoring paused for all your meters. Use /register to start again. Good luck out there. 🕯️'
-    );
+    await stopMonitoring(db, user.id);
+    return reply(STOP_CONFIRMED);
   }
 
   async function handleDelete(discordUserId: string, confirm: string): Promise<InteractionReply> {

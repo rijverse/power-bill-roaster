@@ -1,3 +1,13 @@
+/**
+ * Is money actually being taken? The free-only launch runs with
+ * BILLING_PROVIDER=none, and every surface that offers an upgrade has to agree
+ * on that - it was being recomputed independently in both bots and three times
+ * in the web layer.
+ */
+export function billingLive(billing: { provider: string }): boolean {
+  return billing.provider !== 'none';
+}
+
 /** Per-plan limits and pricing. Plus/business become sellable when billing ships. */
 const PLAN_LIMITS: Record<string, { maxMeters: number; smsPerMonth: number; priceBdt: number }> = {
   free: { maxMeters: 1, smsPerMonth: 0, priceBdt: 0 },

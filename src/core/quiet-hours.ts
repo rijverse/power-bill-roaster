@@ -3,14 +3,14 @@
 // DST). We resolve "now" to a Dhaka hour and check whether it falls in the
 // user's quiet window, which may wrap past midnight (e.g. 23 -> 7).
 
+// Bangladesh has no DST, so a fixed offset is exact (and cheaper than Intl).
+const DHAKA_OFFSET_MS = 6 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
 /** Current hour-of-day (0-23) in Asia/Dhaka. */
 export function dhakaHour(now: Date): number {
-  const h = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Dhaka',
-    hour: '2-digit',
-    hour12: false,
-  }).format(now);
-  return Number(h) % 24;
+  return Math.floor(((now.getTime() + DHAKA_OFFSET_MS) % DAY_MS) / HOUR_MS);
 }
 
 /**
@@ -25,9 +25,11 @@ export function inQuietHours(now: Date, start: number | null, end: number | null
   return start < end ? h >= start && h < end : h >= start || h < end;
 }
 
-// Bangladesh has no DST, so a fixed offset is exact (and cheaper than Intl).
-const DHAKA_OFFSET_MS = 6 * 60 * 60 * 1000;
-const DAY_MS = 24 * 60 * 60 * 1000;
+/** Start of the current calendar month in Dhaka time, as a UTC instant. */
+export function dhakaMonthStart(now: Date): Date {
+  const d = new Date(now.getTime() + DHAKA_OFFSET_MS);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) - DHAKA_OFFSET_MS);
+}
 
 /**
  * The next instant the quiet window ends: today at `end`:00 Dhaka time, or

@@ -3,6 +3,7 @@ import { Db, schema } from '../db';
 import { AlertAction, AlertLevel } from '../core/alert-machine';
 import { smsPerMonthFor } from '../core/plans';
 import { normalizeTone, Tone } from '../core/tone';
+import { dhakaMonthStart } from '../core/quiet-hours';
 import { withTimeout } from '../core/with-timeout';
 import { renderAlert } from './telegram-templates';
 import { MeterContext, rechargeUrl } from './alert-copy';
@@ -383,9 +384,8 @@ export class Dispatcher {
 
   /** Billable segments already sent this calendar month across the user's numbers. */
   private async smsSentThisMonth(channelIds: number[]): Promise<number> {
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
+    // the budget month rolls at midnight Dhaka, not server-local midnight
+    const monthStart = dhakaMonthStart(new Date());
     return this.db.$count(
       schema.alertsLog,
       and(

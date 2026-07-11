@@ -90,18 +90,12 @@ export interface Logger {
   info(msg: string, ...args: unknown[]): void;
   warn(msg: string, ...args: unknown[]): void;
   error(msg: string, ...args: unknown[]): void;
-  child(bindings: Record<string, unknown>): Logger;
 }
 
 const root: Logger = {
   info: (msg, ...args) => emit('info', msg, args),
   warn: (msg, ...args) => emit('warn', msg, args),
   error: (msg, ...args) => emit('error', msg, args),
-  child(_bindings) {
-    // accepted for future request_id correlation; today the call is a no-op
-    // and returns the shared root.
-    return root;
-  },
 };
 
 export const logger = root;

@@ -5,7 +5,8 @@ How to run the bot + scheduler on your own server. You need:
 - A small VPS with Docker installed (1 vCPU / 1 GB is plenty)
 - A PostgreSQL database (a managed one like [Neon](https://neon.tech) has a free tier, or run your own)
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- Optional: any HTTP uptime monitor pointed at the `/health` endpoint
+- **Strongly recommended: an external HTTP uptime monitor pointed at `/health`**
+  (see [Monitoring](#5-monitoring) — it's the backstop for a wedged process)
 
 ## 1. Apply the database schema
 
@@ -154,9 +155,22 @@ The endpoint returns **503** in three situations:
 
 A 5–15 minute check interval is plenty.
 
-You also get in-app alarms: the scheduler messages `ADMIN_CHAT_ID` on Telegram
-if more than half the meters in a cycle fail (likely a provider API change or
-block), and `/stats` shows users / meters / readings / alerts on demand.
+**Wire this before or at launch — it is the process-wedge backstop.** An
+unhandled promise rejection is deliberately *logged, not fatal* (one stray
+floating promise usually isn't grounds to tear down a process mid-cycle), so a
+rejection that leaves shared state half-dead won't crash the container on its
+own. The `/health` staleness check (503 after ~2× the poll interval) is what
+turns that into a visible failure — but only if an external monitor is actually
+polling `/health` and paging you. Without one, a wedged poller can sit silent
+for up to two poll intervals. (`uncaughtException`, by contrast, still exits
+non-zero so Docker restarts the container.)
+
+You also get in-app alarms: the scheduler messages the operator if more than
+half the meters in a cycle fail (likely a provider API change or block), and
+`/stats` shows users / meters / readings / alerts on demand. Operator alarms and
+dead-letter pings go to `ADMIN_CHAT_ID` on Telegram and/or `ADMIN_DISCORD_USER_ID`
+on Discord — set at least one (a Discord-only deploy that sets neither gets no
+operator alarms).
 
 **Run a single app instance.** The poll cycle is multi-instance-safe (a Postgres
 advisory lock means only one instance polls) and the outbox worker uses
@@ -286,6 +300,15 @@ Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment
 - **App won't start with "Missing required environment variables"**: set
   `DATABASE_URL` and `TELEGRAM_BOT_TOKEN` (server mode) or the seven
   `DESCO_*` / `EMAIL_*` / `SMTP_*` vars (self-hosted CLI mode).
+- **App won't start with "Refusing to connect to a remote database without
+  TLS"**: your `DATABASE_URL` points at a non-local host with no TLS. The app
+  refuses to push customer PII and payment references over a plaintext link.
+  Fix it by appending `?sslmode=require` to `DATABASE_URL` (recommended), or —
+  only if the database is on a trusted private network — set `ALLOW_INSECURE_DB=1`.
+  `localhost` / `127.0.0.1` / `::1` are exempt, so local dev and the compose
+  sidecar Postgres are unaffected. This guard is new; a pre-existing deploy
+  whose URL lacked `sslmode` needs this one-line `.env` touch-up on first
+  upgrade.
 - **`/health` returns 503 `db-down`**: the app can't reach Postgres. Check
   the `DATABASE_URL`, network ACLs, and that Neon (or your DB) isn't paused.
 - **`/health` returns 503 `stale`**: poll cycle is wedged. Check the app logs

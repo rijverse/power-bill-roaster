@@ -40,6 +40,8 @@ export interface ServerConfig {
   reminderIntervalHours: number;
   jitterMaxMs: number;
   adminChatId: number | null;
+  /** operator's Discord user id, for operator alarms on a Discord-only deploy. Null = Telegram-only alarms. */
+  adminDiscordUserId: string | null;
   /** where dashboard links point, e.g. https://app.example.com */
   publicBaseUrl: string;
   /** signs dashboard links; falls back to a hash of the bot token */
@@ -249,6 +251,7 @@ export function getServerConfig(): ServerConfig {
     reminderIntervalHours: parseFloat(process.env.REMINDER_INTERVAL_HOURS || '24'),
     jitterMaxMs: parseInt(process.env.JITTER_MAX_MS || '4000'),
     adminChatId: process.env.ADMIN_CHAT_ID ? parseInt(process.env.ADMIN_CHAT_ID) : null,
+    adminDiscordUserId: process.env.ADMIN_DISCORD_USER_ID || null,
     publicBaseUrl,
     dashboardSecret,
     adminPassword,

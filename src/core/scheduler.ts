@@ -9,6 +9,7 @@ import { TelegramSender, DiscordDmSender } from '../notifications/dispatcher';
 import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
 import { adminDeepLink } from './admin-link';
+import { notifyOperator } from './operator-notify';
 import { logger } from '../logger';
 
 export type AlertSender = TelegramSender;
@@ -395,12 +396,19 @@ export class Scheduler {
     const link = hash ? adminDeepLink(this.config.publicBaseUrl, hash) : '';
     const message = link ? `${text}\n${link}` : text;
     logger.error(message);
-    if (this.config.adminChatId !== null) {
-      try {
-        await this.sender.sendTelegram(this.config.adminChatId, message);
-      } catch (error) {
-        logger.error('Failed to notify admin', error);
-      }
-    }
+    await notifyOperator(
+      {
+        telegram:
+          this.config.adminChatId !== null
+            ? { sender: this.sender, chatId: this.config.adminChatId }
+            : null,
+        discord:
+          this.discordDm && this.config.adminDiscordUserId !== null
+            ? { dm: this.discordDm, userId: this.config.adminDiscordUserId }
+            : null,
+      },
+      '🚨 Operator alarm',
+      message
+    );
   }
 }

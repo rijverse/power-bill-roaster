@@ -98,6 +98,8 @@ async function main(): Promise<void> {
     dispatcher,
     adminSender: telegramSender,
     adminChatId: config.adminChatId,
+    adminDiscordDm: discordDm,
+    adminDiscordUserId: config.adminDiscordUserId,
   });
   const scheduler = new Scheduler(db, pool, telegramSender, config, subscriptions, discordDm);
 

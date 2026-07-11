@@ -7,9 +7,15 @@
 
 import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { Db, schema } from '../db';
-import { Dispatcher, DispatchResult, TelegramSender } from '../notifications/dispatcher';
+import {
+  Dispatcher,
+  DispatchResult,
+  TelegramSender,
+  DiscordDmSender,
+} from '../notifications/dispatcher';
 import { inQuietHours, quietHoursEnd } from './quiet-hours';
 import { MeterContext } from '../notifications/telegram-templates';
+import { notifyOperator } from './operator-notify';
 import { logger } from '../logger';
 
 const POLL_INTERVAL_MS = 5_000;
@@ -30,6 +36,9 @@ export interface AlertDispatcherDeps {
   /** optional: send a heads-up to the operator when a row exhausts retries. */
   adminSender?: TelegramSender | null;
   adminChatId?: number | null;
+  /** optional Discord fallback for the dead-letter ping (Discord-only deploys). */
+  adminDiscordDm?: DiscordDmSender | null;
+  adminDiscordUserId?: string | null;
 }
 
 export class AlertDispatcherWorker {
@@ -254,20 +263,20 @@ export class AlertDispatcherWorker {
         `Pending alert ${row.id} exhausted retries (${attempts}); marked failed`,
         lastError
       );
-      if (
-        this.deps.adminSender &&
-        this.deps.adminChatId !== null &&
-        this.deps.adminChatId !== undefined
-      ) {
-        try {
-          await this.deps.adminSender.sendTelegram(
-            this.deps.adminChatId,
-            `🚨 Alert for meter ${meter.id} (${meter.accountNo}/${meter.meterNo}) failed after ${attempts} attempts. Last error: ${lastError}`
-          );
-        } catch (notifyError) {
-          logger.error('Failed to notify admin of dead-letter alert', notifyError);
-        }
-      }
+      await notifyOperator(
+        {
+          telegram:
+            this.deps.adminSender && this.deps.adminChatId != null
+              ? { sender: this.deps.adminSender, chatId: this.deps.adminChatId }
+              : null,
+          discord:
+            this.deps.adminDiscordDm && this.deps.adminDiscordUserId != null
+              ? { dm: this.deps.adminDiscordDm, userId: this.deps.adminDiscordUserId }
+              : null,
+        },
+        '🚨 Alert delivery failed',
+        `🚨 Alert for meter ${meter.id} (${meter.accountNo}/${meter.meterNo}) failed after ${attempts} attempts. Last error: ${lastError}`
+      );
       return;
     }
     const backoffMs = BACKOFF_BASE_MS * 2 ** (attempts - 1);

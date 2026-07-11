@@ -84,7 +84,11 @@ export interface AlertCopy {
  * send). tone defaults to savage - the original Power·Roast voice - so any
  * caller that forgets to pass one still gets valid copy.
  */
-export function alertCopy(action: AlertAction, ctx: MeterContext, tone: Tone = 'savage'): AlertCopy | null {
+export function alertCopy(
+  action: AlertAction,
+  ctx: MeterContext,
+  tone: Tone = 'savage'
+): AlertCopy | null {
   const mild = tone === 'mild';
   const bal = ctx.balance.toFixed(2);
   const label = meterLabel(ctx);

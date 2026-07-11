@@ -105,10 +105,12 @@ describe('user-owned table registry', () => {
     // A 3rd platform identity column would have to be handled in mergedIdentity()
     // too, and no FK reflection can tell you that - so the column set is pinned.
     // If this fails: add the column to mergedIdentity() if it identifies the user.
-    const columns = Object.keys(getTableConfig(schema.users).columns.reduce<Record<string, true>>(
-      (acc, c) => ({ ...acc, [c.name]: true }),
-      {}
-    ));
+    const columns = Object.keys(
+      getTableConfig(schema.users).columns.reduce<Record<string, true>>(
+        (acc, c) => ({ ...acc, [c.name]: true }),
+        {}
+      )
+    );
     expect(columns.sort()).toEqual(
       [
         'id',

@@ -52,7 +52,6 @@ A few bits worth calling out:
   who ever had an alert queued. Outbox rows were never being cleared.
   Erasure now clears them (by meter and by user, both blocks).
 
-
 ## [1.0.0] - 2026-07-02
 
 First public release, a free-only launch. Paid plans are implemented but ship

@@ -43,7 +43,11 @@ describe('drizzle migration journal', () => {
   it('has a snapshot per migration', () => {
     const entries = readJournal();
     for (const e of entries) {
-      const snapshot = path.join(DRIZZLE_DIR, 'meta', `${String(e.idx).padStart(4, '0')}_snapshot.json`);
+      const snapshot = path.join(
+        DRIZZLE_DIR,
+        'meta',
+        `${String(e.idx).padStart(4, '0')}_snapshot.json`
+      );
       expect(fs.existsSync(snapshot)).toBe(true);
     }
   });

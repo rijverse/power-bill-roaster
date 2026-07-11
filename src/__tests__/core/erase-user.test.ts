@@ -27,9 +27,7 @@ describe('eraseUser', () => {
 
     expect(deleted).toContain(schema.pendingAlerts);
     expect(deleted.indexOf(schema.pendingAlerts)).toBeLessThan(deleted.indexOf(schema.meters));
-    expect(deleted.lastIndexOf(schema.pendingAlerts)).toBeLessThan(
-      deleted.indexOf(schema.users)
-    );
+    expect(deleted.lastIndexOf(schema.pendingAlerts)).toBeLessThan(deleted.indexOf(schema.users));
     // the rest of the erasure promise still holds
     expect(deleted).toContain(schema.alertsLog);
     expect(deleted).toContain(schema.readings);

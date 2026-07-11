@@ -359,12 +359,7 @@ async function setDiscordWebhook(
 
 // ---- billing --------------------------------------------------------------
 
-async function billing(
-  db: Db,
-  subscriptions: SubscriptionService,
-  userId: number,
-  live: boolean
-) {
+async function billing(db: Db, subscriptions: SubscriptionService, userId: number, live: boolean) {
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
   if (!user) {
     return null;
@@ -724,12 +719,7 @@ export async function handleAppRequest(
     }
 
     if (path === '/app/api/billing' && method === 'GET') {
-      const data = await billing(
-        db,
-        deps.subscriptions,
-        userId,
-        billingLive(config.billing)
-      );
+      const data = await billing(db, deps.subscriptions, userId, billingLive(config.billing));
       if (!data) {
         json(res, 404, { error: 'Account not found.' });
       } else {

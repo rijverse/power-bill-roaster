@@ -82,6 +82,10 @@ export class DiscordApi {
     interactionToken: string,
     payload: DiscordMessagePayload
   ): Promise<void> {
-    await this.request('PATCH', `/webhooks/${appId}/${interactionToken}/messages/@original`, payload);
+    await this.request(
+      'PATCH',
+      `/webhooks/${appId}/${interactionToken}/messages/@original`,
+      payload
+    );
   }
 }

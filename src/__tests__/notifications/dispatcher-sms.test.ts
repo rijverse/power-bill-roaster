@@ -34,8 +34,7 @@ function gateway(): SmsGateway {
   return { name: 'fake', send: jest.fn(async () => undefined) };
 }
 
-const phone = (id: number, address = `+88017000000${id}`) =>
-  channel({ id, type: 'sms', address });
+const phone = (id: number, address = `+88017000000${id}`) => channel({ id, type: 'sms', address });
 
 describe('Dispatcher SMS branch', () => {
   it('texts a verified, enabled number on a low alert', async () => {
@@ -168,8 +167,9 @@ describe('Dispatcher SMS branch', () => {
 
   it('does nothing when no SMS gateway is configured', async () => {
     const dispatcher = new Dispatcher(fakeChannelsDb([phone(9)]), telegram, null);
-    await expect(
-      dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx)
-    ).resolves.toEqual({ delivered: [], failed: [] });
+    await expect(dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx)).resolves.toEqual({
+      delivered: [],
+      failed: [],
+    });
   });
 });

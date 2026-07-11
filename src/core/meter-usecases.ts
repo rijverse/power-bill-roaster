@@ -10,8 +10,7 @@ import { Tone } from './tone';
 // on what "register" or "set thresholds" actually does.
 
 export type PlatformIdentity =
-  | { kind: 'telegram'; chatId: number }
-  | { kind: 'discord'; discordUserId: string };
+  { kind: 'telegram'; chatId: number } | { kind: 'discord'; discordUserId: string };
 
 export async function findUserByIdentity(
   db: Db,

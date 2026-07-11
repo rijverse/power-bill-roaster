@@ -2,7 +2,7 @@
 
 Status as of 2026-07-11. The post-launch cleanup that this file used to track is
 done: all eleven items from the pre-launch review of `feat/free-only-launch` are
-closed. Git history is the record of *how*; what's left here is what a reader
+closed. Git history is the record of _how_; what's left here is what a reader
 still needs to know — what is deliberately still open, what was decided against,
 and the invariants the tests now hold in place so they don't rot again.
 
@@ -47,7 +47,7 @@ test; `__tests__/helpers/http-server.ts` is the place to do it.
 
 - **`unhandledRejection` only logs.** One floating promise usually isn't grounds
   to tear the process down — a transient Telegram 429 shouldn't restart the app.
-  The failure that *does* matter (a rejection wedging the poll loop) is caught by
+  The failure that _does_ matter (a rejection wedging the poll loop) is caught by
   the watchdog, which acts on the symptom rather than trying to classify the cause.
 - **The SMS budget count is a 6th query per alert.** Channels collapsed to a single
   `WHERE user_id = ?`, but the monthly budget is an aggregate over `alerts_log` and
@@ -73,7 +73,7 @@ test; `__tests__/helpers/http-server.ts` is the place to do it.
   tables backing the privacy policy's erasure promise. `db/ownership.ts` + the
   reflection test does the job with no migration at all.
 - **A late-landing send after a timeout isn't cancelled.** `withTimeout` stops
-  *waiting*, it doesn't abort the transport. That's fine: the row is retried, and
+  _waiting_, it doesn't abort the transport. That's fine: the row is retried, and
   the delivered-key ledger stops the same channel being sent twice.
 
 ## Invariants the tests now hold
@@ -81,17 +81,17 @@ test; `__tests__/helpers/http-server.ts` is the place to do it.
 Each of these pins something that had already drifted, or that the next refactor
 would plausibly break. If one starts failing, read it before you "fix" it.
 
-| Test | What it stops |
-|---|---|
-| `notifications/alert-copy.test.ts` | Every channel renders the *same* alert title. The critical title once read "Stone Age Imminent" on chat and "You're About to Live in the Stone Age" in email. |
-| `notifications/dispatcher-telegram.test.ts` | Telegram delivers to an **unverified** channel row. Talking to the bot *is* the verification — routing it through a shared "enabled + verified" helper would mute every Telegram user. |
-| `notifications/dispatcher-sms.test.ts` | The monthly SMS budget is a hard cap. It's the only channel that costs money, and it's the one a shared fan-out helper would silently overspend. |
-| `notifications/dispatcher-channels.test.ts` | Exactly **one** channels query per alert (was five). |
-| `notifications/dispatcher-timeout.test.ts` | A hung channel send is failed, not waited on. |
-| `core/alert-dispatcher.test.ts` | A hung row can't wedge the outbox (`tick()` skips while one is in flight, so an unbounded row used to stop *all* delivery); user/meter lookups stay O(1) per batch. |
-| `web/signed-token.test.ts` | A token minted for one purpose can never verify as another (4×4 namespace matrix). |
-| `web/admin-csrf.test.ts` | Every mutating admin route 403s without a CSRF token — including ones added later. |
-| `web/admin-hash.test.ts` | The client parser shipped to the browser agrees with the server parser, input for input. |
-| `db/ownership.test.ts` | A new table that FKs `users`/`meters` can't be forgotten by `eraseUser`/`mergeAccounts`. Also pins the `users` column set: reflection can't tell you a new identity column needs handling in `mergedIdentity()`. |
-| `db/migrations.test.ts` | An applied migration is never edited. |
-| `web/health.test.ts` | `/health` actually goes red when the DB is down or the poll loop stops. |
+| Test                                        | What it stops                                                                                                                                                                                                    |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notifications/alert-copy.test.ts`          | Every channel renders the _same_ alert title. The critical title once read "Stone Age Imminent" on chat and "You're About to Live in the Stone Age" in email.                                                    |
+| `notifications/dispatcher-telegram.test.ts` | Telegram delivers to an **unverified** channel row. Talking to the bot _is_ the verification — routing it through a shared "enabled + verified" helper would mute every Telegram user.                           |
+| `notifications/dispatcher-sms.test.ts`      | The monthly SMS budget is a hard cap. It's the only channel that costs money, and it's the one a shared fan-out helper would silently overspend.                                                                 |
+| `notifications/dispatcher-channels.test.ts` | Exactly **one** channels query per alert (was five).                                                                                                                                                             |
+| `notifications/dispatcher-timeout.test.ts`  | A hung channel send is failed, not waited on.                                                                                                                                                                    |
+| `core/alert-dispatcher.test.ts`             | A hung row can't wedge the outbox (`tick()` skips while one is in flight, so an unbounded row used to stop _all_ delivery); user/meter lookups stay O(1) per batch.                                              |
+| `web/signed-token.test.ts`                  | A token minted for one purpose can never verify as another (4×4 namespace matrix).                                                                                                                               |
+| `web/admin-csrf.test.ts`                    | Every mutating admin route 403s without a CSRF token — including ones added later.                                                                                                                               |
+| `web/admin-hash.test.ts`                    | The client parser shipped to the browser agrees with the server parser, input for input.                                                                                                                         |
+| `db/ownership.test.ts`                      | A new table that FKs `users`/`meters` can't be forgotten by `eraseUser`/`mergeAccounts`. Also pins the `users` column set: reflection can't tell you a new identity column needs handling in `mergedIdentity()`. |
+| `db/migrations.test.ts`                     | An applied migration is never edited.                                                                                                                                                                            |
+| `web/health.test.ts`                        | `/health` actually goes red when the DB is down or the poll loop stops.                                                                                                                                          |

@@ -49,7 +49,9 @@ describe('Dispatcher discord-dm branch', () => {
 
   it('skips a DM already delivered on a previous attempt', async () => {
     const sendDm = jest.fn(async () => undefined);
-    const dispatcher = new Dispatcher(fakeChannelsDb([dmChannel]), telegram, null, null, { sendDm });
+    const dispatcher = new Dispatcher(fakeChannelsDb([dmChannel]), telegram, null, null, {
+      sendDm,
+    });
 
     const result = await dispatcher.dispatchAlert(
       user,

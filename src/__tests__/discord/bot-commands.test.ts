@@ -92,7 +92,7 @@ const METER = {
 };
 
 function contentOf(reply: { immediate: Record<string, unknown> }): string {
-  return ((reply.immediate.data as { content?: string })?.content ?? '');
+  return (reply.immediate.data as { content?: string })?.content ?? '';
 }
 
 describe('Discord bot commands', () => {

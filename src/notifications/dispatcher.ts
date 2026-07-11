@@ -3,7 +3,9 @@ import { Db, schema } from '../db';
 import { AlertAction, AlertLevel } from '../core/alert-machine';
 import { smsPerMonthFor } from '../core/plans';
 import { normalizeTone, Tone } from '../core/tone';
-import { renderAlert, MeterContext } from './telegram-templates';
+import { withTimeout } from '../core/with-timeout';
+import { renderAlert } from './telegram-templates';
+import { MeterContext, rechargeUrl } from './alert-copy';
 import { smsAlertText } from './sms-templates';
 import { emailAlert } from './email-templates';
 import { discordAlertEmbed } from './discord-templates';
@@ -24,9 +26,6 @@ export interface DiscordDmSender {
   sendDm(discordUserId: string, embed: DiscordEmbed): Promise<void>;
 }
 
-// Fallback only - the scheduler always sets ctx.rechargeUrl from config.
-const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
-
 /**
  * Result of one dispatch pass. `delivered` and `failed` hold channel keys -
  * 'telegram', 'email:<channelId>', 'sms:<channelId>', 'discord:<channelId>' - so the worker marks the
@@ -41,6 +40,45 @@ export interface DispatchResult {
 
 function empty(): DispatchResult {
   return { delivered: [], failed: [] };
+}
+
+/**
+ * A channel that hasn't answered in this long is treated as failed rather than
+ * waited on. Without it a hung send (an SMTP socket that never closes, a webhook
+ * that accepts the connection and stops) blocks the outbox worker's whole batch -
+ * and because the worker skips a tick while one is in flight, the entire outbox
+ * stops draining until the transport gives up on its own, which for a raw socket
+ * may be never. A timeout is just a failed delivery: the row is retried.
+ */
+export const SEND_TIMEOUT_MS = 15_000;
+
+/** Turn an unknown thrown value into something loggable. */
+function errMsg(error: unknown): unknown {
+  return error instanceof Error ? error.message : error;
+}
+
+/**
+ * The enabled + verified rows of one type - the rule for every channel except
+ * Telegram, which is deliberately different (see sendTelegramAlert).
+ */
+function deliverable(channels: schema.Channel[], type: string): schema.Channel[] {
+  return channels.filter(c => c.type === type && c.enabled && c.verified);
+}
+
+/** One channel type's fan-out: what to send, to whom, and how to account for it. */
+interface FanOut {
+  channels: schema.Channel[];
+  keyPrefix: 'email' | 'sms' | 'discord' | 'discord-dm';
+  meter: schema.Meter;
+  action: AlertAction;
+  level: AlertLevel;
+  alreadyDelivered: ReadonlySet<string>;
+  send: (channel: schema.Channel) => Promise<void>;
+  onError: (channel: schema.Channel, error: unknown) => void;
+  /** SMS budget: return false to stop before the next send. */
+  canSend?: () => boolean;
+  /** SMS budget: called after each *successful* send. */
+  onSent?: () => void;
 }
 
 /**
@@ -74,23 +112,28 @@ export class Dispatcher {
     // Quiet hours are the outbox worker's concern: it defers the row until the
     // window ends instead of asking us to skip (which would read as "sent").
     const tone = normalizeTone(user.tonePref);
+    // One channels query per alert, not one per channel type. If it throws, the
+    // whole row fails rather than a single channel group - which is safe: the
+    // worker catches that and retries the row, and since nothing was sent, the
+    // delivered ledger still can't produce a duplicate.
+    const channels = await this.loadChannels(user.id);
     // Channels are independent and each isolates its own errors (runChannel),
     // so send in parallel - alert latency is the slowest channel, not the sum.
     const results = await Promise.all([
       this.runChannel('telegram', () =>
-        this.sendTelegramAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+        this.sendTelegramAlert(user, meter, action, level, ctx, tone, alreadyDelivered, channels)
       ),
       this.runChannel('email', () =>
-        this.sendEmailAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+        this.sendEmailAlert(meter, action, level, ctx, tone, alreadyDelivered, channels)
       ),
       this.runChannel('sms', () =>
-        this.sendSmsAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+        this.sendSmsAlert(user, meter, action, level, ctx, tone, alreadyDelivered, channels)
       ),
       this.runChannel('discord', () =>
-        this.sendDiscordAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+        this.sendDiscordAlert(meter, action, level, ctx, tone, alreadyDelivered, channels)
       ),
       this.runChannel('discord-dm', () =>
-        this.sendDiscordDmAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
+        this.sendDiscordDmAlert(meter, action, level, ctx, tone, alreadyDelivered, channels)
       ),
     ]);
     return {
@@ -99,10 +142,14 @@ export class Dispatcher {
     };
   }
 
-  // Isolate a channel so its unexpected error (e.g. a failing channels query)
-  // can't discard another channel's success and cause a duplicate resend. A
-  // thrown channel is reported failed under a group key so the worker retries
-  // it; nothing was delivered, so there's nothing to wrongly skip next time.
+  private async loadChannels(userId: number): Promise<schema.Channel[]> {
+    return this.db.select().from(schema.channels).where(eq(schema.channels.userId, userId));
+  }
+
+  // Isolate a channel so its unexpected error can't discard another channel's
+  // success and cause a duplicate resend. A thrown channel is reported failed
+  // under a group key so the worker retries it; nothing was delivered, so
+  // there's nothing to wrongly skip next time.
   private async runChannel(
     group: string,
     fn: () => Promise<DispatchResult>
@@ -110,10 +157,7 @@ export class Dispatcher {
     try {
       return await fn();
     } catch (error) {
-      logger.error(
-        `${group} alert dispatch errored for a meter`,
-        error instanceof Error ? error.message : error
-      );
+      logger.error(`${group} alert dispatch errored for a meter`, errMsg(error));
       return { delivered: [], failed: [group] };
     }
   }
@@ -124,69 +168,86 @@ export class Dispatcher {
     try {
       await this.db.insert(schema.alertsLog).values(values);
     } catch (error) {
-      logger.error(
-        'Failed to write alerts_log row',
-        error instanceof Error ? error.message : error
-      );
+      logger.error('Failed to write alerts_log row', errMsg(error));
     }
   }
 
+  /**
+   * The loop every multi-address channel shares: skip what a previous attempt
+   * already delivered, send, log the attempt, collect the keys. Forgetting the
+   * alreadyDelivered check in a hand-rolled copy is exactly the duplicate-send
+   * bug the ledger exists to prevent - so there is only one copy of it now.
+   */
+  private async fanOut(o: FanOut): Promise<DispatchResult> {
+    const delivered: string[] = [];
+    const failed: string[] = [];
+    for (const channel of o.channels) {
+      const key = `${o.keyPrefix}:${channel.id}`;
+      // Delivered on a previous attempt: skip it without consuming budget - that
+      // send's 'sent' row is already counted in the month's usage.
+      if (o.alreadyDelivered.has(key)) {
+        continue;
+      }
+      if (o.canSend && !o.canSend()) {
+        break;
+      }
+      let ok = true;
+      try {
+        await withTimeout(o.send(channel), SEND_TIMEOUT_MS, `${o.keyPrefix} send`);
+      } catch (error) {
+        ok = false;
+        o.onError(channel, error);
+      }
+      await this.logDelivery({
+        meterId: o.meter.id,
+        channelId: channel.id,
+        level: o.level,
+        action: o.action,
+        deliveryStatus: ok ? 'sent' : 'failed',
+      });
+      if (ok) {
+        o.onSent?.();
+        delivered.push(key);
+      } else {
+        failed.push(key);
+      }
+    }
+    return { delivered, failed };
+  }
+
   private async sendEmailAlert(
-    user: schema.User,
     meter: schema.Meter,
     action: AlertAction,
     level: AlertLevel,
     ctx: MeterContext,
     tone: Tone,
-    alreadyDelivered: ReadonlySet<string>
+    alreadyDelivered: ReadonlySet<string>,
+    channels: schema.Channel[]
   ): Promise<DispatchResult> {
-    if (!this.mailer) {
+    const mailer = this.mailer;
+    if (!mailer) {
       return empty();
     }
     const content = emailAlert(action, ctx, tone);
     if (!content) {
       return empty();
     }
-    // verified=true means the address is confirmed (web magic-link sign-in or
-    // an explicit opt-in); unverified/disabled channels never receive mail
-    const emailChannels = await this.db
-      .select()
-      .from(schema.channels)
-      .where(
-        and(
-          eq(schema.channels.userId, user.id),
-          eq(schema.channels.type, 'email'),
-          eq(schema.channels.enabled, true),
-          eq(schema.channels.verified, true)
-        )
-      );
-    const delivered: string[] = [];
-    const failed: string[] = [];
-    for (const channel of emailChannels) {
-      const key = `email:${channel.id}`;
-      if (alreadyDelivered.has(key)) {
-        continue; // delivered on a previous attempt - don't resend
-      }
-      let ok = true;
-      try {
-        await this.mailer.send(channel.address, content.subject, content.text, content.html);
-      } catch (error) {
-        ok = false;
+    // verified=true means the address is confirmed (web magic-link sign-in or an
+    // explicit opt-in); unverified/disabled channels never receive mail.
+    return this.fanOut({
+      channels: deliverable(channels, 'email'),
+      keyPrefix: 'email',
+      meter,
+      action,
+      level,
+      alreadyDelivered,
+      send: c => mailer.send(c.address, content.subject, content.text, content.html),
+      onError: (c, e) =>
         logger.error(
-          `Email alert failed for meter ${meter.id} to ${maskEmail(channel.address)}`,
-          error instanceof Error ? error.message : error
-        );
-      }
-      await this.logDelivery({
-        meterId: meter.id,
-        channelId: channel.id,
-        level,
-        action,
-        deliveryStatus: ok ? 'sent' : 'failed',
-      });
-      (ok ? delivered : failed).push(key);
-    }
-    return { delivered, failed };
+          `Email alert failed for meter ${meter.id} to ${maskEmail(c.address)}`,
+          errMsg(e)
+        ),
+    });
   }
 
   private async sendTelegramAlert(
@@ -196,7 +257,8 @@ export class Dispatcher {
     level: AlertLevel,
     ctx: MeterContext,
     tone: Tone,
-    alreadyDelivered: ReadonlySet<string>
+    alreadyDelivered: ReadonlySet<string>,
+    channels: schema.Channel[]
   ): Promise<DispatchResult> {
     const message = renderAlert(action, ctx, tone);
     if (!message || user.telegramChatId === null) {
@@ -206,26 +268,26 @@ export class Dispatcher {
     if (alreadyDelivered.has(key)) {
       return empty(); // delivered on a previous attempt - don't resend
     }
-    // Telegram has no per-address row by default (it rides user.telegramChatId);
-    // a 'telegram' channel row exists only once the user toggles it. Respect it.
-    // Oldest row wins deterministically - an account merge can leave two.
-    const tgRows = await this.db
-      .select()
-      .from(schema.channels)
-      .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'telegram')));
-    const tgChannel = tgRows.reduce<schema.Channel | undefined>(
-      (oldest, c) => (!oldest || c.id < oldest.id ? c : oldest),
-      undefined
-    );
+    // Deliberately NOT deliverable(): Telegram has no per-address row by default
+    // (it rides user.telegramChatId), and a telegram row is never `verified` in
+    // the OTP sense - talking to the bot IS the verification. So respect
+    // `enabled` and ignore `verified`; requiring verified here would mute every
+    // Telegram user. Oldest row wins deterministically - a merge can leave two.
+    // It's a single-target send with buttons rather than a loop over addresses,
+    // which is the other reason it doesn't go through fanOut.
+    const tgChannel = channels
+      .filter(c => c.type === 'telegram')
+      .reduce<schema.Channel | undefined>(
+        (oldest, c) => (!oldest || c.id < oldest.id ? c : oldest),
+        undefined
+      );
     if (tgChannel && !tgChannel.enabled) {
       return empty();
     }
     // Recovery is good news with nothing to act on; every other alert gets a
     // one-tap recharge link and a snooze button (snooze mutes the repeat nag).
     // Low/critical alerts also get a "check again" button to re-poll on demand.
-    const firstRow: AlertButton[] = [
-      { text: '💳 Recharge now', url: ctx.rechargeUrl ?? DEFAULT_RECHARGE_URL },
-    ];
+    const firstRow: AlertButton[] = [{ text: '💳 Recharge now', url: rechargeUrl(ctx) }];
     if (action === 'low-alert' || action === 'critical-alert') {
       firstRow.push({ text: '🔄 Check again', callbackData: `recheck:${meter.id}` });
     }
@@ -235,13 +297,14 @@ export class Dispatcher {
         : [firstRow, [{ text: '🔕 Snooze 3 days', callbackData: `snooze:${meter.id}` }]];
     let ok = true;
     try {
-      await this.telegram.sendTelegram(user.telegramChatId, message, buttons);
+      await withTimeout(
+        this.telegram.sendTelegram(user.telegramChatId, message, buttons),
+        SEND_TIMEOUT_MS,
+        'telegram send'
+      );
     } catch (error) {
       ok = false;
-      logger.error(
-        `Telegram alert failed for meter ${meter.id}`,
-        error instanceof Error ? error.message : error
-      );
+      logger.error(`Telegram alert failed for meter ${meter.id}`, errMsg(error));
     }
     await this.logDelivery({
       meterId: meter.id,
@@ -259,9 +322,11 @@ export class Dispatcher {
     level: AlertLevel,
     ctx: MeterContext,
     tone: Tone,
-    alreadyDelivered: ReadonlySet<string>
+    alreadyDelivered: ReadonlySet<string>,
+    channels: schema.Channel[]
   ): Promise<DispatchResult> {
-    if (!this.sms) {
+    const gateway = this.sms;
+    if (!gateway) {
       return empty();
     }
     const text = smsAlertText(action, ctx, tone);
@@ -272,202 +337,129 @@ export class Dispatcher {
     if (budget === 0) {
       return empty();
     }
-
     // verified=true means the user proved they own the number (OTP) -
-    // unverified channels never receive a message
-    const smsChannels = await this.db
-      .select()
-      .from(schema.channels)
-      .where(
-        and(
-          eq(schema.channels.userId, user.id),
-          eq(schema.channels.type, 'sms'),
-          eq(schema.channels.enabled, true),
-          eq(schema.channels.verified, true)
-        )
-      );
+    // unverified channels never receive a message.
+    const smsChannels = deliverable(channels, 'sms');
     if (smsChannels.length === 0) {
       return empty();
     }
 
-    const monthStart = new Date();
-    monthStart.setDate(1);
-    monthStart.setHours(0, 0, 0, 0);
-    const usedThisMonth = await this.db.$count(
-      schema.alertsLog,
-      and(
-        inArray(
-          schema.alertsLog.channelId,
-          smsChannels.map(c => c.id)
-        ),
-        gte(schema.alertsLog.sentAt, monthStart),
-        eq(schema.alertsLog.deliveryStatus, 'sent')
-      )
-    );
+    const usedThisMonth = await this.smsSentThisMonth(smsChannels.map(c => c.id));
     if (usedThisMonth >= budget) {
       logger.warn(`User ${user.id} hit the monthly SMS budget (${budget}), skipping SMS`);
       return empty();
     }
 
     // The budget is the hard cap on billable segments. Decrement per successful
-    // send so a user with several verified numbers can't overshoot it in a
-    // single fan-out (failed sends don't burn budget, matching usedThisMonth).
+    // send so a user with several verified numbers can't overshoot it in a single
+    // fan-out (failed sends don't burn budget, matching usedThisMonth). This stays
+    // out here rather than inside fanOut - SMS is the only channel that costs money.
     let remaining = budget - usedThisMonth;
-    const delivered: string[] = [];
-    const failed: string[] = [];
-    for (const channel of smsChannels) {
-      const key = `sms:${channel.id}`;
-      // Already delivered on a previous attempt: skip without touching budget -
-      // its 'sent' row is already counted in usedThisMonth above.
-      if (alreadyDelivered.has(key)) {
-        continue;
-      }
-      if (remaining <= 0) {
+    return this.fanOut({
+      channels: smsChannels,
+      keyPrefix: 'sms',
+      meter,
+      action,
+      level,
+      alreadyDelivered,
+      canSend: () => {
+        if (remaining > 0) {
+          return true;
+        }
         logger.warn(`User ${user.id} reached the SMS budget (${budget}) mid-alert, stopping`);
-        break;
-      }
-      let ok = true;
-      try {
-        await this.sms.send(channel.address, text);
-      } catch (error) {
-        ok = false;
-        logger.error(
-          `SMS alert failed for meter ${meter.id} via ${this.sms.name} to ${maskPhone(channel.address)}`,
-          error instanceof Error ? error.message : error
-        );
-      }
-      await this.logDelivery({
-        meterId: meter.id,
-        channelId: channel.id,
-        level,
-        action,
-        deliveryStatus: ok ? 'sent' : 'failed',
-      });
-      if (ok) {
+        return false;
+      },
+      onSent: () => {
         remaining--;
-        delivered.push(key);
-      } else {
-        failed.push(key);
-      }
-    }
-    return { delivered, failed };
+      },
+      send: c => gateway.send(c.address, text),
+      onError: (c, e) =>
+        logger.error(
+          `SMS alert failed for meter ${meter.id} via ${gateway.name} to ${maskPhone(c.address)}`,
+          errMsg(e)
+        ),
+    });
+  }
+
+  /** Billable segments already sent this calendar month across the user's numbers. */
+  private async smsSentThisMonth(channelIds: number[]): Promise<number> {
+    const monthStart = new Date();
+    monthStart.setDate(1);
+    monthStart.setHours(0, 0, 0, 0);
+    return this.db.$count(
+      schema.alertsLog,
+      and(
+        inArray(schema.alertsLog.channelId, channelIds),
+        gte(schema.alertsLog.sentAt, monthStart),
+        eq(schema.alertsLog.deliveryStatus, 'sent')
+      )
+    );
   }
 
   // The Discord *bot* channel. Same idea as the webhook channel - free, full
-  // action set - but delivery is a DM through the bot instead of a webhook
-  // post. The 'discord-dm' channel row is created verified at registration
-  // (running a slash command proves the user controls that snowflake).
-  // The DM itself can still fail (closed DMs, bot blocked). That's a failed
-  // delivery, the outbox retries it.
+  // action set - but delivery is a DM through the bot instead of a webhook post.
+  // The 'discord-dm' row is created verified at registration (running a slash
+  // command proves the user controls that snowflake). The DM itself can still
+  // fail (closed DMs, bot blocked); that's a failed delivery and the outbox
+  // retries it.
   private async sendDiscordDmAlert(
-    user: schema.User,
     meter: schema.Meter,
     action: AlertAction,
     level: AlertLevel,
     ctx: MeterContext,
     tone: Tone,
-    alreadyDelivered: ReadonlySet<string>
+    alreadyDelivered: ReadonlySet<string>,
+    channels: schema.Channel[]
   ): Promise<DispatchResult> {
-    if (!this.discordDm) {
+    const dm = this.discordDm;
+    if (!dm) {
       return empty();
     }
     const embed = discordAlertEmbed(action, ctx, tone);
     if (!embed) {
       return empty();
     }
-    const dmChannels = await this.db
-      .select()
-      .from(schema.channels)
-      .where(
-        and(
-          eq(schema.channels.userId, user.id),
-          eq(schema.channels.type, 'discord-dm'),
-          eq(schema.channels.enabled, true),
-          eq(schema.channels.verified, true)
-        )
-      );
-    const delivered: string[] = [];
-    const failed: string[] = [];
-    for (const channel of dmChannels) {
-      const key = `discord-dm:${channel.id}`;
-      if (alreadyDelivered.has(key)) {
-        continue; // delivered on a previous attempt - don't resend
-      }
-      let ok = true;
-      try {
-        await this.discordDm.sendDm(channel.address, embed);
-      } catch (error) {
-        ok = false;
-        logger.error(
-          `Discord DM alert failed for meter ${meter.id}`,
-          error instanceof Error ? error.message : error
-        );
-      }
-      await this.logDelivery({
-        meterId: meter.id,
-        channelId: channel.id,
-        level,
-        action,
-        deliveryStatus: ok ? 'sent' : 'failed',
-      });
-      (ok ? delivered : failed).push(key);
-    }
-    return { delivered, failed };
+    return this.fanOut({
+      channels: deliverable(channels, 'discord-dm'),
+      keyPrefix: 'discord-dm',
+      meter,
+      action,
+      level,
+      alreadyDelivered,
+      send: c => dm.sendDm(c.address, embed),
+      onError: (_c, e) => logger.error(`Discord DM alert failed for meter ${meter.id}`, errMsg(e)),
+    });
   }
 
   private async sendDiscordAlert(
-    user: schema.User,
     meter: schema.Meter,
     action: AlertAction,
     level: AlertLevel,
     ctx: MeterContext,
     tone: Tone,
-    alreadyDelivered: ReadonlySet<string>
+    alreadyDelivered: ReadonlySet<string>,
+    channels: schema.Channel[]
   ): Promise<DispatchResult> {
     const embed = discordAlertEmbed(action, ctx, tone);
     if (!embed) {
       return empty();
     }
-    // Discord is a free channel (webhooks cost nothing), so - like email - it
-    // gets the full action set. verified=true means the /discord test embed
-    // landed; unverified/disabled rows never receive anything.
-    const discordChannels = await this.db
-      .select()
-      .from(schema.channels)
-      .where(
-        and(
-          eq(schema.channels.userId, user.id),
-          eq(schema.channels.type, 'discord'),
-          eq(schema.channels.enabled, true),
-          eq(schema.channels.verified, true)
-        )
-      );
-    const delivered: string[] = [];
-    const failed: string[] = [];
-    for (const channel of discordChannels) {
-      const key = `discord:${channel.id}`;
-      if (alreadyDelivered.has(key)) {
-        continue; // delivered on a previous attempt - don't resend
-      }
-      let ok = true;
-      try {
-        await postDiscordWebhook(channel.address, embed);
-      } catch (error) {
-        ok = false;
+    // Discord is a free channel (webhooks cost nothing), so - like email - it gets
+    // the full action set. verified=true means the /discord test embed landed;
+    // unverified/disabled rows never receive anything.
+    return this.fanOut({
+      channels: deliverable(channels, 'discord'),
+      keyPrefix: 'discord',
+      meter,
+      action,
+      level,
+      alreadyDelivered,
+      send: c => postDiscordWebhook(c.address, embed),
+      onError: (c, e) =>
         logger.error(
-          `Discord alert failed for meter ${meter.id} to ${maskWebhookUrl(channel.address)}`,
-          error instanceof Error ? error.message : error
-        );
-      }
-      await this.logDelivery({
-        meterId: meter.id,
-        channelId: channel.id,
-        level,
-        action,
-        deliveryStatus: ok ? 'sent' : 'failed',
-      });
-      (ok ? delivered : failed).push(key);
-    }
-    return { delivered, failed };
+          `Discord alert failed for meter ${meter.id} to ${maskWebhookUrl(c.address)}`,
+          errMsg(e)
+        ),
+    });
   }
 }

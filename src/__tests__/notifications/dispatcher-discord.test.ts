@@ -1,6 +1,7 @@
 import { Dispatcher, TelegramSender } from '../../notifications/dispatcher';
-import { Db, schema } from '../../db';
-import { MeterContext } from '../../notifications/telegram-templates';
+import { schema } from '../../db';
+import { MeterContext } from '../../notifications/alert-copy';
+import { channel, fakeChannelsDb } from '../helpers/channels-db';
 
 const ctx: MeterContext = {
   nickname: null,
@@ -17,35 +18,6 @@ const user = { id: 1, telegramChatId: null, plan: 'free' } as unknown as schema.
 const meter = { id: 7 } as unknown as schema.Meter;
 const WEBHOOK = 'https://discord.com/api/webhooks/1/tok';
 
-// The dispatcher filters channels by `type` in SQL; the fake db can't run SQL,
-// so recover the queried type from the drizzle condition to mimic that filter.
-const CHANNEL_TYPES = ['telegram', 'email', 'sms', 'discord'];
-function conditionType(cond: unknown): string | undefined {
-  const seen = new Set<unknown>();
-  const stack: unknown[] = [cond];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node || typeof node !== 'object' || seen.has(node)) continue;
-    seen.add(node);
-    for (const value of Object.values(node as Record<string, unknown>)) {
-      if (typeof value === 'string' && CHANNEL_TYPES.includes(value)) return value;
-      if (value && typeof value === 'object') stack.push(value);
-    }
-  }
-  return undefined;
-}
-
-function fakeDb(discordChannels: unknown[]) {
-  return {
-    select: () => ({
-      from: () => ({
-        where: async (cond: unknown) => (conditionType(cond) === 'discord' ? discordChannels : []),
-      }),
-    }),
-    insert: () => ({ values: async () => undefined }),
-  } as unknown as Db;
-}
-
 const telegram: TelegramSender = { sendTelegram: jest.fn(async () => undefined) };
 
 describe('Dispatcher discord branch', () => {
@@ -61,9 +33,7 @@ describe('Dispatcher discord branch', () => {
 
   it('posts to a verified, enabled discord channel on a low alert', async () => {
     fetchSpy.mockResolvedValueOnce({ ok: true, status: 204 });
-    const db = fakeDb([
-      { id: 9, address: WEBHOOK, type: 'discord', verified: true, enabled: true },
-    ]);
+    const db = fakeChannelsDb([channel({ id: 9, type: 'discord', address: WEBHOOK })]);
     const dispatcher = new Dispatcher(db, telegram, null, null);
 
     const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
@@ -75,9 +45,7 @@ describe('Dispatcher discord branch', () => {
 
   it('reports the channel failed (not delivered) when the webhook post fails', async () => {
     fetchSpy.mockResolvedValueOnce({ ok: false, status: 500 });
-    const db = fakeDb([
-      { id: 9, address: WEBHOOK, type: 'discord', verified: true, enabled: true },
-    ]);
+    const db = fakeChannelsDb([channel({ id: 9, type: 'discord', address: WEBHOOK })]);
     const dispatcher = new Dispatcher(db, telegram, null, null);
 
     const result = await dispatcher.dispatchAlert(user, meter, 'critical-alert', 'critical', ctx);
@@ -86,9 +54,7 @@ describe('Dispatcher discord branch', () => {
   });
 
   it('skips a channel already delivered on a previous attempt', async () => {
-    const db = fakeDb([
-      { id: 9, address: WEBHOOK, type: 'discord', verified: true, enabled: true },
-    ]);
+    const db = fakeChannelsDb([channel({ id: 9, type: 'discord', address: WEBHOOK })]);
     const dispatcher = new Dispatcher(db, telegram, null, null);
 
     const result = await dispatcher.dispatchAlert(
@@ -107,9 +73,7 @@ describe('Dispatcher discord branch', () => {
   it("an isolated discord failure doesn't block another channel", async () => {
     const tgUser = { id: 1, telegramChatId: 555, plan: 'free' } as unknown as schema.User;
     fetchSpy.mockRejectedValueOnce(new Error('network'));
-    const db = fakeDb([
-      { id: 9, address: WEBHOOK, type: 'discord', verified: true, enabled: true },
-    ]);
+    const db = fakeChannelsDb([channel({ id: 9, type: 'discord', address: WEBHOOK })]);
     const send = jest.fn(async () => undefined);
     const dispatcher = new Dispatcher(db, { sendTelegram: send }, null, null);
 

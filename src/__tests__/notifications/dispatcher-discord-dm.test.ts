@@ -1,6 +1,7 @@
 import { Dispatcher, TelegramSender, DiscordDmSender } from '../../notifications/dispatcher';
-import { Db, schema } from '../../db';
-import { MeterContext } from '../../notifications/telegram-templates';
+import { schema } from '../../db';
+import { MeterContext } from '../../notifications/alert-copy';
+import { channel, fakeChannelsDb } from '../helpers/channels-db';
 
 const ctx: MeterContext = {
   nickname: null,
@@ -17,49 +18,14 @@ const user = { id: 1, telegramChatId: null, plan: 'free' } as unknown as schema.
 const meter = { id: 7 } as unknown as schema.Meter;
 const DISCORD_USER_ID = '111222333444555666';
 
-// Same trick as the webhook test: the fake db can't run SQL, so recover the
-// channel type the dispatcher asked for from the drizzle condition object.
-const CHANNEL_TYPES = ['telegram', 'email', 'sms', 'discord', 'discord-dm'];
-function conditionType(cond: unknown): string | undefined {
-  const seen = new Set<unknown>();
-  const stack: unknown[] = [cond];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node || typeof node !== 'object' || seen.has(node)) continue;
-    seen.add(node);
-    for (const value of Object.values(node as Record<string, unknown>)) {
-      if (typeof value === 'string' && CHANNEL_TYPES.includes(value)) return value;
-      if (value && typeof value === 'object') stack.push(value);
-    }
-  }
-  return undefined;
-}
-
-function fakeDb(dmChannels: unknown[]) {
-  return {
-    select: () => ({
-      from: () => ({
-        where: async (cond: unknown) => (conditionType(cond) === 'discord-dm' ? dmChannels : []),
-      }),
-    }),
-    insert: () => ({ values: async () => undefined }),
-  } as unknown as Db;
-}
-
 const telegram: TelegramSender = { sendTelegram: jest.fn(async () => undefined) };
-const dmChannel = {
-  id: 5,
-  address: DISCORD_USER_ID,
-  type: 'discord-dm',
-  verified: true,
-  enabled: true,
-};
+const dmChannel = channel({ id: 5, type: 'discord-dm', address: DISCORD_USER_ID });
 
 describe('Dispatcher discord-dm branch', () => {
   it('DMs a verified, enabled discord-dm channel on a low alert', async () => {
     const sendDm = jest.fn(async (_userId: string) => undefined);
     const dm: DiscordDmSender = { sendDm };
-    const dispatcher = new Dispatcher(fakeDb([dmChannel]), telegram, null, null, dm);
+    const dispatcher = new Dispatcher(fakeChannelsDb([dmChannel]), telegram, null, null, dm);
 
     const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
 
@@ -74,7 +40,7 @@ describe('Dispatcher discord-dm branch', () => {
         throw new Error('Discord API POST /channels returned 403');
       }),
     };
-    const dispatcher = new Dispatcher(fakeDb([dmChannel]), telegram, null, null, dm);
+    const dispatcher = new Dispatcher(fakeChannelsDb([dmChannel]), telegram, null, null, dm);
 
     const result = await dispatcher.dispatchAlert(user, meter, 'critical-alert', 'critical', ctx);
 
@@ -83,7 +49,7 @@ describe('Dispatcher discord-dm branch', () => {
 
   it('skips a DM already delivered on a previous attempt', async () => {
     const sendDm = jest.fn(async () => undefined);
-    const dispatcher = new Dispatcher(fakeDb([dmChannel]), telegram, null, null, { sendDm });
+    const dispatcher = new Dispatcher(fakeChannelsDb([dmChannel]), telegram, null, null, { sendDm });
 
     const result = await dispatcher.dispatchAlert(
       user,
@@ -99,7 +65,7 @@ describe('Dispatcher discord-dm branch', () => {
   });
 
   it('is silent when no DM sender is configured (Discord bot off)', async () => {
-    const dispatcher = new Dispatcher(fakeDb([dmChannel]), telegram, null, null, null);
+    const dispatcher = new Dispatcher(fakeChannelsDb([dmChannel]), telegram, null, null, null);
     const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
     expect(result).toEqual({ delivered: [], failed: [] });
   });

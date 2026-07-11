@@ -1,5 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
 import { Db, schema } from '../db';
+import { METER_OWNED } from '../db/ownership';
 import { enforceMeterCap } from './meter-cap';
 
 // The identity we compare meters by: a user can't hold the same physical meter
@@ -100,10 +101,13 @@ export async function mergeAccounts(
     const { dupIds, moveIds } = partitionMeters(survivorMeters, loserMeters);
 
     if (dupIds.length > 0) {
-      await tx.delete(schema.alertsLog).where(inArray(schema.alertsLog.meterId, dupIds));
-      await tx.delete(schema.alertState).where(inArray(schema.alertState.meterId, dupIds));
-      await tx.delete(schema.readings).where(inArray(schema.readings.meterId, dupIds));
-      await tx.delete(schema.pendingAlerts).where(inArray(schema.pendingAlerts.meterId, dupIds));
+      // A meter the survivor already has: its rows die with it. The table list and
+      // its (children-first) order come from the registry, so this can't drift from
+      // eraseUser's - which is the half of the problem ON DELETE CASCADE could not
+      // have solved, since merge re-points FKs rather than deleting the parent.
+      for (const owned of METER_OWNED) {
+        await tx.delete(owned.table).where(inArray(owned.meterId!, dupIds));
+      }
       await tx.delete(schema.meters).where(inArray(schema.meters.id, dupIds));
     }
     if (moveIds.length > 0) {

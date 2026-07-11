@@ -1,40 +1,39 @@
 import crypto from 'crypto';
+import {
+  CookieSpec,
+  buildCookie,
+  csrfFor as csrfForNs,
+  safeEqual,
+  sign,
+  unsignExpiring,
+  verifyCsrf as verifyCsrfNs,
+} from './signed-token';
 
 // Customer web-app auth, stateless like the dashboard links (token.ts) and the
-// admin panel (admin-session.ts). Two token kinds, both HMAC-SHA256 signed:
-//   - magic link  : proves control of an email (sign-in / sign-up), ~20 min
-//   - session     : the logged-in cookie, carries userId, 30 days
-// A namespace is folded into the signature so one kind can never be replayed as
-// the other. readCookie is shared from admin-session.
+// admin panel (admin-session.ts). Token kinds, all HMAC-SHA256 signed:
+//   - magic link   : proves control of an email (sign-in / sign-up), ~20 min
+//   - session      : the logged-in cookie, carries userId, 30 days
+//   - tg-link      : proves a web user asked to connect Telegram, 15 min
+//   - discord-link : same, for Discord
+// Each has its own namespace, so one kind can never be replayed as another (see
+// signed-token.ts). readCookie is shared from admin-session.
 
 export const USER_COOKIE = 'pr_user';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAGIC_TTL_MS = 20 * 60 * 1000;
 const LINK_TTL_MS = 15 * 60 * 1000;
 
-function hmac(ns: string, payload: string, secret: string): string {
-  return crypto.createHmac('sha256', secret).update(`${ns}:${payload}`).digest('base64url');
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
-}
-
-function sign(ns: string, data: string, secret: string): string {
-  const payload = Buffer.from(data).toString('base64url');
-  return `${payload}.${hmac(ns, payload, secret)}`;
-}
-
-/** Verifies signature + namespace and returns the decoded data string, else null. */
-function unsign(ns: string, token: string, secret: string): string | null {
-  const [payload, signature] = (token ?? '').split('.');
-  if (!payload || !signature || !safeEqual(signature, hmac(ns, payload, secret))) {
-    return null;
-  }
-  return Buffer.from(payload, 'base64url').toString();
-}
+const USER_COOKIE_SPEC: CookieSpec = {
+  name: USER_COOKIE,
+  path: '/app',
+  // Lax, not Strict: the cookie is set on the magic-link GET and must survive
+  // the cross-site-initiated redirect to /app (webmail clicks are cross-site
+  // navigations - Strict would withhold it and the login page would re-render).
+  // Lax still keeps the cookie off all cross-site subresource/POST requests.
+  // This asymmetry with the admin cookie is deliberate; don't "unify" it.
+  sameSite: 'Lax',
+  ttlMs: SESSION_TTL_MS,
+};
 
 export function signMagicLink(
   email: string,
@@ -46,17 +45,8 @@ export function signMagicLink(
 
 /** Returns the (lower-cased) email for a valid, unexpired magic link, else null. */
 export function verifyMagicLink(token: string, secret: string, now = Date.now()): string | null {
-  const data = unsign('magic', token, secret);
-  if (data === null) {
-    return null;
-  }
-  const sep = data.lastIndexOf('\n');
-  const email = data.slice(0, sep);
-  const expiresAtMs = parseInt(data.slice(sep + 1));
-  if (!email || !Number.isFinite(expiresAtMs) || now > expiresAtMs) {
-    return null;
-  }
-  return email;
+  const email = unsignExpiring('magic', token, secret, now);
+  return email ? email : null;
 }
 
 // A short numeric fallback to the magic link, for people whose mail app opens
@@ -66,6 +56,8 @@ export function verifyMagicLink(token: string, secret: string, now = Date.now())
 // minutes depending on when in the bucket it was issued.
 const CODE_BUCKET_MS = 10 * 60 * 1000;
 
+// Not a signed token - a 6-digit code needs the raw digest, not a base64url
+// signature - so this reaches for crypto directly rather than signed-token's hmac.
 function magicCodeFor(email: string, secret: string, bucket: number): string {
   const digest = crypto
     .createHmac('sha256', secret)
@@ -105,17 +97,7 @@ export function signUserSession(
 
 /** Returns the userId for a valid, unexpired session cookie, else null. */
 export function verifyUserSession(token: string, secret: string, now = Date.now()): number | null {
-  const data = unsign('session', token, secret);
-  if (data === null) {
-    return null;
-  }
-  const [userIdRaw, expiresRaw] = data.split('\n');
-  const userId = parseInt(userIdRaw);
-  const expiresAtMs = parseInt(expiresRaw);
-  if (!Number.isFinite(userId) || !Number.isFinite(expiresAtMs) || now > expiresAtMs) {
-    return null;
-  }
-  return userId;
+  return accountId(unsignExpiring('session', token, secret, now));
 }
 
 // Account-linking token: proves a web user asked to connect Telegram. Carried in
@@ -131,17 +113,7 @@ export function signLinkToken(
 
 /** Returns the userId for a valid, unexpired link token, else null. */
 export function verifyLinkToken(token: string, secret: string, now = Date.now()): number | null {
-  const data = unsign('tg-link', token, secret);
-  if (data === null) {
-    return null;
-  }
-  const [userIdRaw, expiresRaw] = data.split('\n');
-  const userId = parseInt(userIdRaw);
-  const expiresAtMs = parseInt(expiresRaw);
-  if (!Number.isFinite(userId) || !Number.isFinite(expiresAtMs) || now > expiresAtMs) {
-    return null;
-  }
-  return userId;
+  return accountId(unsignExpiring('tg-link', token, secret, now));
 }
 
 // Discord-linking token: proves the sender controls a Discord account (the bot
@@ -162,25 +134,26 @@ export function verifyDiscordLinkToken(
   secret: string,
   now = Date.now()
 ): string | null {
-  const data = unsign('discord-link', token, secret);
-  if (data === null) {
+  const id = unsignExpiring('discord-link', token, secret, now);
+  return id && /^\d{5,25}$/.test(id) ? id : null;
+}
+
+/** One of our numeric account ids, or null if the payload didn't carry one. */
+function accountId(raw: string | null): number | null {
+  if (raw === null) {
     return null;
   }
-  const [discordUserId, expiresRaw] = data.split('\n');
-  const expiresAtMs = parseInt(expiresRaw);
-  if (!/^\d{5,25}$/.test(discordUserId) || !Number.isFinite(expiresAtMs) || now > expiresAtMs) {
-    return null;
-  }
-  return discordUserId;
+  const userId = parseInt(raw);
+  return Number.isFinite(userId) ? userId : null;
 }
 
 /** CSRF token bound to the session cookie (same scheme as the admin panel). */
 export function csrfFor(sessionToken: string, secret: string): string {
-  return hmac('user-csrf', sessionToken, secret);
+  return csrfForNs('user-csrf', sessionToken, secret);
 }
 
 export function verifyCsrf(sessionToken: string, token: string, secret: string): boolean {
-  return !!token && safeEqual(token, csrfFor(sessionToken, secret));
+  return verifyCsrfNs('user-csrf', sessionToken, token, secret);
 }
 
 /** Set-Cookie for the session; `secure` on whenever served over HTTPS. */
@@ -189,19 +162,5 @@ export function userCookie(
   secure: boolean,
   maxAgeSec = SESSION_TTL_MS / 1000
 ): string {
-  // Lax, not Strict: the cookie is set on the magic-link GET and must survive
-  // the cross-site-initiated redirect to /app (webmail clicks are cross-site
-  // navigations - Strict would withhold it and the login page would re-render).
-  // Lax still keeps the cookie off all cross-site subresource/POST requests.
-  const attrs = [
-    `${USER_COOKIE}=${value}`,
-    'HttpOnly',
-    'SameSite=Lax',
-    'Path=/app',
-    `Max-Age=${Math.floor(maxAgeSec)}`,
-  ];
-  if (secure) {
-    attrs.push('Secure');
-  }
-  return attrs.join('; ');
+  return buildCookie(USER_COOKIE_SPEC, value, secure, maxAgeSec);
 }

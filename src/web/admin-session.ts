@@ -1,5 +1,12 @@
 import http from 'http';
-import crypto from 'crypto';
+import {
+  CookieSpec,
+  buildCookie,
+  csrfFor as csrfForNs,
+  sign,
+  unsign,
+  verifyCsrf as verifyCsrfNs,
+} from './signed-token';
 
 // Admin auth without sessions in the DB: the cookie *is* the session. Same
 // HMAC-SHA256 trick as the dashboard links (token.ts) - payload is just an
@@ -12,45 +19,42 @@ export const ADMIN_COOKIE = 'pr_admin';
 // Operators re-authenticate daily.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
-function hmac(payload: string, secret: string): string {
-  return crypto.createHmac('sha256', secret).update(payload).digest('base64url');
-}
+// Unnamespaced: the session wire format predates namespacing (see signed-token).
+const SESSION_NS = '';
+const CSRF_NS = 'csrf';
 
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
-}
+const ADMIN_COOKIE_SPEC: CookieSpec = {
+  name: ADMIN_COOKIE,
+  path: '/admin',
+  // Strict, unlike the customer cookie: nothing legitimately navigates into
+  // /admin from another site, so there's no reason to relax it.
+  sameSite: 'Strict',
+  ttlMs: SESSION_TTL_MS,
+};
 
 export function signAdminSession(
   secret: string,
   expiresAtMs = Date.now() + SESSION_TTL_MS
 ): string {
-  const payload = Buffer.from(String(expiresAtMs)).toString('base64url');
-  return `${payload}.${hmac(payload, secret)}`;
+  return sign(SESSION_NS, String(expiresAtMs), secret);
 }
 
 /** True when the cookie is a valid, unexpired admin session. */
 export function verifyAdminSession(token: string, secret: string, now = Date.now()): boolean {
-  const [payload, signature] = (token ?? '').split('.');
-  if (!payload || !signature || !safeEqual(signature, hmac(payload, secret))) {
+  const data = unsign(SESSION_NS, token, secret);
+  if (data === null) {
     return false;
   }
-  const expiresAtMs = parseInt(Buffer.from(payload, 'base64url').toString());
+  const expiresAtMs = parseInt(data);
   return Number.isFinite(expiresAtMs) && now <= expiresAtMs;
 }
 
-/**
- * CSRF token bound to a session: a separate HMAC of the session cookie. The
- * page embeds it and echoes it back in a header on every mutating request, so
- * a cross-site POST (which can't read the cookie to forge the header) fails.
- */
 export function csrfFor(sessionToken: string, secret: string): string {
-  return hmac(`csrf:${sessionToken}`, secret);
+  return csrfForNs(CSRF_NS, sessionToken, secret);
 }
 
 export function verifyCsrf(sessionToken: string, token: string, secret: string): boolean {
-  return !!token && safeEqual(token, csrfFor(sessionToken, secret));
+  return verifyCsrfNs(CSRF_NS, sessionToken, token, secret);
 }
 
 /** Pulls a single cookie value out of a request's Cookie header. */
@@ -77,15 +81,5 @@ export function sessionCookie(
   secure: boolean,
   maxAgeSec = SESSION_TTL_MS / 1000
 ): string {
-  const attrs = [
-    `${ADMIN_COOKIE}=${value}`,
-    'HttpOnly',
-    'SameSite=Strict',
-    'Path=/admin',
-    `Max-Age=${Math.floor(maxAgeSec)}`,
-  ];
-  if (secure) {
-    attrs.push('Secure');
-  }
-  return attrs.join('; ');
+  return buildCookie(ADMIN_COOKIE_SPEC, value, secure, maxAgeSec);
 }

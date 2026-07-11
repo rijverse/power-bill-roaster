@@ -14,21 +14,28 @@ import {
   DiscordDmSender,
 } from '../notifications/dispatcher';
 import { inQuietHours, quietHoursEnd } from './quiet-hours';
-import { MeterContext } from '../notifications/telegram-templates';
+import { withTimeout } from './with-timeout';
+import { MeterContext } from '../notifications/alert-copy';
 import { notifyOperator } from './operator-notify';
 import { logger } from '../logger';
 
 const POLL_INTERVAL_MS = 5_000;
 // cap rows pulled per cycle so a long backlog can't starve new alerts.
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 10;
 // after this many tries the row is poisoned and an admin gets pinged.
 const MAX_ATTEMPTS = 5;
 // base delay (ms) for backoff: 30s, 1m, 2m, 4m, 8m, ...
 const BACKOFF_BASE_MS = 30_000;
-// how long a claimed batch is invisible to other workers. Long enough for a
-// worst-case batch (20 rows x slow channels), short enough that a crash
-// mid-batch only delays the un-processed rows by minutes.
-const CLAIM_LEASE_MS = 10 * 60 * 1000;
+// A row's channels fan out in parallel and each send is capped at SEND_TIMEOUT_MS,
+// so a row can't legitimately take much longer than that. The cap makes the worker
+// unwedgeable: a row that somehow hangs anyway is abandoned rather than blocking
+// every alert behind it (a tick is skipped while one is in flight).
+const ROW_TIMEOUT_MS = 30_000;
+// How long a claimed batch is invisible to other workers. Now derived rather than
+// guessed: the worst case really is BATCH_SIZE rows x ROW_TIMEOUT_MS, so a crash
+// mid-batch delays the unprocessed rows by at most that. (Was a flat 10 min with
+// no bound on batch time at all - because nothing capped a send.)
+const CLAIM_LEASE_MS = BATCH_SIZE * ROW_TIMEOUT_MS;
 
 export interface AlertDispatcherDeps {
   db: Db;
@@ -117,18 +124,45 @@ export class AlertDispatcherWorker {
     if (ready.length === 0) return;
     logger.info(`Draining ${ready.length} pending alert(s)`);
 
+    // Two queries for the whole batch, not two per row. Deliberately NOT joined
+    // into the claim above: that SELECT is FOR UPDATE ... SKIP LOCKED, and in
+    // Postgres a join would take row locks on users and meters too - tables the
+    // bots write to concurrently (/nickname, /threshold). Still read at send time,
+    // so channel state is current.
+    const [users, meters] = await Promise.all([
+      this.deps.db
+        .select()
+        .from(schema.users)
+        .where(inArray(schema.users.id, [...new Set(ready.map(r => r.userId))])),
+      this.deps.db
+        .select()
+        .from(schema.meters)
+        .where(inArray(schema.meters.id, [...new Set(ready.map(r => r.meterId))])),
+    ]);
+    const userById = new Map(users.map(u => [u.id, u]));
+    const meterById = new Map(meters.map(m => [m.id, m]));
+
     for (const row of ready) {
       try {
-        await this.processRow(row);
+        await withTimeout(
+          this.processRow(row, userById.get(row.userId), meterById.get(row.meterId)),
+          ROW_TIMEOUT_MS,
+          `pending alert ${row.id}`
+        );
       } catch (error) {
         // processRow already records the error on the row; this is a
-        // belt-and-braces catch so a single bad row can't kill the loop.
+        // belt-and-braces catch so a single bad row can't kill the loop - or, with
+        // the timeout, wedge the worker. The row keeps its lease and comes back.
         logger.error(`Failed to process pending alert ${row.id}`, error);
       }
     }
   }
 
-  private async processRow(row: schema.PendingAlert): Promise<void> {
+  private async processRow(
+    row: schema.PendingAlert,
+    user: schema.User | undefined,
+    meter: schema.Meter | undefined
+  ): Promise<void> {
     let ctx: MeterContext;
     try {
       ctx = JSON.parse(row.payload) as MeterContext;
@@ -145,17 +179,6 @@ export class AlertDispatcherWorker {
         .where(eq(schema.pendingAlerts.id, row.id));
       return;
     }
-
-    // re-fetch user + meter at send time so channel state (verified, enabled)
-    // reflects the latest, not a stale snapshot.
-    const [user] = await this.deps.db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.id, row.userId));
-    const [meter] = await this.deps.db
-      .select()
-      .from(schema.meters)
-      .where(eq(schema.meters.id, row.meterId));
 
     if (!user || !meter) {
       // user was deleted between schedule and dispatch. drop the row.

@@ -2,9 +2,9 @@ import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { Db, schema } from '../db';
 import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
-import { predictRunOut } from './prediction';
+import { recentPrediction } from './meter-usecases';
 import { getProvider } from '../providers';
-import { MeterContext } from '../notifications/telegram-templates';
+import { MeterContext } from '../notifications/alert-copy';
 import { TelegramSender, DiscordDmSender } from '../notifications/dispatcher';
 import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
@@ -20,8 +20,6 @@ const BACKOFF_BASE_MS = 2000;
 // desco api changed or we got blocked, and alert the operator.
 const ERROR_RATE_ALARM = 0.5;
 const ERROR_RATE_MIN_SAMPLE = 5;
-// burn rate is computed from the last week of readings
-const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // arbitrary app-wide constant identifying "the poll cycle" advisory lock;
 // guarantees only one instance polls even if two processes share the DB
 const POLL_LOCK_KEY = 727274001;
@@ -127,17 +125,23 @@ export class Scheduler {
         logger.error('Subscription expiry sweep failed', error);
       }
 
+      // alert_state rides along on the join instead of a SELECT per meter. Safe
+      // because we hold the poll lock: every column here except
+      // remindersSnoozedUntil is written only by this cycle, so the row we read
+      // at the start is still authoritative when we get to that meter. Snooze is
+      // the exception and checkMeter re-reads it - see there.
       const rows = await this.db
-        .select({ meter: schema.meters, user: schema.users })
+        .select({ meter: schema.meters, user: schema.users, state: schema.alertState })
         .from(schema.meters)
         .innerJoin(schema.users, eq(schema.meters.userId, schema.users.id))
+        .leftJoin(schema.alertState, eq(schema.alertState.meterId, schema.meters.id))
         .where(eq(schema.meters.active, true));
 
       logger.info(`Poll cycle: checking ${rows.length} meter(s)`);
 
-      for (const { meter, user } of rows) {
+      for (const { meter, user, state } of rows) {
         try {
-          await this.checkMeter(meter, user);
+          await this.checkMeter(meter, user, state);
           ok++;
         } catch (error) {
           failed++;
@@ -145,7 +149,7 @@ export class Scheduler {
             `Meter ${meter.id} (${meter.provider}/${meter.meterNo}) check failed`,
             error instanceof Error ? error.message : error
           );
-          await this.recordMeterFailure(meter, user).catch(e =>
+          await this.recordMeterFailure(meter, user, state).catch(e =>
             logger.error(`Failed to record meter ${meter.id} read failure`, e)
           );
         }
@@ -220,7 +224,11 @@ export class Scheduler {
     }
   }
 
-  private async checkMeter(meter: schema.Meter, user: schema.User): Promise<void> {
+  private async checkMeter(
+    meter: schema.Meter,
+    user: schema.User,
+    joinedState: schema.AlertStateRow | null
+  ): Promise<void> {
     const provider = getProvider(meter.provider);
     const identity = { accountNo: meter.accountNo, meterNo: meter.meterNo };
 
@@ -253,10 +261,21 @@ export class Scheduler {
       readingTime: balanceData.readingTime ?? null,
     });
 
-    const [stateRow] = await this.db
-      .select()
-      .from(schema.alertState)
-      .where(eq(schema.alertState.meterId, meter.id));
+    // The joined row is authoritative for everything the poll cycle owns. The one
+    // column another process can change underneath us is remindersSnoozedUntil -
+    // the snooze button writes it, possibly while this very cycle is running - and
+    // it gates only the reminder branch, which can only be reached from a non-ok
+    // level. So re-read for a meter that's already in alert, and take the free ride
+    // for the healthy majority.
+    const stateRow =
+      joinedState && joinedState.level !== 'ok'
+        ? ((
+            await this.db
+              .select()
+              .from(schema.alertState)
+              .where(eq(schema.alertState.meterId, meter.id))
+          )[0] ?? joinedState)
+        : joinedState;
 
     const prev: AlertStateSnapshot = {
       level: (stateRow?.level ?? 'ok') as AlertLevel,
@@ -302,16 +321,6 @@ export class Scheduler {
     // wrap alert_state + pending_alerts in one transaction so a crash between
     // them can't leave lastAlertAt advanced but no row queued (silencing the
     // user) or vice versa (sending the same alert twice).
-    const recentReadings = await this.db
-      .select({ balance: schema.readings.balance, fetchedAt: schema.readings.fetchedAt })
-      .from(schema.readings)
-      .where(
-        and(
-          eq(schema.readings.meterId, meter.id),
-          gte(schema.readings.fetchedAt, new Date(now.getTime() - PREDICTION_WINDOW_MS))
-        )
-      );
-
     const ctx: MeterContext = {
       nickname: meter.nickname,
       accountNo: meter.accountNo,
@@ -319,10 +328,7 @@ export class Scheduler {
       balance,
       lowThreshold: meter.lowThreshold,
       criticalThreshold: meter.criticalThreshold,
-      prediction: predictRunOut(
-        recentReadings.map(r => ({ balance: r.balance, at: r.fetchedAt })),
-        balance
-      ),
+      prediction: await recentPrediction(this.db, meter.id, balance, now),
       rechargeUrl: this.config.rechargeUrl,
     };
 
@@ -346,12 +352,13 @@ export class Scheduler {
   // or renumbered meter would just go quiet. Telegram when linked, else a Discord
   // DM (Discord-only accounts must hear this too). a good read resets the count
   // (see checkMeter's stateUpdate).
-  private async recordMeterFailure(meter: schema.Meter, user: schema.User): Promise<void> {
-    const [stateRow] = await this.db
-      .select()
-      .from(schema.alertState)
-      .where(eq(schema.alertState.meterId, meter.id));
-
+  // The joined alert_state row is enough here: consecutiveFailures and
+  // failureNotifiedAt are written only by the poll cycle, and we hold its lock.
+  private async recordMeterFailure(
+    meter: schema.Meter,
+    user: schema.User,
+    stateRow: schema.AlertStateRow | null
+  ): Promise<void> {
     const target = failureNoticeTarget(user, this.discordDm !== null);
     const consecutiveFailures = (stateRow?.consecutiveFailures ?? 0) + 1;
     const alreadyNotified = stateRow?.failureNotifiedAt != null;

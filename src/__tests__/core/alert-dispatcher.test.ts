@@ -51,11 +51,14 @@ function makeFakeDb(opts: {
   pendingRows: schema.PendingAlert[];
   user?: schema.User;
   meter?: schema.Meter;
+  /** counts SELECTs per table, so a test can pin how many the worker issues */
+  selects?: Map<unknown, number>;
 }) {
   const db = {
     select() {
       return {
         from(table: unknown) {
+          opts.selects?.set(table, (opts.selects.get(table) ?? 0) + 1);
           return {
             where(_p: unknown) {
               return {
@@ -267,6 +270,62 @@ describe('AlertDispatcherWorker quiet hours', () => {
 
     expect(dispatchAlert).toHaveBeenCalledTimes(1);
     expect(row.status).toBe('sent');
+  });
+
+  it('fetches users and meters once per batch, not once per row', async () => {
+    // The worker used to re-SELECT the user and the meter for every row it drained,
+    // so a batch of N alerts cost 2N single-row queries. They are batched now, and
+    // deliberately not joined into the claim - that SELECT is FOR UPDATE ... SKIP
+    // LOCKED, and joining would take row locks on users/meters, which the bots write.
+    const rows = [1, 2, 3].map(id => makePending({ id }));
+    const selects = new Map<unknown, number>();
+    const db = makeFakeDb({ pendingRows: rows, user: aUser(), meter: aMeter(), selects });
+    const dispatchAlert = jest.fn().mockResolvedValue({ delivered: ['telegram'], failed: [] });
+
+    await workerWith(db, dispatchAlert).tick();
+
+    expect(dispatchAlert).toHaveBeenCalledTimes(3);
+    expect(selects.get(schema.users)).toBe(1);
+    expect(selects.get(schema.meters)).toBe(1);
+  });
+
+  it('does not wedge the worker when a row hangs', async () => {
+    // The liveness bug hiding under the "claim lease is a bit long" note: tick()
+    // returns early while a batch is in flight, so one row that never settles used
+    // to stop the outbox draining *anything*, indefinitely. The row timeout means
+    // the batch always finishes and the next tick runs.
+    jest.useFakeTimers();
+    try {
+      const row = makePending({ id: 50 });
+      const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
+      const dispatchAlert = jest.fn(() => new Promise<never>(() => {})); // never settles
+      const worker = workerWith(db, dispatchAlert);
+
+      const first = worker.tick();
+      await jest.advanceTimersByTimeAsync(60_000);
+      await first; // resolves rather than hanging forever
+
+      // and the worker is free again - a second tick actually does work
+      dispatchAlert.mockImplementation(
+        () => Promise.resolve({ delivered: ['telegram'], failed: [] }) as never
+      );
+      await worker.tick();
+      expect(dispatchAlert).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('dead-letters a row whose user was deleted mid-flight', async () => {
+    const row = makePending({ id: 40 });
+    const db = makeFakeDb({ pendingRows: [row], user: undefined, meter: aMeter() });
+    const dispatchAlert = jest.fn();
+
+    await workerWith(db, dispatchAlert).tick();
+
+    expect(dispatchAlert).not.toHaveBeenCalled();
+    expect(row.status).toBe('failed');
+    expect(row.lastError).toBe('user or meter deleted');
   });
 });
 

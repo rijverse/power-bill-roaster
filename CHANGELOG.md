@@ -46,11 +46,31 @@ A few bits worth calling out:
 - Pause on a deleted user now 404s. Was silently logging a no-op audit row
   before.
 
+### Security
+
+- CSP no longer allows `'unsafe-inline'` scripts: every inline `<script>`
+  carries a per-request nonce instead (the admin login's password toggle moved
+  off an `onclick` attribute for the same reason). Styles keep
+  `'unsafe-inline'` - the pages lean on `style=""` attributes, which nonces
+  can't cover.
+
 ### Fixed
 
 - `eraseUser` was dying with a FK violation on `pending_alerts` for any user
   who ever had an alert queued. Outbox rows were never being cleared.
   Erasure now clears them (by meter and by user, both blocks).
+- A poll cycle that failed before the meter loop (e.g. a DB blip on the meters
+  join) surfaced only as an unhandled-rejection log. `runOnce` now catches and
+  logs it as a cycle failure; the watchdog remains the restart backstop.
+- Outbox rows that repeatedly hang (row timeout) now count those attempts and
+  dead-letter at the usual cap instead of retrying forever off the expiring
+  claim lease. Rows with an unrecognized action/level (hand-inserted, corrupt)
+  are failed instead of dispatched on a blind cast.
+- Plan-change notices (payment confirmed, plan expired) now fall back to a
+  Discord DM for users without Telegram; they were silently skipped before.
+- The SMS monthly budget window now rolls at midnight Dhaka rather than
+  server-local midnight, and quiet-hours/budget code share one fixed-offset
+  Dhaka clock instead of two mechanisms.
 
 ## [1.0.0] - 2026-07-02
 

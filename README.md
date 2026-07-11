@@ -152,6 +152,11 @@ Set the two DESCO variables plus at least one channel (Discord or the full email
 | `SMTP_PORT` | ❌ | 587 | SMTP port |
 | `LOW_THRESHOLD` | ❌ | 150 | Warning threshold (BDT) |
 | `CRITICAL_THRESHOLD` | ❌ | 100 | Critical threshold (BDT) |
+| `ALERT_TONE` | ❌ | savage | Roast intensity: `savage` or `mild` |
+
+This table covers self-hosted single-user mode only. Running the hosted server
+(Telegram bot, web app, Postgres) takes a different set of variables - see
+`.env.example` and [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Development
 
@@ -216,7 +221,7 @@ MIT - Use it, modify it, roast yourself with it.
 
 ## Disclaimer
 
-This is just a personal project. You're using the DESCO API at your own risk. Also the emails are intentionally meant to roast you hard  feel free to tone them down in `src/templates/` if you can't handle it.
+This is just a personal project. You're using the DESCO API at your own risk. Also the emails are intentionally meant to roast you hard - set `ALERT_TONE=mild` if you can't handle it, or edit the copy in `src/notifications/`.
 
 ## Security Notes
 

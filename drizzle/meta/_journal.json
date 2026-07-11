@@ -5,78 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1781246529205,
-      "tag": "0000_init_core_schema",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1781269978038,
-      "tag": "0001_add_subscriptions",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1781284180821,
-      "tag": "0002_add_payments",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1781432493282,
-      "tag": "0003_payments_external_ref_unique",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1781867237464,
-      "tag": "0004_users_email_unique",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1782025844195,
-      "tag": "0005_add_admin_audit",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1782223489796,
-      "tag": "0006_user_quiet_hours",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1782284683756,
-      "tag": "0007_add_pending_alerts",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1782367418660,
-      "tag": "0008_pending_alerts_delivered",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1782371046538,
-      "tag": "0009_alert_state_snooze_failures",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1783814400000,
-      "tag": "0010_users_discord_id_backfill",
+      "when": 1783765637699,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

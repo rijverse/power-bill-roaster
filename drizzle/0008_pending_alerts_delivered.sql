@@ -1,1 +1,0 @@
-ALTER TABLE "pending_alerts" ADD COLUMN "delivered" text DEFAULT '[]' NOT NULL;

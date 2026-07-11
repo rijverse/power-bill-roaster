@@ -6,8 +6,10 @@ import path from 'path';
 // get wrong and catastrophic in production: a journal entry without its .sql
 // file (migrate throws), and a schema change smuggled into an already-applied
 // file (existing databases silently never get it - the discord_user_id
-// column shipped that way once and would have taken every deployed instance
-// down). These tests pin the invariants.
+// column shipped that way once, pre-launch, and would have taken every
+// deployed instance down). The dev history was squashed to a single init
+// migration before first deploy; from now on every schema change must be a
+// NEW migration file. These tests pin the invariants.
 
 const DRIZZLE_DIR = path.join(__dirname, '..', '..', '..', 'drizzle');
 
@@ -47,15 +49,14 @@ describe('drizzle migration journal', () => {
   });
 });
 
-describe('discord_user_id backfill (regression: edited-in-place 0000)', () => {
-  it('ships as its own idempotent migration so pre-Discord databases converge', () => {
+describe('init migration (squashed pre-launch)', () => {
+  it('creates the full users identity surface in one place', () => {
     const entries = readJournal();
-    const backfill = entries.find(e => e.tag.includes('discord_id_backfill'));
-    expect(backfill).toBeDefined();
-    const sql = fs.readFileSync(path.join(DRIZZLE_DIR, `${backfill!.tag}.sql`), 'utf-8');
-    // IF NOT EXISTS makes it a no-op on fresh databases whose 0000 already
-    // created the column, and the real ALTER everywhere else.
-    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS "discord_user_id"/);
+    const sql = fs.readFileSync(path.join(DRIZZLE_DIR, `${entries[0].tag}.sql`), 'utf-8');
+    // regression guard for the edited-in-place-0000 incident: the Discord
+    // identity column and its unique constraint must exist from migration one
+    expect(sql).toMatch(/"discord_user_id" text/);
     expect(sql).toMatch(/users_discord_user_id_unique/);
+    expect(sql).toMatch(/"telegram_chat_id" bigint/);
   });
 });

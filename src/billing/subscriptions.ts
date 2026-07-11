@@ -13,12 +13,13 @@ export function periodEnd(start: Date, days = PERIOD_DAYS): Date {
 }
 
 export class SubscriptionService {
-  /** wired in after the bot exists; tells the user their plan lapsed */
+  /** wired in after the bots exist; tells the user their plan lapsed */
   notifyDowngrade:
-    ((chatId: number, expiredPlan: string, pausedMeters: number) => Promise<void>) | null = null;
+    ((user: schema.User, expiredPlan: string, pausedMeters: number) => Promise<void>) | null =
+    null;
 
-  /** wired in after the bot exists; tells the user a pending payment cleared */
-  notifyUpgrade: ((chatId: number, plan: string) => Promise<void>) | null = null;
+  /** wired in after the bots exist; tells the user a pending payment cleared */
+  notifyUpgrade: ((user: schema.User, plan: string) => Promise<void>) | null = null;
 
   constructor(
     private db: Db,
@@ -106,9 +107,9 @@ export class SubscriptionService {
         .select()
         .from(schema.users)
         .where(eq(schema.users.id, subscription.userId));
-      if (user?.telegramChatId != null) {
+      if (user) {
         try {
-          await this.notifyUpgrade(user.telegramChatId, subscription.plan);
+          await this.notifyUpgrade(user, subscription.plan);
         } catch (error) {
           console.error(`Upgrade notice failed for user ${subscription.userId}:`, error);
         }
@@ -201,9 +202,9 @@ export class SubscriptionService {
         .select()
         .from(schema.users)
         .where(eq(schema.users.id, subscription.userId));
-      if (this.notifyDowngrade && user?.telegramChatId != null) {
+      if (this.notifyDowngrade && user) {
         try {
-          await this.notifyDowngrade(user.telegramChatId, subscription.plan, paused);
+          await this.notifyDowngrade(user, subscription.plan, paused);
         } catch (error) {
           console.error(`Downgrade notice failed for user ${subscription.userId}:`, error);
         }

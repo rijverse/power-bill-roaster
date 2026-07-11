@@ -1,5 +1,5 @@
 import { getServerConfig } from './config';
-import { createDb } from './db';
+import { createDb, schema } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
 import { Dispatcher, AlertButton, DiscordDmSender } from './notifications/dispatcher';
@@ -9,6 +9,7 @@ import { createMailer } from './services/mailer';
 import { createPaymentProvider, SubscriptionService } from './billing';
 import { createWebServer } from './web/server';
 import { DiscordApi } from './discord/api';
+import { DiscordEmbed } from './notifications/discord';
 import { createDiscordBot } from './discord/bot';
 import { DISCORD_COMMANDS } from './discord/command-defs';
 import { discordPublicKey } from './discord/verify';
@@ -61,23 +62,6 @@ async function main(): Promise<void> {
       });
     },
   };
-  subscriptions.notifyDowngrade = async (chatId, expiredPlan, pausedMeters) => {
-    const pausedNote =
-      pausedMeters > 0
-        ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
-        : '';
-    await telegramSender.sendTelegram(
-      chatId,
-      `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`
-    );
-  };
-  subscriptions.notifyUpgrade = async (chatId, plan) => {
-    await telegramSender.sendTelegram(
-      chatId,
-      `✅ Payment confirmed - you're on *${plan}* now. Add a phone for SMS alerts with /sms <number>.`
-    );
-  };
-
   // Discord bot: slash commands land on /discord/interactions, alerts go out
   // as DMs. Everything stays null when the DISCORD_* vars aren't set.
   let discordInteractions: DiscordInteractionDeps | null = null;
@@ -96,6 +80,38 @@ async function main(): Promise<void> {
     };
     logger.info('Discord bot enabled (POST /discord/interactions)');
   }
+
+  // Plan-change notices prefer Telegram, falling back to a Discord DM so a
+  // Discord-only user still hears their plan changed. No channel = no notice.
+  const notifyPlanChange = async (user: schema.User, text: string, embed: DiscordEmbed) => {
+    if (user.telegramChatId != null) {
+      await telegramSender.sendTelegram(user.telegramChatId, text);
+    } else if (discordDm && user.discordUserId) {
+      await discordDm.sendDm(user.discordUserId, embed);
+    }
+  };
+  subscriptions.notifyDowngrade = async (user, expiredPlan, pausedMeters) => {
+    const pausedNote =
+      pausedMeters > 0
+        ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
+        : '';
+    await notifyPlanChange(user, `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`, {
+      title: '⏳ Plan expired',
+      description: `Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
+      color: 0xed4245, // red, matching COLOR.critical in the Discord bot
+    });
+  };
+  subscriptions.notifyUpgrade = async (user, plan) => {
+    await notifyPlanChange(
+      user,
+      `✅ Payment confirmed - you're on *${plan}* now. Add a phone for SMS alerts with /sms <number>.`,
+      {
+        title: '✅ Payment confirmed',
+        description: `You're on **${plan}** now. Add a phone for SMS alerts with /sms.`,
+        color: 0x3ba55d, // green, matching COLOR.ok in the Discord bot
+      }
+    );
+  };
 
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer, discordDm);
   // outbox drain worker - flips rows to 'sent' / 'failed' and pings admin on

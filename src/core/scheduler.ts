@@ -5,7 +5,7 @@ import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
 import { predictRunOut } from './prediction';
 import { getProvider } from '../providers';
 import { MeterContext } from '../notifications/telegram-templates';
-import { TelegramSender } from '../notifications/dispatcher';
+import { TelegramSender, DiscordDmSender } from '../notifications/dispatcher';
 import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
 import { adminDeepLink } from './admin-link';
@@ -24,9 +24,11 @@ const PREDICTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // arbitrary app-wide constant identifying "the poll cycle" advisory lock;
 // guarantees only one instance polls even if two processes share the DB
 const POLL_LOCK_KEY = 727274001;
-// the outbox worker polls every 5s and locks rows immediately, so anything
-// still pending after 2min means the worker is wedged. 24h on failed rows
-// surfaces "today's dead letters" so the operator notices.
+// the outbox worker polls every 5s, so a DUE row (next_attempt in the past)
+// still pending after 2min means the worker is wedged. Rows waiting out a
+// retry backoff or quiet-hours hold have next_attempt in the future and are
+// healthy - they must not page the operator. 24h on failed rows surfaces
+// "today's dead letters" so the operator notices.
 const STUCK_PENDING_THRESHOLD_MS = 2 * 60 * 1000;
 const RECENT_FAILED_WINDOW_MS = 24 * 60 * 60 * 1000;
 // after this many consecutive failed reads of one meter, tell the user once
@@ -35,6 +37,24 @@ const FAILURE_NOTIFY_THRESHOLD = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Where the one-time "meter unreadable" notice should go: Telegram when the
+ * account has a chat id, else a Discord DM when the account is Discord-linked
+ * and the Discord bot is running, else nowhere. Exported for tests.
+ */
+export function failureNoticeTarget(
+  user: Pick<schema.User, 'telegramChatId' | 'discordUserId'>,
+  discordAvailable: boolean
+): { kind: 'telegram'; chatId: number } | { kind: 'discord'; discordUserId: string } | null {
+  if (user.telegramChatId !== null) {
+    return { kind: 'telegram', chatId: user.telegramChatId };
+  }
+  if (discordAvailable && user.discordUserId !== null) {
+    return { kind: 'discord', discordUserId: user.discordUserId };
+  }
+  return null;
 }
 
 export class Scheduler {
@@ -53,7 +73,10 @@ export class Scheduler {
     private pool: Pool,
     private sender: AlertSender,
     private config: ServerConfig,
-    private subscriptions: SubscriptionService
+    private subscriptions: SubscriptionService,
+    // Fallback for the "meter unreadable" notice when a user has no Telegram
+    // identity (Discord-only accounts). Null when the Discord bot is off.
+    private discordDm: DiscordDmSender | null = null
   ) {}
 
   start(): void {
@@ -148,12 +171,15 @@ export class Scheduler {
           .where(
             and(
               eq(schema.pendingAlerts.status, 'pending'),
-              lte(schema.pendingAlerts.createdAt, new Date(Date.now() - STUCK_PENDING_THRESHOLD_MS))
+              lte(
+                schema.pendingAlerts.nextAttempt,
+                new Date(Date.now() - STUCK_PENDING_THRESHOLD_MS)
+              )
             )
           );
         if (stuck && stuck.count > 0) {
           await this.alarmOperator(
-            `🚨 Outbox worker appears wedged: ${stuck.count} pending alert(s) older than 2 min. The dispatcher should be draining these in seconds.`,
+            `🚨 Outbox worker appears wedged: ${stuck.count} alert(s) due for over 2 min and still pending. The dispatcher should be draining these in seconds.`,
             'logs/failed'
           );
         }
@@ -315,21 +341,21 @@ export class Scheduler {
   }
 
   // bumps a meter's consecutive-failure count and, once it crosses the threshold,
-  // pings the user once (over Telegram) that we can't read their meter - otherwise
-  // a deactivated or renumbered meter would just go quiet. a good read resets the
-  // count (see checkMeter's stateUpdate).
+  // pings the user once that we can't read their meter - otherwise a deactivated
+  // or renumbered meter would just go quiet. Telegram when linked, else a Discord
+  // DM (Discord-only accounts must hear this too). a good read resets the count
+  // (see checkMeter's stateUpdate).
   private async recordMeterFailure(meter: schema.Meter, user: schema.User): Promise<void> {
     const [stateRow] = await this.db
       .select()
       .from(schema.alertState)
       .where(eq(schema.alertState.meterId, meter.id));
 
+    const target = failureNoticeTarget(user, this.discordDm !== null);
     const consecutiveFailures = (stateRow?.consecutiveFailures ?? 0) + 1;
     const alreadyNotified = stateRow?.failureNotifiedAt != null;
     const shouldNotify =
-      consecutiveFailures >= FAILURE_NOTIFY_THRESHOLD &&
-      !alreadyNotified &&
-      user.telegramChatId !== null;
+      consecutiveFailures >= FAILURE_NOTIFY_THRESHOLD && !alreadyNotified && target !== null;
     const now = new Date();
     const set = {
       consecutiveFailures,
@@ -341,17 +367,25 @@ export class Scheduler {
       .values({ meterId: meter.id, ...set })
       .onConflictDoUpdate({ target: schema.alertState.meterId, set });
 
-    if (shouldNotify && user.telegramChatId !== null) {
-      const label = meter.nickname ?? `meter ${meter.meterNo}`;
+    if (!shouldNotify || target === null) {
+      return;
+    }
+    const label = meter.nickname ?? `meter ${meter.meterNo}`;
+    const body = [
+      "DESCO's service may be down, or the account/meter numbers may have changed (a replaced meter gets new numbers). Balance alerts for it are paused until I can read it again.",
+      'If the meter changed, use /stop and then /register the new one.',
+    ].join('\n');
+    if (target.kind === 'telegram') {
       await this.sender.sendTelegram(
-        user.telegramChatId,
-        [
-          `⚠️ I haven't been able to read ${label} for a while.`,
-          '',
-          "DESCO's service may be down, or the account/meter numbers may have changed (a replaced meter gets new numbers). Balance alerts for it are paused until I can read it again.",
-          'If the meter changed, use /stop and then /register the new one.',
-        ].join('\n')
+        target.chatId,
+        `⚠️ I haven't been able to read ${label} for a while.\n\n${body}`
       );
+    } else if (this.discordDm) {
+      await this.discordDm.sendDm(target.discordUserId, {
+        title: `⚠️ I haven't been able to read ${label} for a while`,
+        description: body,
+        color: 0xf59e0b,
+      });
     }
   }
 

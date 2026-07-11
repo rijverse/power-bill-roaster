@@ -37,6 +37,18 @@ describe('eraseUser', () => {
     expect(deleted[deleted.length - 1]).toBe(schema.users);
   });
 
+  it('clears payments before subscriptions and users (both FK it, no cascade)', async () => {
+    // regression: a user with any payment row (billing was live before the
+    // free-only launch) must still be erasable - forgetting payments makes the
+    // whole transaction roll back on the FK and /delete crash.
+    const { db, deleted } = fakeDb([7]);
+    await eraseUser(db, 1);
+
+    expect(deleted).toContain(schema.payments);
+    expect(deleted.indexOf(schema.payments)).toBeLessThan(deleted.indexOf(schema.subscriptions));
+    expect(deleted.indexOf(schema.payments)).toBeLessThan(deleted.indexOf(schema.users));
+  });
+
   it('still clears user-keyed pending_alerts when the user has no meters', async () => {
     const { db, deleted } = fakeDb([]);
     await eraseUser(db, 1);

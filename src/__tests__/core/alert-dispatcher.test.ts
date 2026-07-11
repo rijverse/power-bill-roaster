@@ -102,6 +102,11 @@ function makeFakeDb(opts: {
         },
       };
     },
+    // the worker claims its batch inside a transaction (select FOR UPDATE +
+    // lease update); the fake just runs the callback against itself.
+    transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+      return fn(db);
+    },
   };
   return db;
 }
@@ -228,6 +233,40 @@ describe('AlertDispatcherWorker retry semantics', () => {
     expect(row.status).toBe('pending');
     expect(row.attempts).toBe(1);
     expect(row.lastError).toMatch(/boom/);
+  });
+});
+
+describe('AlertDispatcherWorker quiet hours', () => {
+  const { dhakaHour } = require('../../core/quiet-hours');
+  // a 1-hour window pinned to the current Dhaka hour, so "now" is always
+  // inside it regardless of when the test runs
+  const quietNowUser = () => {
+    const h = dhakaHour(new Date());
+    return { ...aUser(), quietStart: h, quietEnd: (h + 1) % 24 } as unknown as schema.User;
+  };
+
+  it('defers a non-critical alert instead of marking it sent', async () => {
+    const row = makePending({ id: 31, action: 'low-alert' });
+    const db = makeFakeDb({ pendingRows: [row], user: quietNowUser(), meter: aMeter() });
+    const dispatchAlert = jest.fn();
+    await workerWith(db, dispatchAlert).tick();
+
+    expect(dispatchAlert).not.toHaveBeenCalled();
+    expect(row.status).toBe('pending'); // deferred, NOT 'sent'
+    expect(row.attempts).toBe(0); // a hold is not a failed attempt
+    expect(row.nextAttempt.getTime()).toBeGreaterThan(Date.now());
+    // resumes when the window ends, within the next day
+    expect(row.nextAttempt.getTime()).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);
+  });
+
+  it('lets a critical alert through quiet hours untouched', async () => {
+    const row = makePending({ id: 32, action: 'critical-alert', level: 'critical' });
+    const db = makeFakeDb({ pendingRows: [row], user: quietNowUser(), meter: aMeter() });
+    const dispatchAlert = jest.fn().mockResolvedValue({ delivered: ['telegram'], failed: [] });
+    await workerWith(db, dispatchAlert).tick();
+
+    expect(dispatchAlert).toHaveBeenCalledTimes(1);
+    expect(row.status).toBe('sent');
   });
 });
 

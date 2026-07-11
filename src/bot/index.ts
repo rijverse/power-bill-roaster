@@ -205,7 +205,13 @@ export function createBot(
         { id: discordUser.id, hasSubscription: discordHasSub },
         { id: botUser.id, hasSubscription: botHasSub }
       );
-      await mergeAccounts(db, survivorId, loserId, chatId);
+      const merged = await mergeAccounts(db, survivorId, loserId, chatId);
+      if (merged !== 'merged') {
+        await ctx.reply(
+          "That link didn't go through (one of the accounts changed in the meantime). Run /telegram in Discord again for a fresh link."
+        );
+        return;
+      }
       await ctx.reply(
         'Linked ✅ Merged your Telegram and Discord accounts - meters, plan, and alerts are all in one place now.'
       );
@@ -292,7 +298,13 @@ export function createBot(
       { id: webUserId, hasSubscription: webHasSub },
       { id: botUser.id, hasSubscription: botHasSub }
     );
-    await mergeAccounts(db, survivorId, loserId, chatId);
+    const merged = await mergeAccounts(db, survivorId, loserId, chatId);
+    if (merged !== 'merged') {
+      await ctx.reply(
+        "That link didn't go through (one of the accounts changed in the meantime). Try Connect Telegram again from the web app."
+      );
+      return;
+    }
     await ctx.reply(
       'Linked ✅ Merged your Telegram and web accounts - your meters and plan are all in one place now.'
     );

@@ -568,11 +568,14 @@ function renderScreen() {
   else renderRevenue();
 }
 // mirrors parseHash() in admin-hash.ts (this script is inlined, can't import)
+// like its server twin, a malformed %-escape must not throw out of the
+// hashchange handler - fall back to the raw text
+function decodeHash(s) { try { return decodeURIComponent(s); } catch { return s; } }
 function parseHashClient(h) {
   h = (h || '').replace(/^#/, '');
   const i = h.indexOf('/'), head = i === -1 ? h : h.slice(0, i), tail = i === -1 ? '' : h.slice(i + 1);
   if (head === 'user' && /^\\d+$/.test(tail)) return { screen: 'users', detail: tail, query: '', logStatus: 'all' };
-  if (head === 'users') return { screen: 'users', detail: null, query: tail.indexOf('q=') === 0 ? decodeURIComponent(tail.slice(2)) : '', logStatus: 'all' };
+  if (head === 'users') return { screen: 'users', detail: null, query: tail.indexOf('q=') === 0 ? decodeHash(tail.slice(2)) : '', logStatus: 'all' };
   if (head === 'logs') return { screen: 'logs', detail: null, query: '', logStatus: (tail === 'failed' || tail === 'sent') ? tail : 'all' };
   if (head === 'audit') return { screen: 'audit', detail: null, query: '', logStatus: 'all' };
   return { screen: 'revenue', detail: null, query: '', logStatus: 'all' };

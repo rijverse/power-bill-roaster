@@ -24,3 +24,22 @@ export function inQuietHours(now: Date, start: number | null, end: number | null
   const h = dhakaHour(now);
   return start < end ? h >= start && h < end : h >= start || h < end;
 }
+
+// Bangladesh has no DST, so a fixed offset is exact (and cheaper than Intl).
+const DHAKA_OFFSET_MS = 6 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The next instant the quiet window ends: today at `end`:00 Dhaka time, or
+ * tomorrow if that has already passed. Used to defer a held-back alert rather
+ * than drop it.
+ */
+export function quietHoursEnd(now: Date, end: number): Date {
+  const dhakaMs = now.getTime() + DHAKA_OFFSET_MS;
+  const dhakaMidnight = Math.floor(dhakaMs / DAY_MS) * DAY_MS;
+  let target = dhakaMidnight + end * 60 * 60 * 1000;
+  if (target <= dhakaMs) {
+    target += DAY_MS;
+  }
+  return new Date(target - DHAKA_OFFSET_MS);
+}

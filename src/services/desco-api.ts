@@ -44,9 +44,18 @@ export class DescoApiClient {
       const response = await fetchWithTimeout(url, { dispatcher: insecureDispatcher });
       apiResponse = await response.json();
     } catch (error) {
-      throw new ProviderUnavailableError(
-        `DESCO request failed: ${error instanceof Error ? error.message : 'network error'}`
-      );
+      const message = error instanceof Error ? error.message : 'network error';
+      // undici wraps TLS failures: the cert error code lives on error.cause
+      // (typed structurally - the compile target predates Error#cause)
+      const causeRaw: unknown =
+        error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined;
+      const cause = causeRaw instanceof Error ? causeRaw.message : '';
+      // DESCO's chain has broken before; when that's what failed, tell the
+      // operator the one-line fix instead of a bare TLS error.
+      const certHint = /certificate|CERT_|unable to verify|self.signed/i.test(`${message} ${cause}`)
+        ? ' (looks like a TLS certificate error - set DESCO_TLS_INSECURE=1 and restart, see docs/DEPLOY.md)'
+        : '';
+      throw new ProviderUnavailableError(`DESCO request failed: ${message}${certHint}`);
     }
 
     if (!validateApiResponse(apiResponse)) {

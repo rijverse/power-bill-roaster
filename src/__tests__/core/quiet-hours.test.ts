@@ -1,4 +1,4 @@
-import { dhakaHour, inQuietHours } from '../../core/quiet-hours';
+import { dhakaHour, inQuietHours, quietHoursEnd } from '../../core/quiet-hours';
 
 // Asia/Dhaka is a fixed UTC+6 (no DST), so these instants map to stable hours.
 const at = (iso: string) => new Date(iso);
@@ -29,5 +29,32 @@ describe('inQuietHours', () => {
     expect(inQuietHours(at('2026-06-22T19:00:00Z'), 23, 7)).toBe(true); // 01:00 Dhaka
     expect(inQuietHours(at('2026-06-22T17:30:00Z'), 23, 7)).toBe(true); // 23:30 Dhaka
     expect(inQuietHours(at('2026-06-23T06:00:00Z'), 23, 7)).toBe(false); // 12:00 Dhaka
+  });
+});
+
+describe('quietHoursEnd', () => {
+  // the outbox worker uses this to DEFER a held alert to the end of the
+  // window - it must always land on the next `end`:00 Dhaka wall-clock time
+  it('resolves to later the same Dhaka day when the end is still ahead', () => {
+    // 01:00 Dhaka, window ends 07:00 -> 07:00 Dhaka = 01:00 UTC same day
+    expect(quietHoursEnd(at('2026-06-22T19:00:00Z'), 7).toISOString()).toBe(
+      '2026-06-23T01:00:00.000Z'
+    );
+  });
+
+  it('rolls to tomorrow when the end already passed today', () => {
+    // 12:00 Dhaka, window ends 07:00 -> tomorrow 07:00 Dhaka
+    expect(quietHoursEnd(at('2026-06-23T06:00:00Z'), 7).toISOString()).toBe(
+      '2026-06-24T01:00:00.000Z'
+    );
+  });
+
+  it('is always in the future and within 24h', () => {
+    const now = at('2026-06-23T00:00:00Z');
+    for (let end = 0; end < 24; end++) {
+      const t = quietHoursEnd(now, end).getTime();
+      expect(t).toBeGreaterThan(now.getTime());
+      expect(t).toBeLessThanOrEqual(now.getTime() + 24 * 60 * 60 * 1000);
+    }
   });
 });

@@ -1,4 +1,9 @@
-import { chooseSurvivor, partitionMeters, mergedIdentity } from '../../core/merge-accounts';
+import {
+  chooseSurvivor,
+  partitionMeters,
+  mergedIdentity,
+  shadowedChannelIds,
+} from '../../core/merge-accounts';
 import { enforceMeterCap } from '../../core/meter-cap';
 import { Db } from '../../db';
 
@@ -108,5 +113,31 @@ describe('mergedIdentity', () => {
         { email: null, discordUserId: '333', plan: 'free' }
       ).discordUserId
     ).toBe('333');
+  });
+});
+
+describe('shadowedChannelIds', () => {
+  const ch = (id: number, type: string, address: string) => ({ id, type, address });
+
+  it('shadows a loser channel the survivor already has (same type+address)', () => {
+    const survivor = [ch(1, 'email', 'A@B.com')];
+    const loser = [ch(2, 'email', 'a@b.com'), ch(3, 'email', 'other@x.com')];
+    // case-insensitive on address; the different address moves untouched
+    expect(shadowedChannelIds(survivor, loser)).toEqual([2]);
+  });
+
+  it('treats any second telegram row as a duplicate regardless of address', () => {
+    // regression: post-merge there is one chat id; a second telegram row with
+    // the loser's old chat id would make the dispatcher's enable-gate
+    // nondeterministic (it reads a single row)
+    const survivor = [ch(1, 'telegram', '111')];
+    const loser = [ch(2, 'telegram', '222')];
+    expect(shadowedChannelIds(survivor, loser)).toEqual([2]);
+  });
+
+  it('shadows nothing when the survivor has no overlapping channels', () => {
+    const survivor = [ch(1, 'email', 'a@b.com')];
+    const loser = [ch(2, 'discord-dm', '999'), ch(3, 'sms', '+8801700000000')];
+    expect(shadowedChannelIds(survivor, loser)).toEqual([]);
   });
 });

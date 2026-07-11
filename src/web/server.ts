@@ -192,6 +192,8 @@ export function createWebServer(
   discordInteractions: DiscordInteractionDeps | null = null
 ): http.Server {
   const startedAt = Date.now();
+  // fully static and search-engine indexed - build it once, not per crawl hit
+  const homePage = homeHtml();
   const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const loginGlobalLimiter = new RateLimiter(ADMIN_LOGIN_GLOBAL_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const appLoginLimiter = new RateLimiter(APP_LOGIN_SENDS, APP_LOGIN_WINDOW_MS);
@@ -333,7 +335,7 @@ export function createWebServer(
         // route keeps the noindex set in applySecurityHeaders).
         res.setHeader('X-Robots-Tag', 'index, follow');
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(homeHtml());
+        res.end(homePage);
         return;
       }
 

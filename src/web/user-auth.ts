@@ -189,10 +189,14 @@ export function userCookie(
   secure: boolean,
   maxAgeSec = SESSION_TTL_MS / 1000
 ): string {
+  // Lax, not Strict: the cookie is set on the magic-link GET and must survive
+  // the cross-site-initiated redirect to /app (webmail clicks are cross-site
+  // navigations - Strict would withhold it and the login page would re-render).
+  // Lax still keeps the cookie off all cross-site subresource/POST requests.
   const attrs = [
     `${USER_COOKIE}=${value}`,
     'HttpOnly',
-    'SameSite=Strict',
+    'SameSite=Lax',
     'Path=/app',
     `Max-Age=${Math.floor(maxAgeSec)}`,
   ];

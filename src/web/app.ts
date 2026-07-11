@@ -1,5 +1,5 @@
 import http from 'http';
-import { eq, and, sql, desc } from 'drizzle-orm';
+import { eq, and, ne, sql, desc } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { Mailer } from '../services/mailer';
@@ -172,7 +172,7 @@ async function findOrCreateByEmail(db: Db, email: string): Promise<schema.User> 
  * account - we don't auto-merge on the email path; the user links from the web
  * side instead. On success returns the updated user with a verified email channel.
  */
-async function attachEmailToUser(
+export async function attachEmailToUser(
   db: Db,
   userId: number,
   email: string
@@ -185,6 +185,20 @@ async function attachEmailToUser(
     return 'conflict';
   }
   await db.update(schema.users).set({ email }).where(eq(schema.users.id, userId));
+  // A replaced address must stop receiving alerts: the dispatcher fans out to
+  // every enabled email row, so a stale-but-enabled row would keep leaking
+  // balance mail to an address the user may no longer control. Disabled, not
+  // deleted - alerts_log rows FK the channel, and re-adding re-enables it.
+  await db
+    .update(schema.channels)
+    .set({ enabled: false })
+    .where(
+      and(
+        eq(schema.channels.userId, userId),
+        eq(schema.channels.type, 'email'),
+        ne(schema.channels.address, email)
+      )
+    );
   const [channel] = await db
     .select()
     .from(schema.channels)
@@ -225,7 +239,11 @@ async function me(db: Db, userId: number, billingLive = false) {
     return null;
   }
   const chans = await db.select().from(schema.channels).where(eq(schema.channels.userId, userId));
-  const email = chans.find(c => c.type === 'email');
+  // The row for the CURRENT address - after an email change the old address's
+  // (disabled) row may still exist, and it must not speak for the toggle.
+  const email = chans.find(
+    c => c.type === 'email' && c.address.toLowerCase() === (user.email ?? '').toLowerCase()
+  );
   const tg = chans.find(c => c.type === 'telegram');
   const sms = chans.find(c => c.type === 'sms' && c.verified);
   const discord = chans.find(c => c.type === 'discord' && c.verified);
@@ -331,7 +349,10 @@ async function setChannel(
   }
   // email / sms: only a verified channel can be toggled (you can't enable alerts
   // to an address you never confirmed). SMS numbers are added via the bot's /sms.
-  const [channel] = await db
+  // For email, pin the toggle to the CURRENT address - a superseded address's
+  // row may linger (disabled) after an email change and must never be the one
+  // this flips.
+  const rows = await db
     .select()
     .from(schema.channels)
     .where(
@@ -341,6 +362,10 @@ async function setChannel(
         eq(schema.channels.verified, true)
       )
     );
+  const channel =
+    type === 'email'
+      ? rows.find(c => c.address.toLowerCase() === (user.email ?? '').toLowerCase())
+      : rows[0];
   if (!channel) {
     const hint =
       type === 'sms'

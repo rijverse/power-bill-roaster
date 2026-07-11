@@ -3,7 +3,6 @@ import { Db, schema } from '../db';
 import { AlertAction, AlertLevel } from '../core/alert-machine';
 import { smsPerMonthFor } from '../core/plans';
 import { normalizeTone, Tone } from '../core/tone';
-import { inQuietHours } from '../core/quiet-hours';
 import { renderAlert, MeterContext } from './telegram-templates';
 import { smsAlertText } from './sms-templates';
 import { emailAlert } from './email-templates';
@@ -32,8 +31,8 @@ const DEFAULT_RECHARGE_URL = 'https://prepaid.desco.org.bd/';
  * Result of one dispatch pass. `delivered` and `failed` hold channel keys -
  * 'telegram', 'email:<channelId>', 'sms:<channelId>', 'discord:<channelId>' - so the worker marks the
  * row sent only when nothing failed, and on a retry re-sends just the failed
- * ones and skips the rest. A channel we deliberately skip (quiet hours, disabled,
- * no SMS budget) shows up in neither list.
+ * ones and skips the rest. A channel we deliberately skip (disabled, no SMS
+ * budget) shows up in neither list.
  */
 export interface DispatchResult {
   delivered: string[];
@@ -72,30 +71,28 @@ export class Dispatcher {
     ctx: MeterContext,
     alreadyDelivered: ReadonlySet<string> = new Set()
   ): Promise<DispatchResult> {
-    // Quiet hours hold back the nags (low / reminder / recovery), but a critical
-    // alert - power about to be cut - always goes through. Nothing was attempted,
-    // so the worker treats this as terminal (nothing to retry).
-    if (action !== 'critical-alert' && inQuietHours(new Date(), user.quietStart, user.quietEnd)) {
-      return empty();
-    }
+    // Quiet hours are the outbox worker's concern: it defers the row until the
+    // window ends instead of asking us to skip (which would read as "sent").
     const tone = normalizeTone(user.tonePref);
-    const results = [
-      await this.runChannel('telegram', () =>
+    // Channels are independent and each isolates its own errors (runChannel),
+    // so send in parallel - alert latency is the slowest channel, not the sum.
+    const results = await Promise.all([
+      this.runChannel('telegram', () =>
         this.sendTelegramAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
-      await this.runChannel('email', () =>
+      this.runChannel('email', () =>
         this.sendEmailAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
-      await this.runChannel('sms', () =>
+      this.runChannel('sms', () =>
         this.sendSmsAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
-      await this.runChannel('discord', () =>
+      this.runChannel('discord', () =>
         this.sendDiscordAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
-      await this.runChannel('discord-dm', () =>
+      this.runChannel('discord-dm', () =>
         this.sendDiscordDmAlert(user, meter, action, level, ctx, tone, alreadyDelivered)
       ),
-    ];
+    ]);
     return {
       delivered: results.flatMap(r => r.delivered),
       failed: results.flatMap(r => r.failed),
@@ -211,10 +208,15 @@ export class Dispatcher {
     }
     // Telegram has no per-address row by default (it rides user.telegramChatId);
     // a 'telegram' channel row exists only once the user toggles it. Respect it.
-    const [tgChannel] = await this.db
+    // Oldest row wins deterministically - an account merge can leave two.
+    const tgRows = await this.db
       .select()
       .from(schema.channels)
       .where(and(eq(schema.channels.userId, user.id), eq(schema.channels.type, 'telegram')));
+    const tgChannel = tgRows.reduce<schema.Channel | undefined>(
+      (oldest, c) => (!oldest || c.id < oldest.id ? c : oldest),
+      undefined
+    );
     if (tgChannel && !tgChannel.enabled) {
       return empty();
     }

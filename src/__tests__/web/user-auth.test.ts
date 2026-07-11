@@ -114,7 +114,12 @@ describe('csrf + cookie', () => {
     const c = userCookie('tok', true);
     expect(c).toContain(`${USER_COOKIE}=tok`);
     expect(c).toContain('HttpOnly');
-    expect(c).toContain('SameSite=Strict');
+    // Lax, NOT Strict: the magic-link flow sets this cookie on a cross-site
+    // navigation (a click in webmail) and immediately redirects to /app -
+    // Strict would withhold the cookie on that redirect and the user would
+    // land back on the login page. Regression guard for the sign-in flow.
+    expect(c).toContain('SameSite=Lax');
+    expect(c).not.toContain('SameSite=Strict');
     expect(c).toContain('Path=/app');
     expect(c).toContain('Secure');
     expect(userCookie('tok', false)).not.toContain('Secure');

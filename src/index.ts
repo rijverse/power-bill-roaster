@@ -99,7 +99,7 @@ async function main(): Promise<void> {
     adminSender: telegramSender,
     adminChatId: config.adminChatId,
   });
-  const scheduler = new Scheduler(db, pool, telegramSender, config, subscriptions);
+  const scheduler = new Scheduler(db, pool, telegramSender, config, subscriptions, discordDm);
 
   const healthServer = createWebServer(
     db,

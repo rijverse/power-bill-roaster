@@ -5,9 +5,10 @@
 // confirms delivery; failed sends back off and after MAX_ATTEMPTS the row is
 // marked 'failed' and the operator gets pinged.
 
-import { and, asc, eq, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { Dispatcher, DispatchResult, TelegramSender } from '../notifications/dispatcher';
+import { inQuietHours, quietHoursEnd } from './quiet-hours';
 import { MeterContext } from '../notifications/telegram-templates';
 import { logger } from '../logger';
 
@@ -18,6 +19,10 @@ const BATCH_SIZE = 20;
 const MAX_ATTEMPTS = 5;
 // base delay (ms) for backoff: 30s, 1m, 2m, 4m, 8m, ...
 const BACKOFF_BASE_MS = 30_000;
+// how long a claimed batch is invisible to other workers. Long enough for a
+// worst-case batch (20 rows x slow channels), short enough that a crash
+// mid-batch only delays the un-processed rows by minutes.
+const CLAIM_LEASE_MS = 10 * 60 * 1000;
 
 export interface AlertDispatcherDeps {
   db: Db;
@@ -29,7 +34,6 @@ export interface AlertDispatcherDeps {
 
 export class AlertDispatcherWorker {
   private timer: NodeJS.Timeout | null = null;
-  private running = false;
   private inflight = false;
 
   constructor(private deps: AlertDispatcherDeps) {}
@@ -67,20 +71,39 @@ export class AlertDispatcherWorker {
   }
 
   private async drainBatch(): Promise<void> {
-    // SKIP LOCKED so two workers (or two replicas) can drain in parallel
-    // without blocking on each other.
-    const ready = await this.deps.db
-      .select()
-      .from(schema.pendingAlerts)
-      .where(
-        and(
-          eq(schema.pendingAlerts.status, 'pending'),
-          lte(schema.pendingAlerts.nextAttempt, sql`now()`)
+    // Claim the batch atomically: FOR UPDATE SKIP LOCKED alone is not enough
+    // (outside a transaction the row locks die with the statement), so inside
+    // one short transaction we select the rows AND push their next_attempt
+    // forward as a lease. A second worker (replica, deploy overlap) either
+    // skips the locked rows or, after commit, no longer sees them as due -
+    // so the same alert can't be sent twice. If we crash mid-batch, the
+    // lease expires and the rows simply become due again.
+    const ready = await this.deps.db.transaction(async tx => {
+      const rows = await tx
+        .select()
+        .from(schema.pendingAlerts)
+        .where(
+          and(
+            eq(schema.pendingAlerts.status, 'pending'),
+            lte(schema.pendingAlerts.nextAttempt, sql`now()`)
+          )
         )
-      )
-      .orderBy(asc(schema.pendingAlerts.nextAttempt))
-      .limit(BATCH_SIZE)
-      .for('update', { skipLocked: true });
+        .orderBy(asc(schema.pendingAlerts.nextAttempt))
+        .limit(BATCH_SIZE)
+        .for('update', { skipLocked: true });
+      if (rows.length > 0) {
+        await tx
+          .update(schema.pendingAlerts)
+          .set({ nextAttempt: new Date(Date.now() + CLAIM_LEASE_MS) })
+          .where(
+            inArray(
+              schema.pendingAlerts.id,
+              rows.map(r => r.id)
+            )
+          );
+      }
+      return rows;
+    });
 
     if (ready.length === 0) return;
     logger.info(`Draining ${ready.length} pending alert(s)`);
@@ -132,6 +155,24 @@ export class AlertDispatcherWorker {
         .update(schema.pendingAlerts)
         .set({ status: 'failed', lastError: 'user or meter deleted' })
         .where(eq(schema.pendingAlerts.id, row.id));
+      return;
+    }
+
+    // Quiet hours hold back the nags (low / reminder / recovery); a critical
+    // alert - power about to be cut - always goes through. Held rows are
+    // DEFERRED until the window ends, never dropped: the scheduler already
+    // advanced lastAlertAt, so nothing would ever re-queue this alert.
+    // Deferral doesn't touch `attempts` - it isn't a failure.
+    const now = new Date();
+    if (row.action !== 'critical-alert' && inQuietHours(now, user.quietStart, user.quietEnd)) {
+      const resumeAt = quietHoursEnd(now, user.quietEnd as number);
+      await this.deps.db
+        .update(schema.pendingAlerts)
+        .set({ nextAttempt: resumeAt })
+        .where(eq(schema.pendingAlerts.id, row.id));
+      logger.info(
+        `Pending alert ${row.id} held for quiet hours; retrying at ${resumeAt.toISOString()}`
+      );
       return;
     }
 

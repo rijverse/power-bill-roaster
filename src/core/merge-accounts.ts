@@ -35,6 +35,26 @@ export function partitionMeters(
   return { dupIds, moveIds };
 }
 
+// The identity we compare channels by. A 'telegram' row is a duplicate by type
+// alone: post-merge the account has exactly one chat id, so a second row could
+// only shadow the first (the dispatcher's gate reads one row).
+type ChannelKeyParts = { id: number; type: string; address: string };
+const channelKey = (c: ChannelKeyParts) =>
+  c.type === 'telegram' ? 'telegram' : `${c.type}|${c.address.toLowerCase()}`;
+
+/**
+ * Loser channels the survivor already covers - these get disabled (not deleted;
+ * alerts_log rows FK them) so a merge can't create double sends or an
+ * ambiguously-toggled channel.
+ */
+export function shadowedChannelIds(
+  survivorChannels: ChannelKeyParts[],
+  loserChannels: ChannelKeyParts[]
+): number[] {
+  const survivorKeys = new Set(survivorChannels.map(channelKey));
+  return loserChannels.filter(c => survivorKeys.has(channelKey(c))).map(c => c.id);
+}
+
 /** The survivor's post-merge identity: keep its own email/discord id, else inherit the loser's, and keep whichever plan is paid - so no login or paid plan is lost in a merge. */
 export function mergedIdentity(
   survivor: { email: string | null; discordUserId: string | null; plan: string },
@@ -59,12 +79,14 @@ export async function mergeAccounts(
   survivorId: number,
   loserId: number,
   telegramChatId: number
-): Promise<void> {
-  const finalPlan = await db.transaction(async tx => {
+): Promise<'merged' | 'missing'> {
+  const outcome = await db.transaction(async tx => {
     const [survivor] = await tx.select().from(schema.users).where(eq(schema.users.id, survivorId));
     const [loser] = await tx.select().from(schema.users).where(eq(schema.users.id, loserId));
     if (!survivor || !loser) {
-      return survivor?.plan ?? 'free';
+      // Stale token or a concurrent merge already consumed one side. Signal it
+      // so callers don't tell the user "Merged ✅" about a merge that didn't run.
+      return { status: 'missing' as const, plan: survivor?.plan ?? 'free' };
     }
 
     const survivorMeters = await tx
@@ -91,6 +113,24 @@ export async function mergeAccounts(
         .where(inArray(schema.meters.id, moveIds));
     }
 
+    // Channels move like meters do: the survivor's copy of a duplicate wins.
+    // Without this, two enabled rows of one type mean duplicate alert sends,
+    // and the dispatcher's telegram gate would read an arbitrary row.
+    const survivorChannels = await tx
+      .select()
+      .from(schema.channels)
+      .where(eq(schema.channels.userId, survivorId));
+    const loserChannels = await tx
+      .select()
+      .from(schema.channels)
+      .where(eq(schema.channels.userId, loserId));
+    const shadowedIds = shadowedChannelIds(survivorChannels, loserChannels);
+    if (shadowedIds.length > 0) {
+      await tx
+        .update(schema.channels)
+        .set({ enabled: false })
+        .where(inArray(schema.channels.id, shadowedIds));
+    }
     await tx
       .update(schema.channels)
       .set({ userId: survivorId })
@@ -116,9 +156,10 @@ export async function mergeAccounts(
       .update(schema.users)
       .set({ telegramChatId, discordUserId, email, plan })
       .where(eq(schema.users.id, survivorId));
-    return plan;
+    return { status: 'merged' as const, plan };
   });
 
   // Idempotent, so it's fine just outside the transaction.
-  await enforceMeterCap(db, survivorId, finalPlan);
+  await enforceMeterCap(db, survivorId, outcome.plan);
+  return outcome.status;
 }

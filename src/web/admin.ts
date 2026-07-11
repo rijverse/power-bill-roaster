@@ -61,6 +61,8 @@ export interface AdminDeps {
   recheckLimiter: RateLimiter;
   /** the poll scheduler, so the panel can show cycle health and trigger a run */
   scheduler: Scheduler;
+  /** per-request CSP nonce; inline <script> blocks must carry it to run */
+  nonce: string;
 }
 
 // ---- data assembly -------------------------------------------------------
@@ -704,8 +706,16 @@ export async function handleAdminRequest(
   res: http.ServerResponse,
   deps: AdminDeps
 ): Promise<boolean> {
-  const { db, config, subscriptions, loginLimiter, loginGlobalLimiter, recheckLimiter, scheduler } =
-    deps;
+  const {
+    db,
+    config,
+    subscriptions,
+    loginLimiter,
+    loginGlobalLimiter,
+    recheckLimiter,
+    scheduler,
+    nonce,
+  } = deps;
   const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
   const path = url.pathname;
 
@@ -727,9 +737,9 @@ export async function handleAdminRequest(
   // --- auth pages & actions ---
   if (path === '/admin' && method === 'GET') {
     if (authed) {
-      html(res, 200, adminAppHtml(csrfFor(cookie, secret), billingLive(config.billing)));
+      html(res, 200, adminAppHtml(nonce, csrfFor(cookie, secret), billingLive(config.billing)));
     } else {
-      html(res, 200, adminLoginHtml(url.searchParams.has('error')));
+      html(res, 200, adminLoginHtml(nonce, url.searchParams.has('error')));
     }
     return true;
   }
@@ -740,7 +750,11 @@ export async function handleAdminRequest(
     const ipOk = loginLimiter.allow(clientIp(req));
     const globalOk = loginGlobalLimiter.allow('admin-login');
     if (!ipOk || !globalOk) {
-      html(res, 429, adminLoginHtml(true, 'Too many attempts. Wait a few minutes and try again.'));
+      html(
+        res,
+        429,
+        adminLoginHtml(nonce, true, 'Too many attempts. Wait a few minutes and try again.')
+      );
       return true;
     }
     const password = new URLSearchParams(await readBody(req)).get('password') ?? '';

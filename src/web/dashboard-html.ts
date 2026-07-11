@@ -5,7 +5,7 @@
 
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
-export function dashboardHtml(token: string): string {
+export function dashboardHtml(nonce: string, token: string): string {
   const body = `<div style="position:relative; z-index:1; max-width:880px; margin:0 auto; padding:36px 20px 64px;">
   <header style="text-align:center; margin-bottom:18px;">
     <div style="display:flex; justify-content:center;">${logo(true)}</div>
@@ -15,7 +15,7 @@ export function dashboardHtml(token: string): string {
   <footer style="text-align:center; color:var(--faint-2); font-size:12px; padding-top:28px;">not affiliated with DESCO, alerts keep running even if you never open this page</footer>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script>
+<script nonce="${nonce}">
 const token = ${JSON.stringify(token)};
 ${CLIENT_HELPERS}
 ${CHART_SCRIPT}

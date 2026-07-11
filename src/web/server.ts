@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import { sql } from 'drizzle-orm';
 import { Db } from '../db';
 import { Scheduler } from '../core/scheduler';
@@ -46,18 +47,19 @@ function escapeHtml(s: string): string {
 /**
  * Defense-in-depth headers on every response, set before routing so the admin
  * panel (customer PII), the customer app, and the token-bearing dashboard links
- * all get them. The CSP allows inline script/style, the jsdelivr Chart.js CDN,
- * and Google Fonts (Inter + JetBrains Mono) because every page relies on them;
- * everything else is same-origin
- * only, framing is denied (clickjacking), and X-Robots-Tag keeps these pages -
- * and the auth tokens in their URLs - out of search engines.
+ * all get them. Inline scripts need the per-request nonce; styles stay
+ * 'unsafe-inline' because the pages lean on style="" attributes, which nonces
+ * can't cover. The jsdelivr Chart.js CDN and Google Fonts (Inter + JetBrains
+ * Mono) are allow-listed because every page relies on them; everything else is
+ * same-origin only, framing is denied (clickjacking), and X-Robots-Tag keeps
+ * these pages - and the auth tokens in their URLs - out of search engines.
  */
-function applySecurityHeaders(res: http.ServerResponse, secure: boolean): void {
+function applySecurityHeaders(res: http.ServerResponse, secure: boolean, nonce: string): void {
   res.setHeader(
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+      `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data:",
       "connect-src 'self'",
@@ -181,7 +183,8 @@ export function createWebServer(
 
   return http.createServer((req, res) => {
     void (async () => {
-      applySecurityHeaders(res, secure);
+      const nonce = crypto.randomBytes(16).toString('base64');
+      applySecurityHeaders(res, secure, nonce);
       const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
 
       if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
@@ -193,6 +196,7 @@ export function createWebServer(
           loginGlobalLimiter,
           recheckLimiter: adminRecheckLimiter,
           scheduler,
+          nonce,
         });
         return;
       }
@@ -205,6 +209,7 @@ export function createWebServer(
           subscriptions,
           loginLimiter: appLoginLimiter,
           meterLimiter: appMeterLimiter,
+          nonce,
         });
         return;
       }
@@ -271,7 +276,7 @@ export function createWebServer(
           json(res, 200, await dashboardData(db, userId));
         } else {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(dashboardHtml(url.searchParams.get('t')!));
+          res.end(dashboardHtml(nonce, url.searchParams.get('t')!));
         }
         return;
       }

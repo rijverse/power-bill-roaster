@@ -61,6 +61,8 @@ export interface AppDeps {
   loginLimiter: RateLimiter;
   /** DESCO lookups on add-meter, keyed by user id */
   meterLimiter: RateLimiter;
+  /** per-request CSP nonce; inline <script> blocks must carry it to run */
+  nonce: string;
 }
 
 const PLAN_NAMES: Record<string, string> = { free: 'Free', plus: 'Plus', business: 'Business' };
@@ -570,7 +572,7 @@ export async function handleAppRequest(
   res: http.ServerResponse,
   deps: AppDeps
 ): Promise<boolean> {
-  const { db, config, mailer, loginLimiter } = deps;
+  const { db, config, mailer, loginLimiter, nonce } = deps;
   const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
   const path = url.pathname;
   if (path !== '/app' && !path.startsWith('/app/')) {
@@ -588,9 +590,9 @@ export async function handleAppRequest(
   // --- auth pages & actions ---
   if (path === '/app' && method === 'GET') {
     if (authed) {
-      html(res, 200, appShellHtml(csrfFor(cookie, secret), config.rechargeUrl));
+      html(res, 200, appShellHtml(nonce, csrfFor(cookie, secret), config.rechargeUrl));
     } else {
-      html(res, 200, loginHtml(mailEnabled, url.searchParams.get('status')));
+      html(res, 200, loginHtml(nonce, mailEnabled, url.searchParams.get('status')));
     }
     return true;
   }

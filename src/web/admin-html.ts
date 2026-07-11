@@ -14,7 +14,7 @@ import { CLIENT_PARSE_HASH } from './admin-hash';
 
 const ADMIN_BADGE = `<span class="pr-pill low" style="font-size:10px;padding:3px 9px">admin</span>`;
 
-export function adminLoginHtml(hasError: boolean, message = 'Wrong password.'): string {
+export function adminLoginHtml(nonce: string, hasError: boolean, message = 'Wrong password.'): string {
   const err = hasError ? message : '';
   const body = `<div style="position:relative; z-index:1; min-height:100vh; display:grid; place-items:center; padding:32px 20px;">
   <div class="pr-authpanel" style="width:100%">
@@ -25,13 +25,21 @@ export function adminLoginHtml(hasError: boolean, message = 'Wrong password.'): 
       <label class="pr-label" for="pw">Admin password</label>
       <div style="position:relative;margin-bottom:16px">
         <input class="pr-input" id="pw" type="password" name="password" aria-label="Admin password" placeholder="••••••••" autofocus required style="margin:0;padding-right:56px">
-        <button type="button" id="pwToggle" onclick="var p=document.getElementById('pw');var s=p.type==='password';p.type=s?'text':'password';this.textContent=s?'Hide':'Show'" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 8px">Show</button>
+        <button type="button" id="pwToggle" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:4px 8px">Show</button>
       </div>
       <button class="pr-btn gold block" type="submit">Sign in</button>
       <p class="pr-err" style="margin-top:12px">${err}</p>
     </form>
   </div>
-</div>`;
+</div>
+<script nonce="${nonce}">
+document.getElementById('pwToggle').addEventListener('click', function () {
+  var p = document.getElementById('pw');
+  var show = p.type === 'password';
+  p.type = show ? 'text' : 'password';
+  this.textContent = show ? 'Hide' : 'Show';
+});
+</script>`;
   return pageDoc('Power Roast Admin', body);
 }
 
@@ -43,7 +51,7 @@ const AIC = {
   logs: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"></path><path d="M8 8h8M8 12h8M8 16h5"></path></svg>',
 };
 
-export function adminAppHtml(csrf: string, billingLive = true): string {
+export function adminAppHtml(nonce: string, csrf: string, billingLive = true): string {
   // During a free-only launch there's no money to report, so the landing
   // screen leads with usage + ops instead of an all-zero revenue board.
   const homeLabel = billingLive ? 'Revenue &amp; health' : 'Ops &amp; health';
@@ -78,7 +86,7 @@ export function adminAppHtml(csrf: string, billingLive = true): string {
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script>
+<script nonce="${nonce}">
 const CSRF = ${JSON.stringify(csrf)};
 const BILLING_LIVE = ${JSON.stringify(billingLive)};
 ${CLIENT_HELPERS}

@@ -14,6 +14,7 @@ import {
   DiscordDmSender,
 } from '../notifications/dispatcher';
 import { inQuietHours, quietHoursEnd } from './quiet-hours';
+import { AlertAction, AlertLevel } from './alert-machine';
 import { withTimeout } from './with-timeout';
 import { MeterContext } from '../notifications/alert-copy';
 import { notifyOperator } from './operator-notify';
@@ -36,6 +37,15 @@ const ROW_TIMEOUT_MS = 30_000;
 // mid-batch delays the unprocessed rows by at most that. (Was a flat 10 min with
 // no bound on batch time at all - because nothing capped a send.)
 const CLAIM_LEASE_MS = BATCH_SIZE * ROW_TIMEOUT_MS;
+
+// what the scheduler is allowed to queue ('none' never reaches the outbox).
+const DISPATCH_ACTIONS = new Set<string>([
+  'low-alert',
+  'critical-alert',
+  'reminder',
+  'recovery',
+] satisfies AlertAction[]);
+const ALERT_LEVELS = new Set<string>(['ok', 'low', 'critical'] satisfies AlertLevel[]);
 
 export interface AlertDispatcherDeps {
   db: Db;
@@ -150,10 +160,19 @@ export class AlertDispatcherWorker {
           `pending alert ${row.id}`
         );
       } catch (error) {
-        // processRow already records the error on the row; this is a
-        // belt-and-braces catch so a single bad row can't kill the loop - or, with
-        // the timeout, wedge the worker. The row keeps its lease and comes back.
+        // withTimeout abandoned the row, or a DB write inside processRow threw.
+        // Record the attempt so a row that reliably hangs dead-letters at
+        // MAX_ATTEMPTS instead of riding its expiring lease forever. A send
+        // that lands late may record the same attempt again - bounded, not
+        // precise, which is all the poison-pill guard needs.
         logger.error(`Failed to process pending alert ${row.id}`, error);
+        await this.scheduleRetryOrFail(
+          row,
+          meterById.get(row.meterId),
+          row.attempts + 1,
+          error instanceof Error ? error.message : String(error),
+          parseDelivered(row.delivered)
+        ).catch(e => logger.error(`Failed to record attempt for pending alert ${row.id}`, e));
       }
     }
   }
@@ -208,6 +227,20 @@ export class AlertDispatcherWorker {
       return;
     }
 
+    // DB stores action/level as text; anything the scheduler wouldn't write
+    // (hand-inserted row, bad migration) is poison - fail it, don't dispatch it.
+    if (!DISPATCH_ACTIONS.has(row.action) || !ALERT_LEVELS.has(row.level)) {
+      logger.error(`Pending alert ${row.id} has unrecognized action/level`, {
+        action: row.action,
+        level: row.level,
+      });
+      await this.deps.db
+        .update(schema.pendingAlerts)
+        .set({ status: 'failed', lastError: `unrecognized action/level: ${row.action}/${row.level}` })
+        .where(eq(schema.pendingAlerts.id, row.id));
+      return;
+    }
+
     // Channels already delivered on a previous attempt, so a retry resends only
     // the ones that failed - never a duplicate.
     const alreadyDelivered = parseDelivered(row.delivered);
@@ -217,11 +250,8 @@ export class AlertDispatcherWorker {
       result = await this.deps.dispatcher.dispatchAlert(
         user,
         meter,
-        // DB stores action/level as text, dispatcher takes the same union
-        // types. cast through unknown to skip a runtime validator - scheduler
-        // is the only writer and uses these literals.
-        row.action as never,
-        row.level as never,
+        row.action as AlertAction,
+        row.level as AlertLevel,
         ctx,
         alreadyDelivered
       );
@@ -271,7 +301,7 @@ export class AlertDispatcherWorker {
   // of channels already sent, persisted so the next attempt skips them.
   private async scheduleRetryOrFail(
     row: schema.PendingAlert,
-    meter: schema.Meter,
+    meter: schema.Meter | undefined,
     attempts: number,
     lastError: string,
     delivered: ReadonlySet<string>
@@ -298,7 +328,7 @@ export class AlertDispatcherWorker {
               : null,
         },
         '🚨 Alert delivery failed',
-        `🚨 Alert for meter ${meter.id} (${meter.accountNo}/${meter.meterNo}) failed after ${attempts} attempts. Last error: ${lastError}`
+        `🚨 Alert for meter ${meter ? `${meter.id} (${meter.accountNo}/${meter.meterNo})` : row.meterId} failed after ${attempts} attempts. Last error: ${lastError}`
       );
       return;
     }

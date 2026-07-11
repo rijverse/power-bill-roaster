@@ -20,4 +20,10 @@ COPY package.json ./
 # drop root: the runtime only needs to read these files and bind a high port
 USER node
 EXPOSE 3000
+# node, not curl - the runtime image has no curl. This gives `docker ps` and any
+# orchestrator visibility into /health; it is NOT the restart mechanism, since
+# `restart: unless-stopped` acts on exit rather than on unhealthy. The in-process
+# watchdog (src/index.ts) is what actually exits a wedged process.
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "dist/index.js"]

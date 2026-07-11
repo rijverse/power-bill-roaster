@@ -13,8 +13,15 @@ import { createDiscordBot } from './discord/bot';
 import { DISCORD_COMMANDS } from './discord/command-defs';
 import { discordPublicKey } from './discord/verify';
 import { DiscordInteractionDeps } from './discord/interactions';
+import { pollIsStale } from './core/health';
 import { logger } from './logger';
 import { InlineKeyboard } from 'grammy';
+
+// How often the watchdog checks the poll loop for staleness. Far shorter than the
+// poll interval - it's a cheap in-memory comparison, and the point is to notice a
+// wedge in minutes rather than at the next (never-arriving) cycle.
+const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;
+const startedAt = Date.now();
 
 // Translate the dispatcher's channel-agnostic button spec into a grammy keyboard.
 function buildKeyboard(rows: AlertButton[][]): InlineKeyboard {
@@ -146,7 +153,10 @@ async function main(): Promise<void> {
   // An uncaught exception leaves the process in an undefined state - log it and
   // exit non-zero so docker's restart policy hands us a clean one, rather than
   // limping along wedged. Rejections we only log; one bad promise usually isn't
-  // grounds to tear down the whole process.
+  // grounds to tear down the whole process (a transient Telegram 429 shouldn't
+  // restart the app). The backstop for the case that *does* matter - a floating
+  // promise wedging the poll loop - is the watchdog below, which notices the
+  // symptom rather than trying to classify the cause.
   process.on('unhandledRejection', reason => {
     logger.error('Unhandled promise rejection', reason);
   });
@@ -154,6 +164,20 @@ async function main(): Promise<void> {
     logger.error('Uncaught exception', error);
     process.exit(1);
   });
+
+  // A wedged poll loop is invisible without an external monitor, and
+  // `restart: unless-stopped` restarts on *exit*, not on unhealthy - so a Docker
+  // HEALTHCHECK alone would restart nothing. Exit and let the restart policy hand
+  // us a clean process. /health reports the same condition for an uptime monitor.
+  const intervalMs = config.pollIntervalHours * 60 * 60 * 1000;
+  setInterval(() => {
+    if (pollIsStale(scheduler.lastCycleCompletedAt, startedAt, intervalMs)) {
+      logger.error(
+        `Poll cycle stale (last completed ${scheduler.lastCycleCompletedAt?.toISOString() ?? 'never'}) - exiting for a clean restart`
+      );
+      process.exit(1);
+    }
+  }, WATCHDOG_INTERVAL_MS).unref();
 
   scheduler.start();
   alertWorker.start();

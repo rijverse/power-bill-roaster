@@ -185,13 +185,14 @@ function declineChart(): string {
   </svg>`;
 }
 
-export function homeHtml(): string {
+export function homeHtml(billingLive = false): string {
+  const paid = billingLive;
   const nav = `<nav class="lp-nav">
     ${logo()}
     <div class="links">
       <a href="#how">How it works</a>
       <a href="#dashboard">Dashboard</a>
-      <a href="#pricing">Pricing</a>
+      ${paid ? '<a href="#pricing">Pricing</a>' : ''}
       <a href="#selfhost">Self-host</a>
     </div>
     <div class="right">
@@ -224,7 +225,7 @@ export function homeHtml(): string {
       </div>
     </div>
     <div class="lp-strip">
-      <span>Checks every 6 hours</span><span>Email, Telegram, SMS</span><span>Run-out predictions</span><span>Multi-meter</span><span>Zero servers to self-host</span>
+      <span>Checks every 6 hours</span><span>${paid ? 'Email, Telegram, SMS' : 'Telegram, Discord &amp; email'}</span><span>Run-out predictions</span><span>${paid ? 'Multi-meter' : 'Free, no card'}</span><span>Zero servers to self-host</span>
     </div>
   </section>`;
 
@@ -287,9 +288,21 @@ export function homeHtml(): string {
     </div>
     <div>
       <h2 class="lp-h2">See the decline before it ghosts you.</h2>
-      <p class="lp-lead" style="margin-top:14px">The Telegram-hosted version adds a web dashboard: balance history, run-out predictions, and every meter you own in one place.</p>
+      <p class="lp-lead" style="margin-top:14px">${
+        paid
+          ? 'The Telegram-hosted version adds a web dashboard: balance history, run-out predictions, and every meter you own in one place.'
+          : 'The Telegram-hosted version adds a web dashboard: balance history, run-out predictions, and every reading for your meter in one place.'
+      }</p>
       <div class="lp-bullets">
-        ${bullet('<b style="color:var(--text)">Your meters</b>: 3 active, each with its own live balance and trend.')}
+        ${
+          paid
+            ? bullet(
+                '<b style="color:var(--text)">Your meters</b>: 3 active, each with its own live balance and trend.'
+              )
+            : bullet(
+                '<b style="color:var(--text)">Your meter</b>: live balance, trend, and status at a glance.'
+              )
+        }
         ${bullet('<b style="color:var(--text)">Run-out prediction</b>: at your current burn rate, your Mirpur meter goes dark in ~3 days. The bot already messaged you. Twice.')}
         ${bullet('<b style="color:var(--text)">14-day history</b>: watch the slide so a flat week never surprises you.')}
       </div>
@@ -300,9 +313,21 @@ export function homeHtml(): string {
     <div class="lp-head lp-center"><h2 class="lp-h2">Small tool. Big mouth.</h2></div>
     <div class="lp-grid3">
       ${feature(I.clock, 'Checks every 6 hours', "An automated schedule pings DESCO around the clock, or force a run any time you're feeling anxious.")}
-      ${feature(I.msg, 'Email, Telegram, SMS', 'Self-host fires emails. The hosted bot adds Telegram pings and SMS alerts on paid plans. Same roast, more channels.')}
+      ${feature(
+        I.msg,
+        paid ? 'Email, Telegram, SMS' : 'Telegram, Discord &amp; email',
+        paid
+          ? 'Self-host fires emails. The hosted bot adds Telegram pings and SMS alerts on paid plans. Same roast, more channels.'
+          : 'Self-host fires emails. The hosted bot adds instant Telegram and Discord alerts. Same roast, more channels.'
+      )}
       ${feature(I.trend, 'Run-out predictions', '"~3 days left at this rate." It watches your burn rate and tells you when the lights actually go out.')}
-      ${feature(I.layers, 'Multi-meter support', "Home, office, your parents' place. Track every DESCO meter from one dashboard and one bot.")}
+      ${feature(
+        I.layers,
+        paid ? 'Multi-meter support' : 'Live web dashboard',
+        paid
+          ? "Home, office, your parents' place. Track every DESCO meter from one dashboard and one bot."
+          : 'Balance history, run-out predictions, and every reading in one place. Nothing to install.'
+      )}
       ${feature(I.git, 'Free forever, self-hosted', 'Fork the repo, drop secrets into GitHub Actions, done. Zero servers, zero cost, MIT-licensed.')}
       ${feature(I.sliders, 'Configurable everything', "Thresholds, SMTP provider, roast intensity, all env vars. Soften the templates if you can't take the heat.")}
     </div>
@@ -320,11 +345,15 @@ export function homeHtml(): string {
     </div>
     <div class="lp-path bot">
       <h3>Hosted Telegram bot</h3>
-      <p>No fork, no secrets. Just message the bot. It handles everything and unlocks predictions, a web dashboard, multi-meter, and SMS.</p>
+      <p>${
+        paid
+          ? 'No fork, no secrets. Just message the bot. It handles everything and unlocks predictions, a web dashboard, multi-meter, and SMS.'
+          : 'No fork, no secrets. Just message the bot. It watches your meter, predicts the run-out, and roasts you on Telegram, Discord, or email. Free.'
+      }</p>
       <div class="lp-bullets" style="margin-top:0">
         ${bullet('Web dashboard with history charts')}
-        ${bullet('SMS alerts via bKash / SSLCommerz')}
-        ${bullet('Run-out predictions, multi-meter')}
+        ${paid ? bullet('SMS alerts via bKash / SSLCommerz') : bullet('Telegram &amp; Discord alerts, free')}
+        ${paid ? bullet('Run-out predictions, multi-meter') : bullet('Run-out predictions built in')}
       </div>
     </div>
   </div></div></section>`;
@@ -396,12 +425,12 @@ export function homeHtml(): string {
     <span class="lp-disclaimer">Independent project, not affiliated with DESCO.</span>
     <div class="links">
       <a href="#how">How it works</a>
-      <a href="#pricing">Pricing</a>
+      ${paid ? '<a href="#pricing">Pricing</a>' : ''}
       <a href="#selfhost">Self-host</a>
       <a href="${GITHUB}" target="_blank" rel="noopener">GitHub ↗</a>
     </div>
   </footer>`;
 
-  const body = `<style>${STYLE}</style>${nav}<main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${pricing}${setup}${finalCta}</main>${footer}`;
+  const body = `<style>${STYLE}</style>${nav}<main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${paid ? pricing : ''}${setup}${finalCta}</main>${footer}`;
   return pageDoc('Power·Roast: DESCO prepaid balance alerts that roast you', body);
 }

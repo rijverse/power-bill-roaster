@@ -95,11 +95,15 @@ async function main(): Promise<void> {
       pausedMeters > 0
         ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
         : '';
-    await notifyPlanChange(user, `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`, {
-      title: '⏳ Plan expired',
-      description: `Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
-      color: 0xed4245, // red, matching COLOR.critical in the Discord bot
-    });
+    await notifyPlanChange(
+      user,
+      `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
+      {
+        title: '⏳ Plan expired',
+        description: `Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
+        color: 0xed4245, // red, matching COLOR.critical in the Discord bot
+      }
+    );
   };
   subscriptions.notifyUpgrade = async (user, plan) => {
     await notifyPlanChange(

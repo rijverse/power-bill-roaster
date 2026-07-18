@@ -14,7 +14,11 @@ import { CLIENT_PARSE_HASH } from './admin-hash';
 
 const ADMIN_BADGE = `<span class="pr-pill low" style="font-size:10px;padding:3px 9px">admin</span>`;
 
-export function adminLoginHtml(nonce: string, hasError: boolean, message = 'Wrong password.'): string {
+export function adminLoginHtml(
+  nonce: string,
+  hasError: boolean,
+  message = 'Wrong password.'
+): string {
   const err = hasError ? message : '';
   const body = `<div style="position:relative; z-index:1; min-height:100vh; display:grid; place-items:center; padding:32px 20px;">
   <div class="pr-authpanel" style="width:100%">

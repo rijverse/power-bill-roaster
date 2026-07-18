@@ -15,8 +15,7 @@ export function periodEnd(start: Date, days = PERIOD_DAYS): Date {
 export class SubscriptionService {
   /** wired in after the bots exist; tells the user their plan lapsed */
   notifyDowngrade:
-    ((user: schema.User, expiredPlan: string, pausedMeters: number) => Promise<void>) | null =
-    null;
+    ((user: schema.User, expiredPlan: string, pausedMeters: number) => Promise<void>) | null = null;
 
   /** wired in after the bots exist; tells the user a pending payment cleared */
   notifyUpgrade: ((user: schema.User, plan: string) => Promise<void>) | null = null;

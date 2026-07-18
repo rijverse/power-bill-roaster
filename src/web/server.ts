@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { Db } from '../db';
 import { Scheduler } from '../core/scheduler';
 import { SubscriptionService } from '../billing';
+import { billingLive } from '../core/plans';
 import { ServerConfig } from '../config';
 import { verifyDashboardToken } from './token';
 import { dashboardHtml } from './dashboard-html';
@@ -172,8 +173,10 @@ export function createWebServer(
   discordInteractions: DiscordInteractionDeps | null = null
 ): http.Server {
   const startedAt = Date.now();
-  // fully static and search-engine indexed - build it once, not per crawl hit
-  const homePage = homeHtml();
+  // fully static and search-engine indexed - built once and memoized on first
+  // hit, not per crawl hit. paid pricing/upsell is hidden until a billing
+  // gateway is switched on.
+  let homePage: string | null = null;
   const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const loginGlobalLimiter = new RateLimiter(ADMIN_LOGIN_GLOBAL_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const appLoginLimiter = new RateLimiter(APP_LOGIN_SENDS, APP_LOGIN_WINDOW_MS);
@@ -315,6 +318,7 @@ export function createWebServer(
         // route keeps the noindex set in applySecurityHeaders).
         res.setHeader('X-Robots-Tag', 'index, follow');
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        homePage ??= homeHtml(billingLive(config.billing));
         res.end(homePage);
         return;
       }

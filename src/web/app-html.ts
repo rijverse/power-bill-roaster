@@ -329,7 +329,7 @@ function renderChrome() {
     title = m ? m.label : 'Meters';
     sub = m ? ('meter ' + m.meterNo + ', checked ' + rel(m.readings.length ? m.readings[m.readings.length - 1].t : null)) : 'no meters yet';
   } else if (SCREEN === 'billing') {
-    sub = DATA.plan + ' plan, free-only launch';
+    sub = DATA.plan + ' plan' + (DATA.billingLive ? '' : ', free-only launch');
   }
   document.getElementById('topTitle').textContent = title;
   document.getElementById('topSub').textContent = sub;
@@ -490,9 +490,14 @@ function renderAlerts() {
   // channel rows reflect real state; disabled when the channel can't be toggled here
   const emailRow = channelRow('rgba(251,176,36,0.13)', emailIcon(), 'Email', esc(ch.email.address || 'no email on file'), 'email', ch.email.enabled, !ch.email.verified, '', 'No verified email');
   const tgRow = channelRow('rgba(94,131,255,0.13)', tgIcon(), 'Telegram', ch.telegram.available ? 'instant' : 'link via the bot', 'telegram', ch.telegram.enabled, !ch.telegram.available, '', 'Open the bot and /start');
+  // SMS is a paid channel, so hide it entirely on a free-only launch unless this
+  // account already has a number on file (e.g. from a comped plan).
+  const showSms = DATA.billingLive || ch.sms.hasPhone;
   const smsBadge = ch.sms.available ? '' : 'PAID';
   const smsMeta = ch.sms.hasPhone ? esc(ch.sms.address) : ch.sms.available ? 'add a number via the bot' : 'on paid plans';
-  const smsRow = channelRow('rgba(52,211,153,0.13)', smsIcon(), 'SMS', smsMeta, 'sms', ch.sms.enabled, !ch.sms.available || !ch.sms.hasPhone, smsBadge, ch.sms.available ? 'Add a phone with /sms in the bot' : 'Upgrade for SMS alerts');
+  const smsRow = showSms
+    ? channelRow('rgba(52,211,153,0.13)', smsIcon(), 'SMS', smsMeta, 'sms', ch.sms.enabled, !ch.sms.available || !ch.sms.hasPhone, smsBadge, ch.sms.available ? 'Add a phone with /sms in the bot' : 'Upgrade for SMS alerts')
+    : '';
   const dc = ch.discord || { connected: false, enabled: false, address: null };
   const dcMeta = dc.connected ? esc(dc.address) : 'free - paste a webhook below';
   const discordRow = channelRow('rgba(88,101,242,0.15)', discordIcon(), 'Discord', dcMeta, 'discord', dc.enabled, !dc.connected, '', 'Connect a webhook below first');
@@ -609,10 +614,11 @@ function planFeatures(p) {
 }
 function paintBilling(b) {
   const cur = b.catalog.find(p => p.id === b.plan) || { name: b.plan, priceBdt: b.priceBdt, maxMeters: b.limits.maxMeters, smsPerMonth: b.limits.smsPerMonth };
-  const upgrades = b.catalog.filter(p => p.id !== 'free' && p.priceBdt > (cur.priceBdt || 0));
+  // Only offer upgrades when a billing gateway is live; the free-only launch has none.
+  const upgrades = b.live ? b.catalog.filter(p => p.id !== 'free' && p.priceBdt > (cur.priceBdt || 0)) : [];
   const m = DATA.meters[SEL];
 
-  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on DESCO\\'s prepaid portal, Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Self-serve plan upgrades are switched off on this server.') + '</div></div>';
+  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on DESCO\\'s prepaid portal, Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Every feature is free while we\\'re in launch.') + '</div></div>';
 
   h += '<div class="pr-grid pr-2col-even">';
   // left: recharge deep-link + history
@@ -621,7 +627,9 @@ function paintBilling(b) {
     (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official DESCO portal, your meter and account are below.</div>' +
     (m ? '<div class="pr-list" style="margin-bottom:16px"><div class="pr-rowitem"><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Account</div><div style="font-weight:600;color:var(--text)">' + esc(m.accountNo) + '</div></div><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Meter</div><div style="font-weight:600;color:var(--text)">' + esc(m.meterNo) + '</div></div></div></div>' : '') +
     '<a class="pr-btn gold block" href="' + RECHARGE_URL + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open DESCO recharge →</a></div>';
-  h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div>' +
+  // Payment history is meaningless on a free-only launch; only show it once billing is live.
+  if (b.live)
+    h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div>' +
     (b.payments.length
       ? '<div class="pr-list">' + b.payments.map(p =>
           '<div class="pr-rowitem"><span class="pr-chan-ic" style="background:rgba(255,255,255,0.05);font-family:var(--mono);font-size:10px;font-weight:700;color:var(--muted)">' + esc((PROVIDER_LABEL[p.provider] || p.provider).slice(0, 4)) + '</span>' +
@@ -639,13 +647,12 @@ function paintBilling(b) {
     '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">৳' + cur.priceBdt + '</span><span style="font-size:13px;color:var(--faint)">/ month' + (cur.priceBdt === 0 ? ', free forever' : '') + '</span></div>' +
     '<div style="display:flex;flex-direction:column;gap:9px">' + planFeatures(cur) + '</div></div>';
 
-  h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">' + (upgrades.length ? 'Upgrade' : 'Manage plan') + '</div>';
+  h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">' + (upgrades.length ? 'Upgrade' : b.live ? 'Manage plan' : 'Your plan') + '</div>';
   if (upgrades.length) {
     h += '<p class="muted" style="font-size:13px;line-height:1.5;margin-bottom:14px">More meters and SMS alerts when you need them.</p><div style="display:flex;flex-direction:column;gap:9px">' +
-      upgrades.map(p => '<button class="pr-btn ' + (b.live ? 'gold' : 'ghost') + '" type="button" data-plan="' + p.id + '"' + (b.live ? '' : ' disabled') + '>Upgrade to ' + esc(p.name) + ', ৳' + p.priceBdt + '/mo' + (b.live ? '' : ' (soon)') + '</button>').join('') + '</div>';
-    if (!b.live) h += '<p class="mono" style="font-size:11px;color:var(--faint);margin-top:10px">Upgrades are disabled on this server. Ask in the bot: /upgrade.</p>';
+      upgrades.map(p => '<button class="pr-btn gold" type="button" data-plan="' + p.id + '">Upgrade to ' + esc(p.name) + ', ৳' + p.priceBdt + '/mo</button>').join('') + '</div>';
   } else {
-    h += '<p class="muted" style="font-size:13px;line-height:1.5">You\\'re on the top plan. Nothing left to sell you.</p>';
+    h += '<p class="muted" style="font-size:13px;line-height:1.5">' + (b.live ? "You\\'re on the top plan. Nothing left to sell you." : "Every feature is free right now. Nothing to buy, nothing to manage.") + '</p>';
   }
   h += '<div style="border-top:1px solid var(--border-soft);margin-top:16px;padding-top:14px"><button class="pr-btn danger block" id="delBtn" type="button">Delete account</button></div>' +
     '<p class="pr-err" id="billErr" style="margin-top:8px"></p></div>';

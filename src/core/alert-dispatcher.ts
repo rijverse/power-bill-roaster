@@ -236,7 +236,10 @@ export class AlertDispatcherWorker {
       });
       await this.deps.db
         .update(schema.pendingAlerts)
-        .set({ status: 'failed', lastError: `unrecognized action/level: ${row.action}/${row.level}` })
+        .set({
+          status: 'failed',
+          lastError: `unrecognized action/level: ${row.action}/${row.level}`,
+        })
         .where(eq(schema.pendingAlerts.id, row.id));
       return;
     }

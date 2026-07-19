@@ -12,6 +12,10 @@ dist/
 .env.local
 .env.*.local
 
+# Local docker-compose overrides (host-port remaps etc.) - machine-specific,
+# auto-merged by `docker compose up`, so never commit it
+docker-compose.override.yml
+
 # Logs
 *.log
 npm-debug.log*

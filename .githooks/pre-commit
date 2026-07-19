@@ -1,0 +1,9 @@
+#!/bin/sh
+# Keep commits prettier-clean. A whole "satisfy prettier across the tree" commit
+# is a smell we don't want to repeat, and format:check is fast enough to run every
+# commit. Run `bun run format` to fix, then re-stage.
+if ! bun run format:check; then
+  echo "" >&2
+  echo "Formatting check failed - run 'bun run format' and re-stage." >&2
+  exit 1
+fi

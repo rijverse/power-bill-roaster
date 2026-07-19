@@ -1,10 +1,11 @@
 name: Deploy
 
-# on push to main: apply pending migrations, then build and push the image to
-# ghcr.io/<owner>/<repo>, tagged both :latest and :<sha>. the immutable :<sha>
-# tag is the rollback handle - pin the server to a known-good one if :latest
-# breaks. the server pull/restart is manual, but the migration safety net means
-# we never ship a new image with a schema change that hasn't been applied first.
+# on push to main: run the full CI suite, then apply pending migrations, then
+# build and push the image to ghcr.io/<owner>/<repo>, tagged both :latest and
+# :<sha>. the immutable :<sha> tag is the rollback handle - pin the server to a
+# known-good one if :latest breaks. the server pull/restart is manual
+# (scripts/deploy.sh); the migration safety net means we never ship a new image
+# with a schema change that hasn't been applied first.
 # needs DATABASE_URL as a "production" environment secret (see the migrate job).
 
 on:
@@ -17,8 +18,14 @@ permissions:
   packages: write
 
 jobs:
+  # Gate the whole deploy on the same checks a PR runs. A red build never
+  # migrates prod or pushes an image, even on a direct push to main.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   migrate:
     name: Apply migrations
+    needs: checks
     runs-on: ubuntu-latest
     # this step writes to the live DB with a production credential. scope it to a
     # protected GitHub Environment (Settings > Environments > "production": add
@@ -30,9 +37,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          # pin to the version we test against locally so prod doesn't drift
-          # when Bun ships a new major. bump deliberately.
-          bun-version: 1.2.23
+          bun-version-file: .bun-version
 
       - run: bun install --frozen-lockfile
 

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Heavier gate before code leaves the machine: lint + typecheck. Tests run in CI
+# (they're slower); keep this quick enough that nobody disables the hook.
+bun run lint && bun run build

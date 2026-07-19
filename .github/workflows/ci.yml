@@ -1,9 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  # callable so deploy.yml can gate the production rollout on the same checks
+  # (see .github/workflows/deploy.yml). PRs still trigger it directly above.
+  workflow_call:
 
 jobs:
   check:
@@ -16,9 +17,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          # pinned to match bun.lock; a floating "latest" re-resolves the frozen
-          # lockfile and fails install. bump deliberately + regenerate the lockfile.
-          bun-version: 1.2.23
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -34,6 +33,44 @@ jobs:
 
       - name: Build
         run: bun run build
+
+  migrations:
+    # Prove the migrations apply cleanly to a fresh database before deploy.yml
+    # ever runs them against prod. Catches a broken baseline (e.g. a squashed
+    # 0000_init) at PR time instead of in the production migrate step.
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: powerroast
+          POSTGRES_PASSWORD: powerroast
+          POSTGRES_DB: powerroast
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U powerroast"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Apply migrations to a fresh database
+        run: bun run db:migrate
+        env:
+          DATABASE_URL: postgres://powerroast:powerroast@localhost:5432/powerroast
 
   e2e:
     runs-on: ubuntu-latest

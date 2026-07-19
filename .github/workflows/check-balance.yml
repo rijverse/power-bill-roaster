@@ -18,9 +18,9 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          # pinned to match bun.lock; a floating "latest" re-resolves the frozen
-          # lockfile and fails install. bump deliberately + regenerate the lockfile.
-          bun-version: 1.2.23
+          # version comes from .bun-version (kept in sync with bun.lock); a
+          # floating "latest" would re-resolve the frozen lockfile and fail install.
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

@@ -19,8 +19,35 @@ bun run db:migrate
 
 Repeat this step whenever a new migration lands in `drizzle/`. The deploy
 workflow (`.github/workflows/deploy.yml`) does this on every push to `main` as
-a safety net — the image only gets built and pushed to GHCR if the migration
+a safety net - the image only gets built and pushed to GHCR if the migration
 succeeds.
+
+### Baselining a database that predates a migration squash
+
+If the migration history was ever squashed (several migrations collapsed into a
+single `0000_init.sql`), a database that already ran the old migrations fails
+`db:migrate` with `relation "..." already exists`: drizzle sees the new baseline
+as unapplied and tries to recreate tables that are already there. Fresh databases
+are unaffected; only pre-squash ones need reconciling.
+
+Tell drizzle the baseline is already applied by recording it in the migrations
+table. Run this once against that database, after confirming its schema already
+matches `0000_init.sql`:
+
+```bash
+# the hash drizzle expects for the baseline file
+hash=$(node -e "const c=require('crypto'),fs=require('fs');console.log(c.createHash('sha256').update(fs.readFileSync('drizzle/0000_init.sql')).digest('hex'))")
+# the "when" timestamp for the 0000_init entry
+when=$(node -e "console.log(require('./drizzle/meta/_journal.json').entries[0].when)")
+
+psql "$DATABASE_URL" <<SQL
+DELETE FROM drizzle."__drizzle_migrations";
+INSERT INTO drizzle."__drizzle_migrations" (hash, created_at) VALUES ('$hash', $when);
+SQL
+```
+
+After that, `db:migrate` is a no-op on that database and future migrations apply
+normally.
 
 ## 2. Server setup (once)
 
@@ -80,18 +107,31 @@ ufw enable
 
 ## 3. Deploying updates
 
-The `.github/workflows/deploy.yml` workflow runs `bun run db:migrate` against
-your production DB and builds + pushes a fresh image to GHCR on every push to
-`main`, tagged both `:latest` and `:<commit-sha>`. To roll out on the server:
+On every push to `main`, `.github/workflows/deploy.yml` runs the full CI suite
+(lint, tests, build, a fresh-DB migration check, and the mocked e2e), and only if
+that all passes does it apply pending migrations to your production DB and build +
+push a fresh image to GHCR, tagged both `:latest` and `:<commit-sha>`. A red build
+never touches prod.
+
+To roll out on the server, use the deploy script - it pulls, restarts, waits for
+`/health`, and rolls back to the previous image if the new one never goes healthy:
 
 ```bash
 cd /opt/power-roast
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+git pull                 # get the latest scripts/deploy.sh + compose files
+./scripts/deploy.sh
 ```
 
-`docker compose pull` is a no-op if the `:latest` tag hasn't changed since
-your last deploy.
+`docker compose pull` (inside the script) is a no-op if the `:latest` tag hasn't
+changed since your last deploy. If you'd rather run it by hand, the underlying
+steps are just `docker compose -f docker-compose.prod.yml pull` then `... up -d`,
+followed by a `curl -f http://localhost:3000/health` to confirm.
+
+**Keep migrations backward-compatible.** The workflow migrates prod *before* the
+new image ships, and a failed rollout falls back to the previous image, so the
+old code must keep working against the new schema. Use expand/contract: add
+columns/tables in one release, backfill and switch reads, drop the old shape only
+in a later release once nothing runs against it.
 
 To roll back (or pin a specific build), set `IMAGE_TAG` to a commit sha in
 `.env` and re-run the two commands above — it defaults to `latest`:

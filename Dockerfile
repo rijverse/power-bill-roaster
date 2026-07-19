@@ -1,9 +1,10 @@
 # Build with bun (fast installs); the production stage below runs on the official
 # node image, which is the runtime the app targets (start = node dist/index.js).
 # Pinned to match bun.lock: a floating tag (1 / latest) pulls a newer bun that
-# re-resolves the frozen lockfile and fails the build. Bump this together with
-# the lockfile, never on its own.
-FROM oven/bun:1.2.23-alpine AS build
+# re-resolves the frozen lockfile and fails the build. Keep BUN_VERSION in sync
+# with .bun-version (the source the workflows read); bump both with the lockfile.
+ARG BUN_VERSION=1.2.23
+FROM oven/bun:${BUN_VERSION}-alpine AS build
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile

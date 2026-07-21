@@ -84,7 +84,7 @@ export function adminAppHtml(nonce: string, csrf: string, billingLive = true): s
     <header class="pr-topbar">
       <button id="pr-hamburger" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
       <div class="titles"><div class="t" id="topTitle">${homeLabel}</div><div class="s" id="topSub">operator console, everything is fine, mostly</div></div>
-      <button class="pr-btn gold" id="refreshBtn" type="button"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B1020" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span>Refresh</span></button>
+      <button class="pr-btn gold" id="refreshBtn" type="button"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1a1408" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span>Refresh</span></button>
     </header>
     <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading...</div></div></main>
   </div>
@@ -128,7 +128,7 @@ function clearCharts() { CHARTS.forEach(c => { try { c.destroy(); } catch (e) {}
 function prModal(opts) {
   return new Promise(resolve => {
     const ov = document.createElement('div');
-    ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(4,8,20,0.6);backdrop-filter:blur(2px);display:grid;place-items:center;padding:20px';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(10,8,4,0.72);display:grid;place-items:center;padding:20px';
     ov.innerHTML = '<div class="pr-card" style="max-width:430px;width:100%" role="dialog" aria-modal="true">' +
       '<div style="font-size:15px;font-weight:800;color:var(--text);margin-bottom:8px">' + esc(opts.title) + '</div>' +
       '<p class="muted" style="font-size:13px;line-height:1.55;margin:0 0 14px">' + esc(opts.body) + '</p>' +
@@ -194,7 +194,7 @@ function mrrSvg(series) {
   return '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" style="display:block"><defs><linearGradient id="prRev" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#34D399" stop-opacity="0.3"></stop><stop offset="100%" stop-color="#34D399" stop-opacity="0"></stop></linearGradient></defs>' +
     '<path d="' + line + ' L' + W + ',' + H + ' L0,' + H + ' Z" fill="url(#prRev)"></path>' +
     '<path d="' + line + '" fill="none" stroke="#34D399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>' +
-    '<circle cx="' + x(n - 1).toFixed(0) + '" cy="' + y(last.total).toFixed(0) + '" r="5" fill="#34D399" stroke="#11162A" stroke-width="2"></circle></svg>' +
+    '<circle cx="' + x(n - 1).toFixed(0) + '" cy="' + y(last.total).toFixed(0) + '" r="5" fill="#34D399" stroke="#171410" stroke-width="2"></circle></svg>' +
     '<div style="display:flex;justify-content:space-between;margin-top:8px" class="mono"><span style="font-size:11px;color:var(--faint)">' + esc(series[0].month) + '</span><span style="font-size:11px;color:var(--green)">' + esc(last.month) + '</span></div>';
 }
 function revPayments(payments) {
@@ -209,7 +209,7 @@ function renderRevenue() {
   const o = OVERVIEW || {};
   const poll = o.poll || {};
 
-  const descoRow = healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : 'n/a', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#6E7790');
+  const descoRow = healthRow('DESCO prepaid API', HEALTH ? ('last poll ' + relWhen(HEALTH.lastPollCycleAt)) : 'status unknown', HEALTH ? (HEALTH.status === 'ok' ? 'Operational' : 'Stale') : 'n/a', HEALTH ? (HEALTH.status === 'ok' ? '#34D399' : '#FBB024') : '#837a68');
   const pollRows =
     healthRow('Last completed', poll.lastCycleAt ? relWhen(poll.lastCycleAt) : 'never', poll.overdue ? 'Overdue' : (poll.running ? 'Running' : 'OK'), poll.overdue ? '#FF5247' : (poll.running ? '#FBB024' : '#34D399')) +
     healthRow('Interval', 'configured', (poll.intervalHours ?? '?') + 'h', '#8FA8FF');

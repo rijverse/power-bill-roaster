@@ -1,6 +1,8 @@
-// Public marketing landing page served at GET /. Rebuilt on the shared theme.ts
-// design system (zinc surfaces, amber accent) so it matches the app, and kept
-// CSP-safe: inline styles only, an SVG chart instead of Chart.js, no new CDNs.
+// Public marketing landing page served at GET /. Built on the shared theme.ts
+// design system (warm near-black paper, amber accent, Archivo display) so it
+// matches the app, and kept CSP-safe: inline styles only, an SVG chart instead
+// of Chart.js, no new CDNs. Brutalist Feature-Stack: full-bleed bands split by
+// hard rules, an oversized uppercase hero, a ruled capability matrix.
 import { pageDoc, logo } from './theme';
 
 const GITHUB = 'https://github.com/rijverse/power-bill-roaster';
@@ -8,126 +10,128 @@ const GITHUB = 'https://github.com/rijverse/power-bill-roaster';
 // landing-only layout, scoped under .lp- so it can't collide with the app's .pr-
 // classes. colours/radii/fonts all come from the theme tokens.
 const STYLE = `
-.lp-nav { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 22px; padding: 14px 28px; background: rgba(9,9,11,0.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
-.lp-nav .links { display: flex; gap: 22px; margin-left: 14px; }
-.lp-nav .links a { color: var(--muted); font-size: 14px; font-weight: 500; }
-.lp-nav .links a:hover { color: var(--text); text-decoration: none; }
+.lp-nav { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 22px; padding: 16px 28px; background: var(--bg); border-bottom: 1.5px solid var(--border); }
+.lp-nav .links { display: flex; gap: 24px; margin-left: 18px; }
+.lp-nav .links a { color: var(--muted); font-family: var(--mono); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.lp-nav .links a:hover { color: var(--gold); text-decoration: none; }
 .lp-nav .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 .lp-wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; position: relative; z-index: 1; }
-.lp-section { padding: 84px 0; border-top: 1px solid var(--border-soft); }
-.lp-eyebrow { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--gold); background: rgba(251,176,36,0.1); border: 1px solid rgba(251,176,36,0.22); padding: 5px 11px; border-radius: 999px; }
-.lp-h1 { font-size: 56px; line-height: 1.03; letter-spacing: -0.035em; font-weight: 800; color: var(--text); margin: 20px 0 18px; }
+.lp-section { padding: 88px 0; border-top: 1.5px solid var(--border); }
+.lp-eyebrow { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold); border: 1.5px solid color-mix(in oklch, var(--gold) 40%, transparent); padding: 6px 12px; }
+.lp-h1 { font-family: var(--display); font-size: clamp(2.6rem, 6.4vw, 5.4rem); line-height: 0.95; letter-spacing: -0.03em; font-weight: 900; text-transform: uppercase; color: var(--text); margin: 24px 0 22px; overflow-wrap: anywhere; }
 .lp-h1 .hl { color: var(--gold); }
-.lp-h2 { font-size: 34px; line-height: 1.1; letter-spacing: -0.03em; font-weight: 800; color: var(--text); }
+.lp-h2 { font-family: var(--display); font-size: clamp(1.9rem, 4vw, 2.9rem); line-height: 1.0; letter-spacing: -0.02em; font-weight: 800; text-transform: uppercase; color: var(--text); overflow-wrap: anywhere; }
 .lp-lead { font-size: 18px; line-height: 1.6; color: var(--text-3); max-width: 540px; }
-.lp-sub { font-size: 16px; line-height: 1.6; color: var(--muted); max-width: 620px; margin: 12px auto 0; }
-.lp-center { text-align: center; }
-.lp-center .lp-sub, .lp-center .lp-h2 { margin-left: auto; margin-right: auto; }
-.lp-head { margin-bottom: 44px; }
+.lp-sub { font-size: 16px; line-height: 1.6; color: var(--muted); max-width: 620px; margin-top: 12px; }
+.lp-head { margin-bottom: 46px; max-width: 720px; }
 
-.lp-hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; padding: 72px 0 64px; }
-.lp-ctarow { display: flex; gap: 12px; flex-wrap: wrap; margin: 28px 0 22px; }
-.lp-checks { display: flex; gap: 20px; flex-wrap: wrap; }
-.lp-check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-3); }
+.lp-hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center; padding: 76px 0 68px; }
+.lp-hero > div { min-width: 0; }
+.lp-ctarow { display: flex; gap: 12px; flex-wrap: wrap; margin: 30px 0 26px; }
+.lp-checks { display: flex; gap: 22px; flex-wrap: wrap; }
+.lp-check { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
 .lp-check svg { color: var(--gold); flex: none; }
 
 /* alert preview card in the hero */
-.lp-preview { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 18px; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }
-.lp-pvhead { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--border-soft); }
+.lp-preview { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 18px; box-shadow: 9px 9px 0 var(--gold); }
+.lp-pvhead { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1.5px solid var(--border-soft); }
 .lp-pvmeter { display: flex; align-items: center; gap: 12px; padding: 16px 0 14px; }
-.lp-pvbal { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; color: var(--text); font-feature-settings: 'tnum' 1; }
-.lp-pvmsg { font-size: 13.5px; line-height: 1.55; color: var(--text-2); background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r); padding: 13px 14px; }
+.lp-pvbal { font-family: var(--display); font-size: 32px; font-weight: 800; letter-spacing: -0.03em; color: var(--text); font-feature-settings: 'tnum' 1; }
+.lp-pvmsg { font-size: 13.5px; line-height: 1.55; color: var(--text-2); background: var(--bg); border: 1.5px solid var(--border-soft); border-radius: var(--r); padding: 13px 14px; }
 
 /* marquee strip */
-.lp-strip { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 0; align-items: center; padding: 20px 0; border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
-.lp-strip span { font-family: var(--mono); font-size: 12px; color: var(--faint); padding: 0 22px; }
-.lp-strip span + span { border-left: 1px solid var(--border); }
+.lp-strip { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; border-top: 1.5px solid var(--border); border-bottom: 1.5px solid var(--border); }
+.lp-strip span { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); padding: 16px 22px; }
+.lp-strip span + span { border-left: 1.5px solid var(--border); }
 
 .lp-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-.lp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center; }
+.lp-split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+.lp-split > div { min-width: 0; }
 
 /* roast threshold cards */
-.lp-roast { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 24px; }
-.lp-roast.crit { border-color: rgba(255,82,71,0.3); }
-.lp-roast .tag { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.lp-roast { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 26px; }
+.lp-roast.warn { border-color: color-mix(in oklch, var(--gold) 42%, transparent); }
+.lp-roast.crit { border-color: color-mix(in oklch, var(--red) 42%, transparent); }
+.lp-roast .tag { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .lp-roast.warn .tag { color: var(--gold); }
 .lp-roast.crit .tag { color: var(--red-soft); }
-.lp-roast .q { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); margin: 14px 0 8px; }
+.lp-roast .q { font-family: var(--display); font-size: 22px; font-weight: 800; letter-spacing: -0.01em; text-transform: uppercase; line-height: 1.05; color: var(--text); margin: 16px 0 10px; }
 .lp-roast .a { font-size: 14px; line-height: 1.6; color: var(--muted); }
-.lp-roast .thr { font-family: var(--mono); font-size: 12px; color: var(--faint); margin-top: 14px; }
+.lp-roast .thr { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); margin-top: 16px; }
 
-.lp-bullets { display: flex; flex-direction: column; gap: 14px; margin-top: 22px; }
-.lp-bullet { display: flex; gap: 11px; align-items: flex-start; font-size: 14.5px; line-height: 1.5; color: var(--text-2); }
+.lp-bullets { display: flex; flex-direction: column; gap: 14px; margin-top: 24px; }
+.lp-bullet { display: flex; gap: 12px; align-items: flex-start; font-size: 14.5px; line-height: 1.5; color: var(--text-2); }
 .lp-bullet svg { color: var(--gold); flex: none; margin-top: 2px; }
-.lp-bullet code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: var(--text); }
+.lp-bullet code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); padding: 1px 6px; border-radius: var(--r-sm); color: var(--text); }
 
 /* email preview */
-.lp-mail { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }
-.lp-mailbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--faint); }
-.lp-mailbody { padding: 18px; }
-.lp-mailsub { font-size: 16px; font-weight: 800; color: var(--text); }
-.lp-mailmeta { font-size: 12px; color: var(--faint); margin: 3px 0 14px; }
-.lp-mailfig { display: flex; gap: 26px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.lp-mail { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; box-shadow: 9px 9px 0 var(--surface-2); }
+.lp-mailbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; background: var(--surface-2); border-bottom: 1.5px solid var(--border); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
+.lp-mailbody { padding: 20px; }
+.lp-mailsub { font-family: var(--display); font-size: 17px; font-weight: 800; color: var(--text); }
+.lp-mailmeta { font-family: var(--mono); font-size: 12px; color: var(--faint); margin: 4px 0 14px; }
+.lp-mailfig { display: flex; gap: 26px; margin-top: 16px; padding-top: 14px; border-top: 1.5px solid var(--border-soft); }
 .lp-mailfig .k { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
-.lp-mailfig .v { font-size: 22px; font-weight: 800; color: var(--text); }
+.lp-mailfig .v { font-family: var(--display); font-size: 22px; font-weight: 800; color: var(--text); }
 .lp-mailfig .v.crit { color: var(--red-soft); }
 
 /* chart */
-.lp-chartcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 22px; }
+.lp-chartcard { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 24px; }
 .lp-chartcard svg { width: 100%; height: auto; display: block; }
-.lp-chrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.lp-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 8px; }
+.lp-chrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.lp-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); margin-top: 10px; }
 
-/* feature grid */
-.lp-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-.lp-feature { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 22px; }
-.lp-feicon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: rgba(251,176,36,0.1); color: var(--gold); margin-bottom: 14px; }
-.lp-feature h3 { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 7px; }
-.lp-feature p { font-size: 14px; line-height: 1.55; color: var(--muted); }
+/* capability matrix (ruled, not floating icon-tiles) */
+.lp-matrix { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.5px; background: var(--border); border: 1.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.lp-cell { background: var(--surface); padding: 28px 24px; }
+.lp-cellic { color: var(--gold); margin-bottom: 14px; line-height: 0; }
+.lp-cell h3 { font-family: var(--display); font-size: 16px; font-weight: 800; text-transform: uppercase; letter-spacing: -0.01em; color: var(--text); margin-bottom: 8px; }
+.lp-cell p { font-size: 14px; line-height: 1.55; color: var(--muted); }
 
 /* two-path cards */
-.lp-path { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 28px; }
-.lp-path.bot { border-color: rgba(251,176,36,0.3); }
-.lp-path h3 { font-size: 20px; font-weight: 800; color: var(--text); margin-bottom: 8px; }
-.lp-path p { font-size: 14.5px; line-height: 1.6; color: var(--muted); margin-bottom: 18px; }
+.lp-path { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 30px; }
+.lp-path.bot { border-color: color-mix(in oklch, var(--gold) 42%, transparent); }
+.lp-path h3 { font-family: var(--display); font-size: 22px; font-weight: 800; text-transform: uppercase; letter-spacing: -0.01em; color: var(--text); margin-bottom: 10px; }
+.lp-path p { font-size: 14.5px; line-height: 1.6; color: var(--muted); margin-bottom: 20px; }
 
 /* pricing */
-.lp-prices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: start; }
-.lp-price { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 26px; }
-.lp-price.pop { border: 1.5px solid var(--gold); box-shadow: 0 20px 50px rgba(251,176,36,0.1); }
-.lp-price .pname { font-size: 14px; font-weight: 700; color: var(--text-2); }
-.lp-price .pop-badge { float: right; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--ink); background: var(--gold); padding: 3px 9px; border-radius: 999px; }
-.lp-price .amt { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; color: var(--text); margin: 14px 0 2px; }
-.lp-price .amt span { font-size: 14px; font-weight: 500; color: var(--faint); letter-spacing: 0; }
-.lp-price .blurb { font-size: 13.5px; color: var(--muted); min-height: 38px; margin-bottom: 18px; }
-.lp-price .pfeat { display: flex; flex-direction: column; gap: 11px; margin-bottom: 22px; }
-.lp-pricenote { text-align: center; font-size: 13px; color: var(--faint); margin-top: 22px; }
+.lp-prices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: start; }
+.lp-price { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 28px; }
+.lp-price.pop { border: 1.5px solid var(--gold); box-shadow: 8px 8px 0 color-mix(in oklch, var(--gold) 22%, transparent); }
+.lp-price .pname { font-family: var(--mono); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); }
+.lp-price .pop-badge { float: right; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); background: var(--gold); padding: 3px 9px; border-radius: var(--r-sm); }
+.lp-price .amt { font-family: var(--display); font-size: 42px; font-weight: 900; letter-spacing: -0.03em; color: var(--text); margin: 16px 0 2px; }
+.lp-price .amt span { font-family: var(--sans); font-size: 14px; font-weight: 500; color: var(--faint); letter-spacing: 0; }
+.lp-price .blurb { font-size: 13.5px; color: var(--muted); min-height: 38px; margin-bottom: 20px; }
+.lp-price .pfeat { display: flex; flex-direction: column; gap: 11px; margin-bottom: 24px; }
+.lp-pricenote { text-align: center; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--faint); margin-top: 24px; }
 
 /* setup / .env */
-.lp-code { background: #060608; border: 1px solid var(--border); border-radius: var(--r-lg); padding: 18px 20px; font-family: var(--mono); font-size: 13px; line-height: 1.85; overflow-x: auto; white-space: pre; }
+.lp-code { background: oklch(11% 0.006 65); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 20px 22px; font-family: var(--mono); font-size: 13px; line-height: 1.85; overflow-x: auto; white-space: pre; }
 .lp-code .c { color: var(--faint); }
 .lp-code .k { color: var(--gold); }
 .lp-code .v { color: var(--text-2); }
-.lp-stack-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
-.lp-chiptag { font-family: var(--mono); font-size: 12px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; }
+.lp-stack-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 22px; }
+.lp-chiptag { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); background: var(--surface-2); border: 1.5px solid var(--border); border-radius: var(--r-sm); padding: 5px 12px; }
 
 /* final cta */
-.lp-final { text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 56px 28px; }
+.lp-final { text-align: center; background: var(--surface); border: 1.5px solid var(--gold); border-radius: var(--r-lg); padding: 60px 28px; }
+.lp-final .lp-h2, .lp-final .lp-sub { margin-left: auto; margin-right: auto; }
 .lp-final .lp-ctarow { justify-content: center; }
 
-.lp-footer { border-top: 1px solid var(--border-soft); padding: 26px 28px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.lp-footer { border-top: 1.5px solid var(--border); padding: 32px 28px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .lp-footer .links { display: flex; gap: 20px; margin-left: auto; flex-wrap: wrap; }
-.lp-footer .links a { color: var(--muted); font-size: 13px; }
-.lp-disclaimer { color: var(--faint); font-size: 12px; }
+.lp-footer .links a { color: var(--muted); font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.lp-footer .links a:hover { color: var(--gold); }
+.lp-disclaimer { color: var(--faint); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
 
 @media (max-width: 880px) {
   .lp-nav .links { display: none; }
-  .lp-hero, .lp-split, .lp-2col, .lp-grid3, .lp-prices { grid-template-columns: 1fr; }
-  .lp-hero { padding: 40px 0; gap: 36px; }
-  .lp-h1 { font-size: 40px; }
-  .lp-h2 { font-size: 27px; }
-  .lp-section { padding: 56px 0; }
+  .lp-hero, .lp-split, .lp-2col, .lp-matrix, .lp-prices { grid-template-columns: minmax(0, 1fr); }
+  .lp-hero { padding: 44px 0; gap: 40px; }
+  .lp-section { padding: 60px 0; }
+  .lp-preview { box-shadow: 6px 6px 0 var(--gold); }
   .lp-price.pop { order: -1; }
 }`;
 
@@ -138,15 +142,15 @@ const I = {
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
   star: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>',
   clock:
-    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   msg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   trend:
-    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17 13.5 8.5l-5 5L2 7"/><path d="M16 17h6v-6"/></svg>',
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17 13.5 8.5l-5 5L2 7"/><path d="M16 17h6v-6"/></svg>',
   layers:
-    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>',
-  git: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-1-2.6c3-.3 6-1.5 6-6.6a5.1 5.1 0 0 0-1.4-3.5 4.8 4.8 0 0 0-.1-3.5s-1.1-.3-3.5 1.3a12 12 0 0 0-6.4 0C6.3 1.6 5.2 1.9 5.2 1.9a4.8 4.8 0 0 0-.1 3.5A5.1 5.1 0 0 0 3.7 9c0 5 3 6.3 6 6.6a3.4 3.4 0 0 0-1 2.6V22"/></svg>',
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>',
+  git: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-1-2.6c3-.3 6-1.5 6-6.6a5.1 5.1 0 0 0-1.4-3.5 4.8 4.8 0 0 0-.1-3.5s-1.1-.3-3.5 1.3a12 12 0 0 0-6.4 0C6.3 1.6 5.2 1.9 5.2 1.9a4.8 4.8 0 0 0-.1 3.5A5.1 5.1 0 0 0 3.7 9c0 5 3 6.3 6 6.6a3.4 3.4 0 0 0-1 2.6V22"/></svg>',
   sliders:
-    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
+    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
 };
 
 function check(text: string): string {
@@ -158,7 +162,7 @@ function bullet(html: string): string {
 }
 
 function feature(icon: string, title: string, body: string): string {
-  return `<div class="lp-feature"><div class="lp-feicon">${icon}</div><h3>${title}</h3><p>${body}</p></div>`;
+  return `<div class="lp-cell"><div class="lp-cellic">${icon}</div><h3>${title}</h3><p>${body}</p></div>`;
 }
 
 function priceFeat(text: string): string {
@@ -180,8 +184,8 @@ function declineChart(): string {
     <polygon points="${fill}" fill="url(#lpfill)"/>
     <polyline points="${pts}" fill="none" stroke="#FBB024" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="624" cy="196" r="4" fill="#FF5247"/>
-    <text x="636" y="146" text-anchor="end" font-family="monospace" font-size="11" fill="#71717A">৳150</text>
-    <text x="636" y="174" text-anchor="end" font-family="monospace" font-size="11" fill="#71717A">৳100</text>
+    <text x="636" y="146" text-anchor="end" font-family="monospace" font-size="11" fill="#837a68">৳150</text>
+    <text x="636" y="174" text-anchor="end" font-family="monospace" font-size="11" fill="#837a68">৳100</text>
   </svg>`;
 }
 
@@ -230,7 +234,7 @@ export function homeHtml(billingLive = false): string {
   </section>`;
 
   const thresholds = `<section class="lp-section" id="how"><div class="lp-wrap">
-    <div class="lp-head lp-center">
+    <div class="lp-head">
       <h2 class="lp-h2">Two thresholds. One very tired meter.</h2>
       <p class="lp-sub">Both limits are configurable. Cross them and the bot gets progressively less polite about your life choices.</p>
     </div>
@@ -255,7 +259,7 @@ export function homeHtml(billingLive = false): string {
   const inbox = `<section class="lp-section"><div class="lp-wrap"><div class="lp-split">
     <div>
       <h2 class="lp-h2">It hits your inbox like a disappointed parent.</h2>
-      <p class="lp-lead" style="margin-top:14px">Every check runs the same pipeline: verify config, fetch your live DESCO balance, validate the response, compare against your thresholds, then if you're too low, blast an email that pulls no punches.</p>
+      <p class="lp-lead" style="margin-top:16px">Every check runs the same pipeline: verify config, fetch your live DESCO balance, validate the response, compare against your thresholds, then if you're too low, blast an email that pulls no punches.</p>
       <div class="lp-bullets">
         ${bullet("Live balance, straight from DESCO's prepaid API. Not a guess.")}
         ${bullet('Configurable thresholds. Defaults ৳150 / ৳100, tune them to taste.')}
@@ -263,7 +267,7 @@ export function homeHtml(billingLive = false): string {
       </div>
     </div>
     <div class="lp-mail">
-      <div class="lp-mailbar"><span>inbox (1 unread)</span><span>07:42</span></div>
+      <div class="lp-mailbar"><span>Incoming · email</span><span>07:42</span></div>
       <div class="lp-mailbody">
         <div class="lp-mailsub">⚡ Your Electricity About to Ghost You</div>
         <div class="lp-mailmeta">roast@power-roast.app</div>
@@ -288,7 +292,7 @@ export function homeHtml(billingLive = false): string {
     </div>
     <div>
       <h2 class="lp-h2">See the decline before it ghosts you.</h2>
-      <p class="lp-lead" style="margin-top:14px">${
+      <p class="lp-lead" style="margin-top:16px">${
         paid
           ? 'The Telegram-hosted version adds a web dashboard: balance history, run-out predictions, and every meter you own in one place.'
           : 'The Telegram-hosted version adds a web dashboard: balance history, run-out predictions, and every reading for your meter in one place.'
@@ -310,8 +314,8 @@ export function homeHtml(billingLive = false): string {
   </div></div></section>`;
 
   const features = `<section class="lp-section"><div class="lp-wrap">
-    <div class="lp-head lp-center"><h2 class="lp-h2">Small tool. Big mouth.</h2></div>
-    <div class="lp-grid3">
+    <div class="lp-head"><h2 class="lp-h2">Small tool. Big mouth.</h2></div>
+    <div class="lp-matrix">
       ${feature(I.clock, 'Checks every 6 hours', "An automated schedule pings DESCO around the clock, or force a run any time you're feeling anxious.")}
       ${feature(
         I.msg,
@@ -333,7 +337,9 @@ export function homeHtml(billingLive = false): string {
     </div>
   </div></section>`;
 
-  const paths = `<section class="lp-section" id="selfhost"><div class="lp-wrap"><div class="lp-2col">
+  const paths = `<section class="lp-section" id="selfhost"><div class="lp-wrap">
+    <div class="lp-head"><h2 class="lp-h2">Two ways to run it.</h2></div>
+    <div class="lp-2col">
     <div class="lp-path">
       <h3>Self-hosted</h3>
       <p>Fork the repo, paste your details into GitHub Secrets, and the workflow runs on a schedule. No servers, no cost, just email roasts.</p>
@@ -356,10 +362,11 @@ export function homeHtml(billingLive = false): string {
         ${paid ? bullet('Run-out predictions, multi-meter') : bullet('Run-out predictions built in')}
       </div>
     </div>
-  </div></div></section>`;
+    </div>
+  </div></section>`;
 
   const pricing = `<section class="lp-section" id="pricing"><div class="lp-wrap">
-    <div class="lp-head lp-center">
+    <div class="lp-head">
       <h2 class="lp-h2">Cheaper than living in the dark.</h2>
       <p class="lp-sub">Self-host for free, forever. Or let the bot do the work and pay in BDT via bKash or SSLCommerz.</p>
     </div>
@@ -392,7 +399,7 @@ export function homeHtml(billingLive = false): string {
   const setup = `<section class="lp-section"><div class="lp-wrap"><div class="lp-split">
     <div>
       <h2 class="lp-h2">Three secrets and a cron. That's the whole setup.</h2>
-      <p class="lp-lead" style="margin-top:14px">Built in TypeScript, run with Bun, scheduled by GitHub Actions. Drop your DESCO + SMTP details into repo secrets and forget it exists, until it roasts you.</p>
+      <p class="lp-lead" style="margin-top:16px">Built in TypeScript, run with Bun, scheduled by GitHub Actions. Drop your DESCO + SMTP details into repo secrets and forget it exists, until it roasts you.</p>
       <div class="lp-stack-chips">
         <span class="lp-chiptag">TypeScript</span><span class="lp-chiptag">nodemailer</span><span class="lp-chiptag">Drizzle</span><span class="lp-chiptag">Docker</span>
       </div>

@@ -114,8 +114,8 @@ export function alertCopy(
           : `PowerRoast: ${slabel} balance Tk${bal} - LOW (under Tk${low}). Recharge: ${host}`,
         email: {
           badge: '⚡',
-          accent: '#f59e0b',
-          bg: '#1a160a',
+          accent: '#FBB024',
+          bg: '#211B0E',
           cardTitle: 'Running Low',
           balanceLabel: 'Running low',
           preheader: `৳${bal} left on ${label}.`,
@@ -135,8 +135,8 @@ export function alertCopy(
           : `PowerRoast: ${slabel} balance Tk${bal} - CRITICAL! Power cut imminent. Recharge NOW: ${host}`,
         email: {
           badge: mild ? '🔴' : '💀⚡',
-          accent: '#dc2626',
-          bg: '#1a0a0a',
+          accent: '#FF5247',
+          bg: '#241110',
           cardTitle: mild ? 'Critically Low' : 'Power Emergency',
           balanceLabel: 'Critically low',
           preheader: mild
@@ -159,8 +159,8 @@ export function alertCopy(
         sms: null,
         email: {
           badge: mild ? '🔔' : '🔁',
-          accent: '#f59e0b',
-          bg: '#1a160a',
+          accent: '#FBB024',
+          bg: '#211B0E',
           cardTitle: 'Still Low',
           balanceLabel: 'Still low',
           preheader: `Still ৳${bal} on ${label}.`,
@@ -176,8 +176,8 @@ export function alertCopy(
         sms: null,
         email: {
           badge: '✅',
-          accent: '#16a34a',
-          bg: '#0a1a0f',
+          accent: '#34D399',
+          bg: '#0F1F16',
           cardTitle: mild ? 'Topped Up' : 'Crisis Averted',
           balanceLabel: 'Healthy again',
           preheader: `Back to ৳${bal} on ${label}.`,

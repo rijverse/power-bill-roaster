@@ -37,3 +37,6 @@ coverage/
 
 # Private notes (business/cost details, never public)
 *.private.md
+
+# Local design notes (kept out of the repo)
+design.md

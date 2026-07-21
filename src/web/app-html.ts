@@ -55,7 +55,7 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
         <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember, we email you a one-tap link.</p>
         <button class="pr-btn gold block" type="submit">Send sign-in link &amp; brace yourself</button>
       </form>${codeForm}`
-    : `<div class="pr-err" style="background:rgba(255,82,71,0.08); border:1px solid rgba(255,82,71,0.28); border-radius:11px; padding:14px 16px; min-height:0">Email sign-in is not configured on this server yet. Use the Telegram bot instead.</div>`;
+    : `<div class="pr-err" style="background:rgba(255,82,71,0.08); border:1.5px solid rgba(255,82,71,0.28); border-radius:var(--r-sm); padding:14px 16px; min-height:0">Email sign-in is not configured on this server yet. Use the Telegram bot instead.</div>`;
 
   // Default to the Telegram tab (matches the design); if there's an email status
   // message to show, open the Email tab so the user sees it.
@@ -67,7 +67,7 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
     <h1>Welcome back.<br>Your meter <span>missed you.</span></h1>
     <p>It's been quietly judging your recharge habits while you were gone. Sign in and face the numbers.</p>
     <div class="pr-peek">
-      <span style="display:grid; place-items:center; width:42px; height:42px; border-radius:10px; background:rgba(255,82,71,0.14); flex:none;">
+      <span style="display:grid; place-items:center; width:42px; height:42px; border-radius:var(--r-sm); background:rgba(255,82,71,0.14); flex:none;">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF5247" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg>
       </span>
       <div>
@@ -97,8 +97,8 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
     <div data-pane="telegram">
       <div style="text-align:center; padding:8px 0 18px;">
         <div style="position:relative; display:inline-grid; place-items:center; width:84px; height:84px; margin-bottom:18px;">
-          <span style="position:absolute; inset:0; border-radius:24px; background:rgba(94,131,255,0.18); animation:prPulse 2.4s ease-out infinite;"></span>
-          <span style="position:relative; display:grid; place-items:center; width:64px; height:64px; border-radius:18px; background:linear-gradient(135deg,#5E83FF,#2A6FDB);">
+          <span style="position:absolute; inset:0; border-radius:var(--r); background:rgba(94,131,255,0.18); animation:prPulse 2.4s ease-out infinite;"></span>
+          <span style="position:relative; display:grid; place-items:center; width:64px; height:64px; border-radius:var(--r); background:var(--blue);">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>
           </span>
         </div>
@@ -174,7 +174,7 @@ export function appShellHtml(
       <button id="pr-hamburger" type="button"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"></path></svg></button>
       <div class="titles"><div class="t" id="topTitle">Dashboard</div><div class="s" id="topSub">loading...</div></div>
       <div class="pr-mselwrap" id="mselWrap" style="display:none"></div>
-      <button class="pr-btn gold" id="refreshBtn" type="button" title="Re-fetch the latest balances"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0B1020" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span id="refreshLabel">Force check</span></button>
+      <button class="pr-btn gold" id="refreshBtn" type="button" title="Re-fetch the latest balances"><svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1a1408" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"></path></svg><span id="refreshLabel">Force check</span></button>
     </header>
     <main class="pr-content"><div id="host"><div class="pr-card pr-empty">Loading...</div></div></main>
   </div>
@@ -211,7 +211,7 @@ async function post(path, body) {
 
 // ---- helpers -------------------------------------------------------------
 function statusOf(m) {
-  if (!m || m.balance === null) return { label: 'NO DATA', key: 'nodata', pill: 'pr-pill', color: '#6E7790' };
+  if (!m || m.balance === null) return { label: 'NO DATA', key: 'nodata', pill: 'pr-pill', color: '#837a68' };
   if (m.balance < m.criticalThreshold) return { label: 'CRITICAL', key: 'crit', pill: 'pr-pill crit siren', color: '#FF5247' };
   if (m.balance < m.lowThreshold) return { label: 'LOW', key: 'low', pill: 'pr-pill low', color: '#FBB024' };
   return { label: 'HEALTHY', key: 'ok', pill: 'pr-pill ok', color: '#34D399' };
@@ -353,7 +353,7 @@ function dashBanner() {
       '<button class="pr-btn gold" type="button" data-go="billing" style="flex:none">Recharge →</button></div>';
   }
   if (!ms.length) return '';
-  return '<div class="pr-banner" style="margin-bottom:22px;background:linear-gradient(135deg,rgba(52,211,153,0.12),rgba(52,211,153,0.04));border-color:rgba(52,211,153,0.3)"><span class="ic" style="background:rgba(52,211,153,0.16)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>' +
+  return '<div class="pr-banner" style="margin-bottom:22px;background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.42)"><span class="ic" style="background:rgba(52,211,153,0.16)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>' +
     '<div class="bd"><div class="h">Every meter is healthy</div><div class="p">Nothing to roast you about right now. Enjoy it while it lasts.</div></div></div>';
 }
 function renderDashboard() {
@@ -397,7 +397,7 @@ function renderDashboard() {
         }).join('') +
       '</div></div>';
   if (soonM && soon !== null) {
-    h += '<div style="background:linear-gradient(135deg,rgba(251,176,36,0.12),rgba(255,82,71,0.1));border:1px solid rgba(251,176,36,0.25);border-radius:16px;padding:20px">' +
+    h += '<div style="background:rgba(251,176,36,0.1);border:1.5px solid rgba(251,176,36,0.42);border-radius:var(--r-lg);padding:20px">' +
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="m19 9-5 5-4-4-3 3"></path></svg><span style="font-size:13px;font-weight:700;color:var(--text)">Run-out prediction</span></div>' +
       '<p style="margin:0;font-size:14px;line-height:1.55;color:var(--text-2)">At the current burn rate, <b style="color:var(--gold)">' + esc(soonM.label) + '</b> goes dark in <b style="color:var(--red-soft)">~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days</b>. Maybe set a reminder, since the alerts clearly aren\\'t landing.</p></div>';
   }
@@ -419,7 +419,7 @@ function renderMeter() {
   const m = DATA.meters[SEL], st = statusOf(m), d = days(m), lr = lastRecharge(m), als = meterAlerts(m);
   const proj = (m.prediction && m.balance !== null) ? shortDate(Date.now() + m.prediction.daysLeft * 86400000) : 'n/a';
 
-  let h = '<div style="display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid ' + (st.key === 'crit' ? 'rgba(255,82,71,0.28)' : 'var(--border)') + ';border-radius:16px;padding:22px;margin-bottom:18px">' +
+  let h = '<div style="display:flex;align-items:center;gap:16px;background:var(--surface);border:1.5px solid ' + (st.key === 'crit' ? 'rgba(255,82,71,0.42)' : 'var(--border)') + ';border-radius:var(--r-lg);padding:22px;margin-bottom:18px">' +
     gauge(m, 96) +
     '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap"><span style="font-size:20px;font-weight:800;color:var(--text);letter-spacing:-0.02em">' + esc(m.label) + '</span><span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span></div>' +
       '<div class="mono" style="font-size:12.5px;color:var(--faint)">Account ' + esc(m.accountNo) + ', Meter ' + esc(m.meterNo) + ', DESCO prepaid</div>' +
@@ -528,7 +528,7 @@ function renderAlerts() {
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:14px">Roast intensity</div>' +
     '<div class="pr-seg" style="margin-bottom:18px"><button type="button" class="' + (ROAST === 'savage' ? 'on' : '') + '" data-roast="savage">🔥 Savage</button><button type="button" class="' + (ROAST === 'mild' ? 'on' : '') + '" data-roast="mild">😌 Mild</button></div>' +
     '<div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Preview, critical email</div>' +
-    '<div id="roastPrev" style="border-left:3px solid ' + ROASTS[ROAST].accent + ';padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:0 10px 10px 0"></div></div>';
+    '<div id="roastPrev" style="border-left:3px solid ' + ROASTS[ROAST].accent + ';padding:14px 16px;background:rgba(255,255,255,0.03);border-radius:0 var(--r-sm) var(--r-sm) 0"></div></div>';
   h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:16px">Schedule</div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--border-soft)"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Check frequency</div><div class="mono" style="font-size:11.5px;color:var(--faint)">balance polled automatically</div></div><span class="mono" style="font-size:13px;font-weight:700;color:var(--gold)">automatic</span></div>' +
     '<div style="display:flex;align-items:center;justify-content:space-between;padding-top:14px"><div><div style="font-size:13.5px;font-weight:600;color:var(--text)">Quiet hours</div><div class="mono" style="font-size:11.5px;color:var(--faint)">pause nudges overnight</div></div>' +
@@ -595,7 +595,7 @@ function channelRow(bg, icon, name, meta, key, on, disabled, badge, lockTitle) {
     '<label class="pr-switch"' + (disabled ? ' title="' + (lockTitle || '') + '" style="opacity:0.5;pointer-events:none"' : '') + '><input type="checkbox" id="tg-' + key + '"' + (on ? ' checked' : '') + (disabled ? ' disabled' : '') + '><span class="track"></span><span class="knob"></span></label></div>';
 }
 function emailIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 6 10-6"></path></svg>'; }
-function tgIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="#5E83FF"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>'; }
+function tgIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="var(--blue)"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>'; }
 function smsIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="3"></rect><path d="M11 18h2"></path></svg>'; }
 function discordIcon() { return '<svg width="18" height="18" viewBox="0 0 24 24" fill="#5865F2"><path d="M20.3 4.9A19.8 19.8 0 0 0 15.4 3.4l-.2.5c1.6.5 2.4 1 3.3 1.6a13.4 13.4 0 0 0-11 0c.9-.6 1.8-1.1 3.3-1.6l-.2-.5A19.8 19.8 0 0 0 3.7 4.9C1 8.9.2 12.9.6 16.8a19.9 19.9 0 0 0 6 3l.4-.6c-.9-.3-1.6-.7-2.3-1.2l.6-.4a14 14 0 0 0 11.9 0l.6.4c-.7.5-1.5.9-2.3 1.2l.4.6a19.9 19.9 0 0 0 6-3c.5-4.5-.8-8.5-3.6-11.9zM9 14.3c-.9 0-1.7-.9-1.7-2s.8-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2zm6 0c-.9 0-1.7-.9-1.7-2s.8-2 1.7-2 1.7.9 1.7 2-.8 2-1.7 2z"></path></svg>'; }
 

@@ -544,16 +544,16 @@ export async function sendMagicLink(
     email,
     'Your Power Roast sign-in link',
     `Tap to sign in (expires in 20 minutes):\n${link}\n\nOn the device you started from, you can enter this code instead: ${spaced}\n\nIf you didn't request this, ignore it.`,
-    `<!DOCTYPE html><html><body style="margin:0;background:#0B1020;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#C8D0E0">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#0B1020"><tr><td align="center" style="padding:32px 16px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#11162A;border-radius:16px;border:1px solid rgba(255,255,255,0.09)">
+    `<!DOCTYPE html><html><body style="margin:0;background:#14110C;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#A79D8C">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="#14110C"><tr><td align="center" style="padding:32px 16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#1E1A14;border-radius:4px;border:1.5px solid #3A3126">
 <tr><td style="padding:32px;text-align:center">
-<h1 style="margin:0 0 8px;font-size:22px;font-weight:800;letter-spacing:-0.02em;color:#F4F7FF">⚡ Power<span style="color:#FBB024">·Roast</span></h1>
-<p style="color:#9AA3B8;font-size:14px;line-height:1.55;margin:0 0 24px">Tap to sign in. This link expires in 20 minutes.</p>
-<a href="${link}" style="display:inline-block;background:#FBB024;color:#0B1020;text-decoration:none;padding:14px 34px;border-radius:11px;font-weight:700">Sign in &amp; brace yourself</a>
-<p style="color:#9AA3B8;font-size:13px;line-height:1.55;margin:24px 0 0">On the device you started from, you can enter this code instead:</p>
-<div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;letter-spacing:0.15em;color:#F4F7FF;margin:6px 0 0">${spaced}</div>
-<p style="color:#6E7790;font-size:12px;margin:24px 0 0">If you didn't request this, just ignore it.</p>
+<h1 style="margin:0 0 8px;font-size:22px;font-weight:800;letter-spacing:-0.02em;color:#F5F1EA">⚡ Power<span style="color:#FBB024">·Roast</span></h1>
+<p style="color:#A79D8C;font-size:14px;line-height:1.55;margin:0 0 24px">Tap to sign in. This link expires in 20 minutes.</p>
+<a href="${link}" style="display:inline-block;background:#FBB024;color:#1A1408;text-decoration:none;padding:14px 34px;border-radius:3px;font-weight:700">Sign in &amp; brace yourself</a>
+<p style="color:#A79D8C;font-size:13px;line-height:1.55;margin:24px 0 0">On the device you started from, you can enter this code instead:</p>
+<div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;letter-spacing:0.15em;color:#F5F1EA;margin:6px 0 0">${spaced}</div>
+<p style="color:#837A68;font-size:12px;margin:24px 0 0">If you didn't request this, just ignore it.</p>
 </td></tr></table></td></tr></table></body></html>`
   );
 }

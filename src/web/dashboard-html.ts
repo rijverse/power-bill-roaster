@@ -12,7 +12,7 @@ export function dashboardHtml(nonce: string, token: string): string {
     <div class="mono" style="color:var(--faint); font-size:12px; margin-top:12px; letter-spacing:0.04em;">your balance, judged in real time</div>
   </header>
   <div id="app"><div class="pr-card pr-empty">Loading...</div></div>
-  <footer style="text-align:center; color:var(--faint-2); font-size:12px; padding-top:28px;">not affiliated with DESCO, alerts keep running even if you never open this page</footer>
+  <footer style="text-align:center; color:var(--faint-2); font-size:12px; padding-top:28px;">not affiliated with electricity providers, alerts keep running even if you never open this page</footer>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script nonce="${nonce}">

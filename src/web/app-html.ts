@@ -112,7 +112,7 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
 
     <div data-pane="email" style="display:none">${emailPane}</div>
 
-    <div style="margin-top:22px; padding-top:18px; border-top:1px solid var(--border-soft); text-align:center; font-size:13px; color:var(--faint);">Not affiliated with DESCO, alerts keep running even when this page is closed.</div>
+    <div style="margin-top:22px; padding-top:18px; border-top:1px solid var(--border-soft); text-align:center; font-size:13px; color:var(--faint);">Not affiliated with electricity providers, alerts keep running even when this page is closed.</div>
   </div>
 </div>
 <script nonce="${nonce}">
@@ -274,7 +274,7 @@ function gauge(m, size) {
 // reusable add-meter card (markup + wiring)
 function addMeterCard() {
   return '<div class="pr-card" style="margin-top:18px"><div class="pr-card-title">Add a meter</div>' +
-    '<div class="pr-card-sub" style="margin-bottom:16px">Find these on your DESCO bill or the DESCO prepaid portal.</div>' +
+    '<div class="pr-card-sub" style="margin-bottom:16px">Find these on your provider\\'s bill or prepaid portal.</div>' +
     '<div class="row" style="gap:10px">' +
       '<input type="text" id="acct" class="pr-input mono" placeholder="Account number" style="flex:1;min-width:160px">' +
       '<input type="text" id="meter" class="pr-input mono" placeholder="Meter number" style="flex:1;min-width:160px">' +
@@ -422,7 +422,7 @@ function renderMeter() {
   let h = '<div style="display:flex;align-items:center;gap:16px;background:var(--surface);border:1.5px solid ' + (st.key === 'crit' ? 'rgba(255,82,71,0.42)' : 'var(--border)') + ';border-radius:var(--r-lg);padding:22px;margin-bottom:18px">' +
     gauge(m, 96) +
     '<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap"><span style="font-size:20px;font-weight:800;color:var(--text);letter-spacing:-0.02em">' + esc(m.label) + '</span><span class="' + st.pill + '"><span class="dot"></span>' + st.label + '</span></div>' +
-      '<div class="mono" style="font-size:12.5px;color:var(--faint)">Account ' + esc(m.accountNo) + ', Meter ' + esc(m.meterNo) + ', DESCO prepaid</div>' +
+      '<div class="mono" style="font-size:12.5px;color:var(--faint)">Account ' + esc(m.accountNo) + ', Meter ' + esc(m.meterNo) + ', Prepaid electricity</div>' +
       '<div style="font-size:14px;color:var(--text-2);margin-top:8px">' + (d === null ? 'Not enough history to predict a run-out yet.' : 'Goes dark in <b style="color:' + st.color + '">~' + d.toFixed(d < 10 ? 1 : 0) + ' days</b>. It deserves better and so do you.') + '</div></div>' +
     '<button class="pr-btn gold" type="button" data-go="billing" style="flex:none">Recharge →</button></div>';
 
@@ -618,15 +618,15 @@ function paintBilling(b) {
   const upgrades = b.live ? b.catalog.filter(p => p.id !== 'free' && p.priceBdt > (cur.priceBdt || 0)) : [];
   const m = DATA.meters[SEL];
 
-  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on DESCO\\'s prepaid portal, Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Every feature is free while we\\'re in launch.') + '</div></div>';
+  let h = '<div class="pr-notice" style="margin-bottom:18px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8FA8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4M12 8h.01"></path></svg><div>Topping up a meter happens on your provider\\'s prepaid portal, Power·Roast links you straight there. ' + (b.live ? 'Plan upgrades are handled here.' : 'Every feature is free while we\\'re in launch.') + '</div></div>';
 
   h += '<div class="pr-grid pr-2col-even">';
   // left: recharge deep-link + history
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title">Recharge a meter</div><div class="pr-card-sub" style="margin-bottom:16px">' +
-    (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official DESCO portal, your meter and account are below.</div>' +
+    (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official provider portal, your meter and account are below.</div>' +
     (m ? '<div class="pr-list" style="margin-bottom:16px"><div class="pr-rowitem"><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Account</div><div style="font-weight:600;color:var(--text)">' + esc(m.accountNo) + '</div></div><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Meter</div><div style="font-weight:600;color:var(--text)">' + esc(m.meterNo) + '</div></div></div></div>' : '') +
-    '<a class="pr-btn gold block" href="' + RECHARGE_URL + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open DESCO recharge →</a></div>';
+    '<a class="pr-btn gold block" href="' + RECHARGE_URL + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open provider recharge →</a></div>';
   // Payment history is meaningless on a free-only launch; only show it once billing is live.
   if (b.live)
     h += '<div class="pr-card"><div class="pr-card-title" style="margin-bottom:8px">Billing history</div>' +

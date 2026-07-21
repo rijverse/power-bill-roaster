@@ -10,13 +10,14 @@ const GITHUB = 'https://github.com/rijverse/power-bill-roaster';
 // landing-only layout, scoped under .lp- so it can't collide with the app's .pr-
 // classes. colours/radii/fonts all come from the theme tokens.
 const STYLE = `
-.lp-nav { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 22px; padding: 16px 28px; background: var(--bg); border-bottom: 1.5px solid var(--border); }
+.lp-nav { position: sticky; top: 0; z-index: 50; background: var(--bg); border-bottom: 1.5px solid var(--border); }
+.lp-nav-inner { display: flex; align-items: center; gap: 22px; padding: 16px 28px; max-width: 1500px; margin: 0 auto; width: 100%; }
 .lp-nav .links { display: flex; gap: 24px; margin-left: 18px; }
 .lp-nav .links a { color: var(--muted); font-family: var(--mono); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
 .lp-nav .links a:hover { color: var(--gold); text-decoration: none; }
 .lp-nav .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
-.lp-wrap { max-width: 1120px; margin: 0 auto; padding: 0 28px; position: relative; z-index: 1; }
+.lp-wrap { max-width: 1500px; margin: 0 auto; padding: 0 28px; position: relative; z-index: 1; }
 .lp-section { padding: 88px 0; border-top: 1.5px solid var(--border); }
 .lp-eyebrow { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold); border: 1.5px solid color-mix(in oklch, var(--gold) 40%, transparent); padding: 6px 12px; }
 .lp-h1 { font-family: var(--display); font-size: clamp(2.6rem, 6.4vw, 5.4rem); line-height: 0.95; letter-spacing: -0.03em; font-weight: 900; text-transform: uppercase; color: var(--text); margin: 24px 0 22px; overflow-wrap: anywhere; }
@@ -33,10 +34,10 @@ const STYLE = `
 .lp-check { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
 .lp-check svg { color: var(--gold); flex: none; }
 
-/* hero power-grid canvas: sits behind the hero content, scoped to the hero box */
+/* hero power-grid canvas: sits behind the entire page */
 .lp-herobox { position: relative; }
 .lp-herobox .lp-hero { position: relative; z-index: 1; }
-#pr-grid { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+#pr-grid { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
 
 /* alert preview card in the hero */
 .lp-preview { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 18px; box-shadow: 9px 9px 0 var(--gold); }
@@ -197,25 +198,26 @@ function declineChart(): string {
 export function homeHtml(billingLive = false): string {
   const paid = billingLive;
   const nav = `<nav class="lp-nav">
-    ${logo()}
-    <div class="links">
-      <a href="#how">How it works</a>
-      <a href="#dashboard">Dashboard</a>
-      ${paid ? '<a href="#pricing">Pricing</a>' : ''}
-      <a href="#selfhost">Self-host</a>
-    </div>
-    <div class="right">
-      <a class="pr-btn ghost sm" href="${GITHUB}" target="_blank" rel="noopener">${I.star} Star on GitHub</a>
-      <a class="pr-btn gold sm" href="/app">Start the bot</a>
+    <div class="lp-nav-inner">
+      ${logo()}
+      <div class="links">
+        <a href="#how">How it works</a>
+        <a href="#dashboard">Dashboard</a>
+        ${paid ? '<a href="#pricing">Pricing</a>' : ''}
+        <a href="#selfhost">Self-host</a>
+      </div>
+      <div class="right">
+        <a class="pr-btn ghost sm" href="${GITHUB}" target="_blank" rel="noopener">${I.star} Star on GitHub</a>
+        <a class="pr-btn gold sm" href="/app">Start the bot</a>
+      </div>
     </div>
   </nav>`;
 
   const hero = `<section class="lp-wrap" id="top">
     <div class="lp-herobox">
-      <canvas id="pr-grid" aria-hidden="true"></canvas>
       <div class="lp-hero">
       <div>
-        <span class="lp-eyebrow">DESCO prepaid, brutally honest alerts</span>
+        <span class="lp-eyebrow">Prepaid electricity, brutally honest alerts</span>
         <h1 class="lp-h1">Recharge now, or get <span class="hl">roasted</span> in the dark.</h1>
         <p class="lp-lead">Your prepaid balance is one bad day from zero. And after how you've treated that meter, can you blame it for wanting out? Power·Roast emails you before the lights do.</p>
         <div class="lp-ctarow">
@@ -267,9 +269,9 @@ export function homeHtml(billingLive = false): string {
   const inbox = `<section class="lp-section"><div class="lp-wrap"><div class="lp-split">
     <div>
       <h2 class="lp-h2">It hits your inbox like a disappointed parent.</h2>
-      <p class="lp-lead" style="margin-top:16px">Every check runs the same pipeline: verify config, fetch your live DESCO balance, validate the response, compare against your thresholds, then if you're too low, blast an email that pulls no punches.</p>
+      <p class="lp-lead" style="margin-top:16px">Every check runs the same pipeline: verify config, fetch your live meter balance, validate the response, compare against your thresholds, then if you're too low, blast an email that pulls no punches.</p>
       <div class="lp-bullets">
-        ${bullet("Live balance, straight from DESCO's prepaid API. Not a guess.")}
+        ${bullet("Live balance, straight from your provider's API. Not a guess.")}
         ${bullet('Configurable thresholds. Defaults ৳150 / ৳100, tune them to taste.')}
         ${bullet('Tone it down if you must. The templates live in <code>src/templates/</code>.')}
       </div>
@@ -324,7 +326,7 @@ export function homeHtml(billingLive = false): string {
   const features = `<section class="lp-section"><div class="lp-wrap">
     <div class="lp-head"><h2 class="lp-h2">Small tool. Big mouth.</h2></div>
     <div class="lp-matrix">
-      ${feature(I.clock, 'Checks every 6 hours', "An automated schedule pings DESCO around the clock, or force a run any time you're feeling anxious.")}
+      ${feature(I.clock, 'Checks every 6 hours', "An automated schedule pings your provider around the clock, or force a run any time you're feeling anxious.")}
       ${feature(
         I.msg,
         paid ? 'Email, Telegram, SMS' : 'Telegram, Discord &amp; email',
@@ -337,7 +339,7 @@ export function homeHtml(billingLive = false): string {
         I.layers,
         paid ? 'Multi-meter support' : 'Live web dashboard',
         paid
-          ? "Home, office, your parents' place. Track every DESCO meter from one dashboard and one bot."
+          ? "Home, office, your parents' place. Track every prepaid meter from one dashboard and one bot."
           : 'Balance history, run-out predictions, and every reading in one place. Nothing to install.'
       )}
       ${feature(I.git, 'Free forever, self-hosted', 'Fork the repo, drop secrets into GitHub Actions, done. Zero servers, zero cost, MIT-licensed.')}
@@ -407,7 +409,7 @@ export function homeHtml(billingLive = false): string {
   const setup = `<section class="lp-section"><div class="lp-wrap"><div class="lp-split">
     <div>
       <h2 class="lp-h2">Three secrets and a cron. That's the whole setup.</h2>
-      <p class="lp-lead" style="margin-top:16px">Built in TypeScript, run with Bun, scheduled by GitHub Actions. Drop your DESCO + SMTP details into repo secrets and forget it exists, until it roasts you.</p>
+      <p class="lp-lead" style="margin-top:16px">Built in TypeScript, run with Bun, scheduled by GitHub Actions. Drop your provider + SMTP details into repo secrets and forget it exists, until it roasts you.</p>
       <div class="lp-stack-chips">
         <span class="lp-chiptag">TypeScript</span><span class="lp-chiptag">nodemailer</span><span class="lp-chiptag">Drizzle</span><span class="lp-chiptag">Docker</span>
       </div>
@@ -437,7 +439,7 @@ export function homeHtml(billingLive = false): string {
 
   const footer = `<footer class="lp-footer lp-wrap">
     ${logo()}
-    <span class="lp-disclaimer">Independent project, not affiliated with DESCO.</span>
+    <span class="lp-disclaimer">Independent project, not affiliated with electricity providers.</span>
     <div class="links">
       <a href="#how">How it works</a>
       ${paid ? '<a href="#pricing">Pricing</a>' : ''}
@@ -446,8 +448,8 @@ export function homeHtml(billingLive = false): string {
     </div>
   </footer>`;
 
-  const body = `<style>${STYLE}</style>${nav}<main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${paid ? pricing : ''}${setup}${finalCta}</main>${footer}<script src="/assets/hero-grid.js" defer></script>`;
-  return pageDoc('Power·Roast: DESCO prepaid balance alerts that roast you', body);
+  const body = `<style>${STYLE}</style>${nav}<canvas id="pr-grid" aria-hidden="true"></canvas><main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${paid ? pricing : ''}${setup}${finalCta}</main>${footer}<script src="/assets/hero-grid.js" defer></script>`;
+  return pageDoc('Power·Roast: Prepaid balance alerts that roast you', body);
 }
 
 // Hero power-grid animation, served as a static same-origin script (see the

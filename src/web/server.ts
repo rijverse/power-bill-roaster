@@ -12,7 +12,7 @@ import { pageDoc, logo } from './theme';
 import { dashboardData } from './queries';
 import { handleAdminRequest } from './admin';
 import { handleAppRequest } from './app';
-import { homeHtml } from './home-html';
+import { homeHtml, HERO_GRID_JS } from './home-html';
 import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 import { handleDiscordInteraction, DiscordInteractionDeps } from '../discord/interactions';
@@ -310,6 +310,17 @@ export function createWebServer(
 
       if (url.pathname === '/pay/sslcommerz/fail' || url.pathname === '/pay/sslcommerz/cancel') {
         payPage(res, 200, 'Payment cancelled', 'No charge was made. Run /upgrade to try again.');
+        return;
+      }
+
+      // Static hero animation for the landing page. Same-origin so it loads
+      // under script-src 'self' with no nonce, which keeps the / page memoized.
+      if (url.pathname === '/assets/hero-grid.js') {
+        res.writeHead(200, {
+          'Content-Type': 'text/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=86400',
+        });
+        res.end(HERO_GRID_JS);
         return;
       }
 

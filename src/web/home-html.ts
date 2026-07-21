@@ -33,6 +33,11 @@ const STYLE = `
 .lp-check { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); }
 .lp-check svg { color: var(--gold); flex: none; }
 
+/* hero power-grid canvas: sits behind the hero content, scoped to the hero box */
+.lp-herobox { position: relative; }
+.lp-herobox .lp-hero { position: relative; z-index: 1; }
+#pr-grid { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+
 /* alert preview card in the hero */
 .lp-preview { background: var(--surface); border: 1.5px solid var(--border); border-radius: var(--r-lg); padding: 18px; box-shadow: 9px 9px 0 var(--gold); }
 .lp-pvhead { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1.5px solid var(--border-soft); }
@@ -206,7 +211,9 @@ export function homeHtml(billingLive = false): string {
   </nav>`;
 
   const hero = `<section class="lp-wrap" id="top">
-    <div class="lp-hero">
+    <div class="lp-herobox">
+      <canvas id="pr-grid" aria-hidden="true"></canvas>
+      <div class="lp-hero">
       <div>
         <span class="lp-eyebrow">DESCO prepaid, brutally honest alerts</span>
         <h1 class="lp-h1">Recharge now, or get <span class="hl">roasted</span> in the dark.</h1>
@@ -227,6 +234,7 @@ export function homeHtml(billingLive = false): string {
         </div>
         <div class="lp-pvmsg">Bro. ৳42.50? That's not a balance, that's a cry for help. Your meter is one warm fridge away from cutting you off mid-Netflix. Recharge now, or start practicing your shadow puppets.</div>
       </div>
+    </div>
     </div>
     <div class="lp-strip">
       <span>Checks every 6 hours</span><span>${paid ? 'Email, Telegram, SMS' : 'Telegram, Discord &amp; email'}</span><span>Run-out predictions</span><span>${paid ? 'Multi-meter' : 'Free, no card'}</span><span>Zero servers to self-host</span>
@@ -438,6 +446,107 @@ export function homeHtml(billingLive = false): string {
     </div>
   </footer>`;
 
-  const body = `<style>${STYLE}</style>${nav}<main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${paid ? pricing : ''}${setup}${finalCta}</main>${footer}`;
+  const body = `<style>${STYLE}</style>${nav}<main>${hero}${thresholds}${inbox}${dashboard}${features}${paths}${paid ? pricing : ''}${setup}${finalCta}</main>${footer}<script src="/assets/hero-grid.js" defer></script>`;
   return pageDoc('Power·Roast: DESCO prepaid balance alerts that roast you', body);
 }
+
+// Hero power-grid animation, served as a static same-origin script (see the
+// /assets/hero-grid.js route in server.ts) so the / page stays memoized and the
+// script loads under CSP script-src 'self' without a per-request nonce. Amber
+// nodes drift and wire up to nearby nodes; every ~110 frames a node surges and
+// lights its links; the grid reacts to the cursor. Honours reduced-motion.
+export const HERO_GRID_JS = `(function () {
+  var canvas = document.getElementById('pr-grid');
+  if (!canvas || !canvas.getContext) return;
+  var ctx = canvas.getContext('2d');
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var AMBER = '251,176,36';
+  var W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  var nodes = [], LINK = 132, tick = 0, raf = null;
+  var mouse = { x: -9999, y: -9999, on: false };
+
+  function build() {
+    var count = Math.max(14, Math.min(46, Math.round((W * H) / 15000)));
+    nodes = [];
+    for (var i = 0; i < count; i++) {
+      nodes.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.18, vy: (Math.random() - 0.5) * 0.18,
+        r: 1.1 + Math.random() * 1.8, e: 0
+      });
+    }
+  }
+  function size() {
+    var rect = canvas.getBoundingClientRect();
+    W = rect.width; H = rect.height;
+    if (W === 0 || H === 0) return;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    build();
+  }
+  function step() {
+    tick++;
+    if (tick % 110 === 0 && nodes.length) nodes[(Math.random() * nodes.length) | 0].e = 1;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      n.x += n.vx; n.y += n.vy;
+      if (n.x < 0 || n.x > W) n.vx *= -1;
+      if (n.y < 0 || n.y > H) n.vy *= -1;
+      if (n.e > 0) n.e -= 0.012;
+      if (mouse.on) {
+        var dx = n.x - mouse.x, dy = n.y - mouse.y, d2 = dx * dx + dy * dy;
+        if (d2 < 12000 && d2 > 0.01) {
+          var d = Math.sqrt(d2), f = ((12000 - d2) / 12000) * 0.8;
+          n.x += (dx / d) * f; n.y += (dy / d) * f;
+        }
+      }
+    }
+  }
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    for (var i = 0; i < nodes.length; i++) {
+      var a = nodes[i];
+      for (var j = i + 1; j < nodes.length; j++) {
+        var b = nodes[j], dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy);
+        if (d < LINK) {
+          var t = 1 - d / LINK, lit = a.e > b.e ? a.e : b.e;
+          ctx.strokeStyle = 'rgba(' + AMBER + ',' + (t * 0.16 + lit * 0.4).toFixed(3) + ')';
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+      }
+    }
+    for (var k = 0; k < nodes.length; k++) {
+      var m = nodes[k];
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.r + m.e * 1.5, 0, 6.2832);
+      ctx.fillStyle = 'rgba(' + AMBER + ',' + (0.5 + m.e * 0.5).toFixed(3) + ')';
+      ctx.fill();
+    }
+    if (mouse.on) {
+      var g = ctx.createRadialGradient(mouse.x, mouse.y, 0, mouse.x, mouse.y, 150);
+      g.addColorStop(0, 'rgba(' + AMBER + ',0.10)');
+      g.addColorStop(1, 'rgba(' + AMBER + ',0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(mouse.x - 150, mouse.y - 150, 300, 300);
+    }
+  }
+  function loop() { step(); render(); raf = requestAnimationFrame(loop); }
+  function start() { if (!raf) loop(); }
+  function stop() { if (raf) { cancelAnimationFrame(raf); raf = null; } }
+  function onMove(ev) {
+    var rect = canvas.getBoundingClientRect();
+    mouse.x = ev.clientX - rect.left; mouse.y = ev.clientY - rect.top;
+    mouse.on = mouse.x >= 0 && mouse.x <= W && mouse.y >= 0 && mouse.y <= H;
+  }
+
+  size();
+  window.addEventListener('resize', size);
+  if (reduce) { render(); return; }
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseout', function () { mouse.on = false; });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); else start(); });
+  start();
+})();
+`;

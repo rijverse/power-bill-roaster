@@ -186,4 +186,7 @@ export function alertCopy(
     case 'none':
       return null;
   }
+  // Exhaustive over AlertAction; the compiler proves every case returns, but
+  // noImplicitReturns still wants a terminal return on the fall-off path.
+  return null;
 }

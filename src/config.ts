@@ -4,6 +4,66 @@ import { isValidDiscordWebhookUrl } from './notifications/discord';
 import { DEFAULT_RECHARGE_URL } from './core/recharge';
 import { Tone, normalizeTone } from './core/tone';
 
+/** Parse an integer env var, falling back when unset/blank. Rejects NaN and
+ *  optionally enforces a min or strict positivity, so a typo like
+ *  LOW_THRESHOLD=abc can't silently turn every threshold comparison false. */
+function parseIntEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  opts: { min?: number; positive?: boolean } = {}
+): number {
+  const n = raw && raw.trim() !== '' ? parseInt(raw, 10) : fallback;
+  if (!Number.isFinite(n)) {
+    throw new Error(`${name} must be a finite integer (got "${raw ?? ''}")`);
+  }
+  if (opts.positive && n <= 0) {
+    throw new Error(`${name} must be greater than 0 (got ${n})`);
+  }
+  if (opts.min !== undefined && n < opts.min) {
+    throw new Error(`${name} must be >= ${opts.min} (got ${n})`);
+  }
+  return n;
+}
+
+/** Parse a float env var with the same guards as parseIntEnv. */
+function parseFloatEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  opts: { min?: number; positive?: boolean } = {}
+): number {
+  const n = raw && raw.trim() !== '' ? parseFloat(raw) : fallback;
+  if (!Number.isFinite(n)) {
+    throw new Error(`${name} must be a finite number (got "${raw ?? ''}")`);
+  }
+  if (opts.positive && n <= 0) {
+    throw new Error(`${name} must be greater than 0 (got ${n})`);
+  }
+  if (opts.min !== undefined && n < opts.min) {
+    throw new Error(`${name} must be >= ${opts.min} (got ${n})`);
+  }
+  return n;
+}
+
+/** Parse an integer env var that is optional (null when unset/blank). */
+function parseIntEnvOrNull(name: string, raw: string | undefined): number | null {
+  if (!raw || raw.trim() === '') return null;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) {
+    throw new Error(`${name} must be a finite integer (got "${raw}")`);
+  }
+  return n;
+}
+
+/** Enforce low > critical; an inverted pair makes the "low" alert level
+ *  unreachable (classify checks critical first), silently disabling it. */
+function validateThresholds(low: number, critical: number): void {
+  if (low <= critical) {
+    throw new Error(`LOW_THRESHOLD (${low}) must be greater than CRITICAL_THRESHOLD (${critical})`);
+  }
+}
+
 /** SMTP host + addresses for the self-hosted email channel. */
 export interface EmailConfig {
   to: string;
@@ -104,6 +164,22 @@ export interface ServerConfig {
       };
 }
 
+/** Billing gateways carry credentials in the request, so the base URL must be
+ *  https (a misconfigured http:// would leak creds). Localhost is allowed for
+ *  sandbox/dev. */
+function assertHttpsBaseUrl(name: string, url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${name} is not a valid URL: ${url}`);
+  }
+  const isLocalhost = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  if (parsed.protocol !== 'https:' && !isLocalhost) {
+    throw new Error(`${name} must use https (got ${parsed.protocol}//${parsed.hostname})`);
+  }
+}
+
 function getBillingConfig(publicBaseUrl: string): ServerConfig['billing'] {
   // Default to 'none' (paid plans off) so a fresh production deploy can never
   // auto-approve upgrades. Sandbox is opt-in for dev/testing only.
@@ -120,6 +196,8 @@ function getBillingConfig(publicBaseUrl: string): ServerConfig['billing'] {
     if (missing.length > 0) {
       throw new Error(`BILLING_PROVIDER=bkash requires: ${missing.join(', ')}`);
     }
+    const baseUrl = process.env.BKASH_BASE_URL || 'https://tokenized.sandbox.bka.sh/v1.2.0-beta';
+    assertHttpsBaseUrl('BKASH_BASE_URL', baseUrl);
     return {
       provider: 'bkash',
       bkash: {
@@ -127,7 +205,7 @@ function getBillingConfig(publicBaseUrl: string): ServerConfig['billing'] {
         appSecret: process.env.BKASH_APP_SECRET!,
         username: process.env.BKASH_USERNAME!,
         password: process.env.BKASH_PASSWORD!,
-        baseUrl: process.env.BKASH_BASE_URL || 'https://tokenized.sandbox.bka.sh/v1.2.0-beta',
+        baseUrl,
         callbackUrl: `${publicBaseUrl}/pay/bkash/callback`,
       },
     };
@@ -138,12 +216,14 @@ function getBillingConfig(publicBaseUrl: string): ServerConfig['billing'] {
         'BILLING_PROVIDER=sslcommerz requires SSLCOMMERZ_STORE_ID and SSLCOMMERZ_STORE_PASSWORD'
       );
     }
+    const baseUrl = process.env.SSLCOMMERZ_BASE_URL || 'https://sandbox.sslcommerz.com';
+    assertHttpsBaseUrl('SSLCOMMERZ_BASE_URL', baseUrl);
     return {
       provider: 'sslcommerz',
       sslcommerz: {
         storeId: process.env.SSLCOMMERZ_STORE_ID,
         storePassword: process.env.SSLCOMMERZ_STORE_PASSWORD,
-        baseUrl: process.env.SSLCOMMERZ_BASE_URL || 'https://sandbox.sslcommerz.com',
+        baseUrl,
         publicBaseUrl,
       },
     };
@@ -244,6 +324,12 @@ export function getServerConfig(): ServerConfig {
     .update(`admin-session:${adminPassword ?? ''}:${dashboardSecret}`)
     .digest('hex');
 
+  const defaultThresholds = {
+    low: parseIntEnv('LOW_THRESHOLD', process.env.LOW_THRESHOLD, 150),
+    critical: parseIntEnv('CRITICAL_THRESHOLD', process.env.CRITICAL_THRESHOLD, 100),
+  };
+  validateThresholds(defaultThresholds.low, defaultThresholds.critical);
+
   return {
     databaseUrl: process.env.DATABASE_URL!,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN!,
@@ -251,21 +337,25 @@ export function getServerConfig(): ServerConfig {
     botUsername:
       (process.env.BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '') ||
       null,
-    port: parseInt(process.env.PORT || '3000'),
-    pollIntervalHours: parseFloat(process.env.POLL_INTERVAL_HOURS || '6'),
-    reminderIntervalHours: parseFloat(process.env.REMINDER_INTERVAL_HOURS || '24'),
-    jitterMaxMs: parseInt(process.env.JITTER_MAX_MS || '4000'),
-    adminChatId: process.env.ADMIN_CHAT_ID ? parseInt(process.env.ADMIN_CHAT_ID) : null,
+    port: parseIntEnv('PORT', process.env.PORT, 3000),
+    pollIntervalHours: parseFloatEnv('POLL_INTERVAL_HOURS', process.env.POLL_INTERVAL_HOURS, 6, {
+      positive: true,
+    }),
+    reminderIntervalHours: parseFloatEnv(
+      'REMINDER_INTERVAL_HOURS',
+      process.env.REMINDER_INTERVAL_HOURS,
+      24,
+      { positive: true }
+    ),
+    jitterMaxMs: parseIntEnv('JITTER_MAX_MS', process.env.JITTER_MAX_MS, 4000, { min: 0 }),
+    adminChatId: parseIntEnvOrNull('ADMIN_CHAT_ID', process.env.ADMIN_CHAT_ID),
     adminDiscordUserId: process.env.ADMIN_DISCORD_USER_ID || null,
     publicBaseUrl,
     dashboardSecret,
     adminPassword,
     adminSessionSecret,
     mail: getMailConfig(),
-    defaultThresholds: {
-      low: parseInt(process.env.LOW_THRESHOLD || '150'),
-      critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
-    },
+    defaultThresholds,
     // DESCO recharge URL embedded in alert messages. Override only for tests
     // or a mirror; the default is the public DESCO portal.
     rechargeUrl: process.env.RECHARGE_URL || DEFAULT_RECHARGE_URL,
@@ -316,11 +406,17 @@ export function getConfig(): Config {
         to: process.env.EMAIL_TO!,
         from: process.env.EMAIL_FROM!,
         host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT || '587'),
+        port: parseIntEnv('SMTP_PORT', process.env.SMTP_PORT, 587),
         user: process.env.SMTP_USER!,
         pass: process.env.SMTP_PASS!,
       }
     : null;
+
+  const thresholds = {
+    low: parseIntEnv('LOW_THRESHOLD', process.env.LOW_THRESHOLD, 150),
+    critical: parseIntEnv('CRITICAL_THRESHOLD', process.env.CRITICAL_THRESHOLD, 100),
+  };
+  validateThresholds(thresholds.low, thresholds.critical);
 
   return {
     desco: {
@@ -329,10 +425,7 @@ export function getConfig(): Config {
     },
     email,
     discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || null,
-    thresholds: {
-      low: parseInt(process.env.LOW_THRESHOLD || '150'),
-      critical: parseInt(process.env.CRITICAL_THRESHOLD || '100'),
-    },
+    thresholds,
     rechargeUrl: process.env.RECHARGE_URL || DEFAULT_RECHARGE_URL,
     tone: normalizeTone(process.env.ALERT_TONE),
   };

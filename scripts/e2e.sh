@@ -12,6 +12,30 @@ trap cleanup EXIT
 echo "Building and starting the e2e stack..."
 $dc up -d --build
 
+echo "Waiting for app to be healthy..."
+for i in $(seq 1 30); do
+  health=$($dc exec -T app node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))" 2>/dev/null && echo ok || echo "")
+  if [ "$health" = "ok" ]; then
+    echo "e2e OK: /health returns 200 under read-only + cap-dropped container"
+    break
+  fi
+  sleep 2
+done
+if [ "$health" != "ok" ]; then
+  echo "e2e FAILED: app never became healthy. App logs:"
+  $dc logs app
+  exit 1
+fi
+
+echo "Checking /admin is a 404 without ADMIN_PASSWORD (hard-disable default)..."
+admin_status=$($dc exec -T app node -e "fetch('http://127.0.0.1:3000/admin').then(r=>process.stdout.write(String(r.status))).catch(()=>process.stdout.write('err'))" 2>/dev/null || echo "")
+if [ "$admin_status" != "404" ]; then
+  echo "e2e FAILED: /admin returned ${admin_status:-nothing} (expected 404). App logs:"
+  $dc logs app
+  exit 1
+fi
+echo "e2e OK: /admin is a 404 (ADMIN_PASSWORD unset = panel disabled)"
+
 echo "Waiting for a delivered alert (max 150s)..."
 for i in $(seq 1 75); do
   count=$($dc exec -T postgres-test psql -U powerroast -d powerroast -tAc \

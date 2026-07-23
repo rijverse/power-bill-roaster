@@ -25,7 +25,7 @@ services:
       retries: 15
 
   mockoon:
-    image: mockoon/cli:latest
+    image: mockoon/cli:9.7.0
     command: ['--data', '/data/mock.json', '--port', '8080']
     volumes:
       - ./mock/telegram-desco-mock.json:/data/mock.json:ro
@@ -38,6 +38,16 @@ services:
       mockoon:
         condition: service_started
     restart: on-failure
+    # Mirror prod hardening so the e2e proves the app boots under read-only
+    # filesystem + all caps dropped. If a future change writes to disk, this
+    # catches it before prod.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       DATABASE_URL: postgres://powerroast:powerroast@postgres-test:5432/powerroast
       # sidecar Postgres on the compose network speaks no TLS; allow the plaintext link

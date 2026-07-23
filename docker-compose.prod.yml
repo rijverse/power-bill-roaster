@@ -15,6 +15,19 @@ services:
     env_file: .env
     ports:
       - '3000:3000'
+    # Defense in depth: the app doesn't write to disk at runtime (logs go to
+    # stdout, data to Postgres), so read-only filesystem + no caps + no
+    # privilege escalation narrows what a process compromise can do.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: '1.0'
+    pids_limit: 200
     logging:
       driver: json-file
       options:

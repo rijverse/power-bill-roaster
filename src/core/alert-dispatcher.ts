@@ -18,7 +18,7 @@ import { AlertAction, AlertLevel } from './alert-machine';
 import { withTimeout } from './with-timeout';
 import { MeterContext } from '../notifications/alert-copy';
 import { notifyOperator } from './operator-notify';
-import { logger } from '../logger';
+import { logger, maskAccount, maskMeterNo } from '../logger';
 
 const POLL_INTERVAL_MS = 5_000;
 // cap rows pulled per cycle so a long backlog can't starve new alerts.
@@ -331,7 +331,7 @@ export class AlertDispatcherWorker {
               : null,
         },
         '🚨 Alert delivery failed',
-        `🚨 Alert for meter ${meter ? `${meter.id} (${meter.accountNo}/${meter.meterNo})` : row.meterId} failed after ${attempts} attempts. Last error: ${lastError}`
+        `🚨 Alert for meter ${meter ? `${meter.id} (${maskAccount(meter.accountNo)}/${maskMeterNo(meter.meterNo)})` : row.meterId} failed after ${attempts} attempts. Last error: ${lastError}`
       );
       return;
     }

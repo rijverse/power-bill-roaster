@@ -227,6 +227,24 @@ describe('AlertDispatcherWorker retry semantics', () => {
     expect(adminSender.sendTelegram).toHaveBeenCalledTimes(1);
   });
 
+  it('masks account/meter numbers in the operator dead-letter ping', async () => {
+    // The meter's raw account (12345678) and meter (87654321) numbers are PII;
+    // the operator message must not carry them in cleartext.
+    const row = makePending({ id: 25, attempts: 4 });
+    const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
+    const dispatchAlert = jest.fn().mockResolvedValue({ delivered: [], failed: ['telegram'] });
+    const adminSender = {
+      sendTelegram: jest.fn(async (_chatId: number, _msg: string) => undefined),
+    };
+    await workerWith(db, dispatchAlert, { adminSender, adminChatId: 555 }).tick();
+
+    const msg = adminSender.sendTelegram.mock.calls[0][1];
+    expect(msg).toContain('12****78'); // masked accountNo
+    expect(msg).toContain('87****21'); // masked meterNo
+    expect(msg).not.toContain('12345678');
+    expect(msg).not.toContain('87654321');
+  });
+
   it('retries the whole row when dispatchAlert throws unexpectedly', async () => {
     const row = makePending({ id: 24 });
     const db = makeFakeDb({ pendingRows: [row], user: aUser(), meter: aMeter() });
@@ -330,7 +348,7 @@ describe('AlertDispatcherWorker quiet hours', () => {
 });
 
 describe('logger PII masks', () => {
-  const { maskEmail, maskPhone, maskAccount } = require('../../logger');
+  const { maskEmail, maskPhone, maskAccount, maskMeterNo } = require('../../logger');
 
   it('masks email addresses', () => {
     expect(maskEmail('rijoanul.shanto@gmail.com')).toBe('ri***@gmail.com');
@@ -344,5 +362,9 @@ describe('logger PII masks', () => {
 
   it('masks account numbers keeping first 2 and last 2', () => {
     expect(maskAccount('13151091')).toBe('13****91');
+  });
+
+  it('masks meter numbers keeping first 2 and last 2', () => {
+    expect(maskMeterNo('87654321')).toBe('87****21');
   });
 });

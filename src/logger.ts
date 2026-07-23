@@ -37,6 +37,14 @@ export function maskAccount(value: string): string {
   return `${value.slice(0, 2)}${'*'.repeat(Math.max(0, value.length - 4))}${value.slice(-2)}`;
 }
 
+// Meter numbers are the same shape as account numbers (long digit strings that
+// identify a customer's connection), so they get the same masking. Separate
+// function so call sites read clearly instead of misusing maskAccount for both.
+export function maskMeterNo(value: string): string {
+  if (value.length <= 4) return '****';
+  return `${value.slice(0, 2)}${'*'.repeat(Math.max(0, value.length - 4))}${value.slice(-2)}`;
+}
+
 // keep host + webhook id (useful for correlating), drop the secret token segment
 export function maskWebhookUrl(value: string): string {
   const m = value.match(/^https:\/\/(discord(?:app)?\.com)\/api\/webhooks\/(\d+)\/.+$/);

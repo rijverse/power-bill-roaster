@@ -115,7 +115,7 @@ const PRIVACY_TEXT = [
   '*What I store:* your Telegram chat id, the account & meter numbers you register, the balance history I read for them, and any alert channel you add (e.g. a Discord webhook URL - /delete removes it).',
   '*Why:* that is literally the product - I cannot watch a balance without them.',
   '*What I never do:* sell or share your data, message anyone but you, or store DESCO credentials (there are none - balances are read with just the account/meter numbers).',
-  '*Leaving:* /stop pauses all monitoring immediately. /delete erases your account and every byte of your data - no questions, no email required.',
+  '*Leaving:* /stop pauses all monitoring immediately. /delete erases your account and all monitoring data we hold - no questions, no email required. We retain a brief internal audit log of operator actions (e.g. a plan grant) for accountability; it carries no balance or meter data.',
   '',
   '_Power Roast is an independent project, not affiliated with DESCO._',
 ].join('\n');
@@ -607,7 +607,7 @@ export function createBot(
         await ctx.reply('Payment is pending - I will confirm once it clears.');
       }
     } catch (error) {
-      console.error('Upgrade failed:', error);
+      logger.error('Upgrade failed', error);
       await ctx.reply(
         "Couldn't reach the payment gateway just now. Give it a minute and try /upgrade again."
       );
@@ -699,7 +699,7 @@ export function createBot(
       await smsGateway.send(phone, `PowerRoast verification code: ${code}`);
     } catch (error) {
       pendingSms.delete(ctx.chat.id);
-      console.error('OTP send failed:', error);
+      logger.error('OTP send failed', error);
       await ctx.reply("Couldn't reach that number right now. Check it and try again in a bit.");
       return;
     }

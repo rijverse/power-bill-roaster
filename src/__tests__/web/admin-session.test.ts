@@ -6,6 +6,7 @@ import {
   verifyCsrf,
   readCookie,
   sessionCookie,
+  adminCookieName,
   ADMIN_COOKIE,
 } from '../../web/admin-session';
 
@@ -72,16 +73,20 @@ describe('cookie helpers', () => {
     expect(readCookie(req, ADMIN_COOKIE)).toBeNull();
   });
 
-  it('serializes a hardened session cookie', () => {
+  it('serializes a hardened session cookie with __Host- prefix over HTTPS', () => {
     const c = sessionCookie('tok', true);
-    expect(c).toContain(`${ADMIN_COOKIE}=tok`);
+    expect(c).toContain(`${adminCookieName(true)}=tok`);
     expect(c).toContain('HttpOnly');
     expect(c).toContain('SameSite=Strict');
-    expect(c).toContain('Path=/admin');
+    expect(c).toContain('Path=/');
     expect(c).toContain('Secure');
   });
 
-  it('omits Secure when not served over https', () => {
-    expect(sessionCookie('tok', false)).not.toContain('Secure');
+  it('uses the plain name and scoped path over HTTP (dev)', () => {
+    const c = sessionCookie('tok', false);
+    expect(c).toContain(`${ADMIN_COOKIE}=tok`);
+    expect(c).toContain('Path=/admin');
+    expect(c).not.toContain('Secure');
+    expect(c).not.toContain('__Host-');
   });
 });

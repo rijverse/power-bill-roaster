@@ -16,7 +16,7 @@ export function dashboardHtml(nonce: string, token: string): string {
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script nonce="${nonce}">
-const token = ${JSON.stringify(token)};
+const token = ${JSON.stringify(token).replace(/</g, '\\u003c')};
 ${CLIENT_HELPERS}
 ${CHART_SCRIPT}
 

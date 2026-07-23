@@ -272,7 +272,7 @@ function renderRevenue() {
     try { const r = await postAdmin('/poll'); pollMsg.textContent = r.alreadyRunning ? 'A cycle is already running.' : 'Poll cycle started.'; } catch (e) { pollMsg.textContent = e.message; }
   };
   host.querySelector('#requeueAll').onclick = async () => {
-    try { await postAdmin('/alerts/requeue-all'); loadDeadLetters(); } catch (e) { const b = host.querySelector('#deadBody'); if (b) b.innerHTML = '<div class="pr-empty" style="padding:12px 0">' + e.message + '</div>'; }
+    try { await postAdmin('/alerts/requeue-all'); loadDeadLetters(); } catch (e) { const b = host.querySelector('#deadBody'); if (b) b.innerHTML = '<div class="pr-empty" style="padding:12px 0">' + esc(e.message) + '</div>'; }
   };
   loadDeadLetters();
 }
@@ -286,7 +286,7 @@ async function loadDeadLetters() {
     '<button class="pr-btn ghost sm dlq" type="button" data-id="' + r.id + '">Requeue</button></div>'
   ).join('') + '</div>';
   box.querySelectorAll('.dlq').forEach(b => b.onclick = async () => {
-    try { await postAdmin('/alerts/' + b.dataset.id + '/requeue'); loadDeadLetters(); } catch (e) { box.innerHTML = '<div class="pr-empty" style="padding:12px 0">' + e.message + '</div>'; }
+    try { await postAdmin('/alerts/' + b.dataset.id + '/requeue'); loadDeadLetters(); } catch (e) { box.innerHTML = '<div class="pr-empty" style="padding:12px 0">' + esc(e.message) + '</div>'; }
   });
 }
 function relWhen(t) {

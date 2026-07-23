@@ -6,10 +6,17 @@ export class EmailService {
   private transporter: nodemailer.Transporter;
 
   constructor(private email: EmailConfig) {
+    const secure = email.port === 465;
+    const isLocalhost =
+      email.host === 'localhost' || email.host === '127.0.0.1' || email.host === '::1';
     this.transporter = nodemailer.createTransport({
       host: email.host,
       port: email.port,
-      secure: email.port === 465,
+      secure,
+      // Force STARTTLS on 587/25 for remote hosts: without it a MITM can strip
+      // the STARTTLS ad and carry alert emails in cleartext. No-op on 465
+      // (implicit TLS). Localhost (Mailpit, a trusted local relay) is exempted.
+      requireTLS: !secure && !isLocalhost,
       auth: {
         user: email.user,
         pass: email.pass,

@@ -19,21 +19,30 @@ import {
 // signed-token.ts). readCookie is shared from admin-session.
 
 export const USER_COOKIE = 'pr_user';
+// __Host- requires Secure (can't be set over dev HTTP), so the prefix and
+// Path=/ widening apply only on HTTPS. See adminCookieName for the same shape.
+export function userCookieName(secure: boolean): string {
+  return secure ? `__Host-${USER_COOKIE}` : USER_COOKIE;
+}
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAGIC_TTL_MS = 20 * 60 * 1000;
 const LINK_TTL_MS = 15 * 60 * 1000;
 
-const USER_COOKIE_SPEC: CookieSpec = {
-  name: USER_COOKIE,
-  path: '/app',
-  // Lax, not Strict: the cookie is set on the magic-link GET and must survive
-  // the cross-site-initiated redirect to /app (webmail clicks are cross-site
-  // navigations - Strict would withhold it and the login page would re-render).
-  // Lax still keeps the cookie off all cross-site subresource/POST requests.
-  // This asymmetry with the admin cookie is deliberate; don't "unify" it.
-  sameSite: 'Lax',
-  ttlMs: SESSION_TTL_MS,
-};
+function userCookieSpec(secure: boolean): CookieSpec {
+  return {
+    name: userCookieName(secure),
+    // __Host- requires Path=/; the scoped /app path only applies to the
+    // plain-name dev cookie.
+    path: secure ? '/' : '/app',
+    // Lax, not Strict: the cookie is set on the magic-link GET and must survive
+    // the cross-site-initiated redirect to /app (webmail clicks are cross-site
+    // navigations - Strict would withhold it and the login page would re-render).
+    // Lax still keeps the cookie off all cross-site subresource/POST requests.
+    // This asymmetry with the admin cookie is deliberate; don't "unify" it.
+    sameSite: 'Lax',
+    ttlMs: SESSION_TTL_MS,
+  };
+}
 
 export function signMagicLink(
   email: string,
@@ -162,5 +171,5 @@ export function userCookie(
   secure: boolean,
   maxAgeSec = SESSION_TTL_MS / 1000
 ): string {
-  return buildCookie(USER_COOKIE_SPEC, value, secure, maxAgeSec);
+  return buildCookie(userCookieSpec(secure), value, secure, maxAgeSec);
 }

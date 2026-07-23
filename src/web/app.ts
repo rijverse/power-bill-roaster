@@ -19,7 +19,7 @@ import { setTone } from '../core/meter-usecases';
 import { SubscriptionService } from '../billing';
 import { getProvider } from '../providers';
 import { connectDiscordWebhook } from '../core/discord-connect';
-import { maskWebhookUrl } from '../logger';
+import { logger, maskWebhookUrl } from '../logger';
 import { dashboardData } from './queries';
 import {
   clientIp,
@@ -34,7 +34,7 @@ import {
 import { readCookie } from './admin-session';
 import { appShellHtml, loginHtml } from './app-html';
 import {
-  USER_COOKIE,
+  userCookieName,
   signMagicLink,
   verifyMagicLink,
   magicCode,
@@ -422,7 +422,7 @@ async function checkout(
     const result = await subscriptions.startUpgrade(user, plan);
     return { status: 200, body: { ...result, plan } };
   } catch (error) {
-    console.error('Checkout failed:', error);
+    logger.error('Checkout failed', error);
     return { status: 502, body: { error: "Couldn't start checkout. Try again in a bit." } };
   }
 }
@@ -581,7 +581,7 @@ export async function handleAppRequest(
 
   const secret = config.dashboardSecret;
   const secure = config.publicBaseUrl.startsWith('https');
-  const cookie = readCookie(req, USER_COOKIE) ?? '';
+  const cookie = readCookie(req, userCookieName(secure)) ?? '';
   const userId = verifyUserSession(cookie, secret);
   const authed = userId !== null;
   const method = req.method ?? 'GET';
@@ -622,7 +622,7 @@ export async function handleAppRequest(
         magicCode(email, secret)
       );
     } catch (error) {
-      console.error('Magic-link send failed:', error);
+      logger.error('Magic-link send failed', error);
       redirect(res, '/app?status=sendfailed');
       return true;
     }

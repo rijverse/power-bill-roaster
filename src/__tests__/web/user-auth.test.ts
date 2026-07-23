@@ -10,6 +10,7 @@ import {
   csrfFor,
   verifyCsrf,
   userCookie,
+  userCookieName,
   USER_COOKIE,
 } from '../../web/user-auth';
 
@@ -110,9 +111,9 @@ describe('csrf + cookie', () => {
     expect(verifyCsrf(session, 'nope', SECRET)).toBe(false);
   });
 
-  it('builds a hardened, /app-scoped cookie', () => {
+  it('builds a hardened cookie with __Host- prefix over HTTPS', () => {
     const c = userCookie('tok', true);
-    expect(c).toContain(`${USER_COOKIE}=tok`);
+    expect(c).toContain(`${userCookieName(true)}=tok`);
     expect(c).toContain('HttpOnly');
     // Lax, NOT Strict: the magic-link flow sets this cookie on a cross-site
     // navigation (a click in webmail) and immediately redirects to /app -
@@ -120,8 +121,15 @@ describe('csrf + cookie', () => {
     // land back on the login page. Regression guard for the sign-in flow.
     expect(c).toContain('SameSite=Lax');
     expect(c).not.toContain('SameSite=Strict');
-    expect(c).toContain('Path=/app');
+    expect(c).toContain('Path=/');
     expect(c).toContain('Secure');
-    expect(userCookie('tok', false)).not.toContain('Secure');
+  });
+
+  it('uses the plain name and /app path over HTTP (dev)', () => {
+    const c = userCookie('tok', false);
+    expect(c).toContain(`${USER_COOKIE}=tok`);
+    expect(c).toContain('Path=/app');
+    expect(c).not.toContain('Secure');
+    expect(c).not.toContain('__Host-');
   });
 });

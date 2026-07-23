@@ -37,6 +37,7 @@ describe('EmailService', () => {
       host: 'smtp.test.com',
       port: 587,
       secure: false,
+      requireTLS: true,
       auth: {
         user: 'user@test.com',
         pass: 'password',
@@ -47,6 +48,14 @@ describe('EmailService', () => {
     });
   });
 
+  it('should exempt localhost from requireTLS (Mailpit has no STARTTLS)', () => {
+    email.host = 'localhost';
+    new EmailService(email);
+    expect(mockCreateTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ requireTLS: false })
+    );
+  });
+
   it('should use secure connection for port 465', () => {
     email.port = 465;
     new EmailService(email);
@@ -54,6 +63,7 @@ describe('EmailService', () => {
     expect(mockCreateTransport).toHaveBeenCalledWith(
       expect.objectContaining({
         secure: true,
+        requireTLS: false,
       })
     );
   });

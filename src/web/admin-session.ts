@@ -14,6 +14,13 @@ import {
 // password and every outstanding cookie stops verifying.
 
 export const ADMIN_COOKIE = 'pr_admin';
+// The __Host- prefix (Secure + Path=/ + no Domain) stops a vulnerable subdomain
+// from injecting a cookie that shadows this one, but the prefix rules require
+// Secure, which can't be set over dev HTTP. So the name and path widen only on
+// HTTPS deploys; over HTTP the plain name + scoped path keep dev login working.
+export function adminCookieName(secure: boolean): string {
+  return secure ? `__Host-${ADMIN_COOKIE}` : ADMIN_COOKIE;
+}
 // Short TTL for a panel that exposes customer PII: the session is stateless, so
 // logout can't revoke a stolen cookie - a tight window is the next best thing.
 // Operators re-authenticate daily.
@@ -23,14 +30,18 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const SESSION_NS = '';
 const CSRF_NS = 'csrf';
 
-const ADMIN_COOKIE_SPEC: CookieSpec = {
-  name: ADMIN_COOKIE,
-  path: '/admin',
-  // Strict, unlike the customer cookie: nothing legitimately navigates into
-  // /admin from another site, so there's no reason to relax it.
-  sameSite: 'Strict',
-  ttlMs: SESSION_TTL_MS,
-};
+function adminCookieSpec(secure: boolean): CookieSpec {
+  return {
+    name: adminCookieName(secure),
+    // __Host- requires Path=/; the scoped /admin path only applies to the
+    // plain-name dev cookie.
+    path: secure ? '/' : '/admin',
+    // Strict, unlike the customer cookie: nothing legitimately navigates into
+    // /admin from another site, so there's no reason to relax it.
+    sameSite: 'Strict',
+    ttlMs: SESSION_TTL_MS,
+  };
+}
 
 export function signAdminSession(
   secret: string,
@@ -81,5 +92,5 @@ export function sessionCookie(
   secure: boolean,
   maxAgeSec = SESSION_TTL_MS / 1000
 ): string {
-  return buildCookie(ADMIN_COOKIE_SPEC, value, secure, maxAgeSec);
+  return buildCookie(adminCookieSpec(secure), value, secure, maxAgeSec);
 }

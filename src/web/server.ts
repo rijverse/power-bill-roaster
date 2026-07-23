@@ -18,6 +18,7 @@ import { RateLimiter } from '../core/rate-limiter';
 import { handleDiscordInteraction, DiscordInteractionDeps } from '../discord/interactions';
 import { json, readBody } from './http-utils';
 import { pollIsStale } from '../core/health';
+import { logger } from '../logger';
 
 // cap the db ping so a stalled connection doesn't make /health hang past
 // what an uptime monitor is willing to wait.
@@ -38,10 +39,17 @@ const APP_METER_WINDOW_MS = 10 * 60 * 1000;
 const ADMIN_RECHECKS = 10;
 const ADMIN_RECHECK_WINDOW_MS = 10 * 60 * 1000;
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   return s.replace(
-    /[&<>"]/g,
-    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c
+    /[&<>"']/g,
+    c =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      })[c] ?? c
   );
 }
 
@@ -50,8 +58,10 @@ function escapeHtml(s: string): string {
  * panel (customer PII), the customer app, and the token-bearing dashboard links
  * all get them. Inline scripts need the per-request nonce; styles stay
  * 'unsafe-inline' because the pages lean on style="" attributes, which nonces
- * can't cover. The jsdelivr Chart.js CDN and Google Fonts (Inter + JetBrains
- * Mono) are allow-listed because every page relies on them; everything else is
+ * can't cover. The jsdelivr script-src is pinned to the exact Chart.js bundle
+ * every page loads (not the whole CDN), so a stored-XSS payload can't pull an
+ * arbitrary jsdelivr script. Google Fonts (Inter + JetBrains Mono) are
+ * allow-listed because every page relies on them; everything else is
  * same-origin only, framing is denied (clickjacking), and X-Robots-Tag keeps
  * these pages - and the auth tokens in their URLs - out of search engines.
  */
@@ -60,7 +70,7 @@ function applySecurityHeaders(res: http.ServerResponse, secure: boolean, nonce: 
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
+      `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js`,
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data:",
       "connect-src 'self'",
@@ -336,7 +346,7 @@ export function createWebServer(
 
       res.writeHead(404).end();
     })().catch((error: unknown) => {
-      console.error('Web request failed:', error);
+      logger.error('Web request failed', error);
       if (!res.headersSent) {
         json(res, 500, { error: 'Something broke on our side.' });
       }

@@ -32,11 +32,11 @@ import {
 } from '../core/plans';
 import { getProvider, ProviderUnavailableError } from '../providers';
 import { dashboardData } from './queries';
-import { maskWebhookUrl } from '../logger';
+import { logger, maskWebhookUrl } from '../logger';
 import { clientIp, csrfHeader, html, isMutating, json, readBody, redirect } from './http-utils';
 import { adminAppHtml, adminLoginHtml } from './admin-html';
 import {
-  ADMIN_COOKIE,
+  adminCookieName,
   signAdminSession,
   verifyAdminSession,
   verifyCsrf,
@@ -669,7 +669,7 @@ async function recordAudit(
   try {
     await db.insert(schema.adminAudit).values({ action, targetUserId, ip, detail });
   } catch (error) {
-    console.error('admin audit write failed:', error);
+    logger.error('admin audit write failed', error);
   }
 }
 
@@ -730,7 +730,7 @@ export async function handleAdminRequest(
 
   const secret = config.adminSessionSecret;
   const secure = config.publicBaseUrl.startsWith('https');
-  const cookie = readCookie(req, ADMIN_COOKIE) ?? '';
+  const cookie = readCookie(req, adminCookieName(secure)) ?? '';
   const authed = verifyAdminSession(cookie, secret);
   const method = req.method ?? 'GET';
 

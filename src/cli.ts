@@ -33,7 +33,7 @@ async function deliver(channel: Channel): Promise<boolean> {
   }
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   try {
     const config = getConfig();
     const descoApi = new DescoApiClient();
@@ -113,4 +113,8 @@ async function main(): Promise<void> {
   }
 }
 
-void main();
+// auto-run only when executed directly (node dist/cli.js / tsx src/cli.ts),
+// not when imported by a test.
+if (require.main === module) {
+  void main();
+}

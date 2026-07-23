@@ -75,6 +75,19 @@ test; `__tests__/helpers/http-server.ts` is the place to do it.
 - **A late-landing send after a timeout isn't cancelled.** `withTimeout` stops
   _waiting_, it doesn't abort the transport. That's fine: the row is retried, and
   the delivered-key ledger stops the same channel being sent twice.
+- **`grammy` pulls `node-fetch@2.7.0` (EOL).** grammy's HTTP transport depends on
+  node-fetch 2.x, which only receives critical fixes. No app code imports it
+  directly. Track upstream; a grammy 3.x using native fetch is the eventual fix.
+- **`/delete` retains an internal audit log.** `admin_audit` rows (operator
+  actions: grant/pause/erase with a free-text reason) survive `/delete` by
+  design - `target_user_id` is a plain column, not an FK, so erasure doesn't
+  cascade. The `/privacy` text discloses this; it carries no balance or meter
+  data.
+- **`__Host-` cookie prefix only under HTTPS.** The prefix requires `Secure`,
+  which can't be set over dev HTTP, so the cookie name is `__Host-pr_admin` in
+  prod and `pr_admin` in dev (`adminCookieName(secure)`). The session is
+  HMAC-signed regardless, so cookie injection from a subdomain can't forge a
+  valid token.
 
 ## Invariants the tests now hold
 
@@ -94,4 +107,10 @@ would plausibly break. If one starts failing, read it before you "fix" it.
 | `web/admin-hash.test.ts`                    | The client parser shipped to the browser agrees with the server parser, input for input.                                                                                                                         |
 | `db/ownership.test.ts`                      | A new table that FKs `users`/`meters` can't be forgotten by `eraseUser`/`mergeAccounts`. Also pins the `users` column set: reflection can't tell you a new identity column needs handling in `mergedIdentity()`. |
 | `db/migrations.test.ts`                     | An applied migration is never edited.                                                                                                                                                                            |
+| `scripts/check-additive-migrations.test.ts` | A non-additive migration (DROP/ALTER/RENAME) fails CI before prod.                                                                                                                                               |
 | `web/health.test.ts`                        | `/health` actually goes red when the DB is down or the poll loop stops.                                                                                                                                          |
+| `web/security-headers.test.ts`              | The CSP pins the exact Chart.js bundle, not the whole jsdelivr CDN.                                                                                                                                              |
+| `web/html-escaping.test.ts`                 | A crafted dashboard token can't break out of the script context (`</script>` escaped).                                                                                                                           |
+| `no-console.test.ts`                        | Production source uses the PII-masking logger, never `console.*` directly.                                                                                                                                       |
+| `billing/subscriptions.test.ts`             | `expireOverdue` rolls back all three writes if the meter cap throws (no half-applied downgrade).                                                                                                                 |
+| `cli.test.ts`                               | The CLI exits 1 only on total channel wipeout, and its threshold classify order is pinned.                                                                                                                       |

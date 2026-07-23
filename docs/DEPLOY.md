@@ -373,3 +373,28 @@ Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment
 - **Need to scrub PII from logs**: stdout is masked by the in-process logger
   (emails, phones, account/meter numbers). For log shippers (Datadog, etc.),
   add a redaction processor at the agent level.
+
+## 10. Security hardening (prod)
+
+The production compose (`docker-compose.prod.yml`) runs the container hardened:
+
+- **Read-only filesystem** (`read_only: true` with a `/tmp` tmpfs). The app
+  writes nothing to disk at runtime; logs go to stdout, data to Postgres.
+- **All Linux capabilities dropped** (`cap_drop: [ALL]`), no privilege
+  escalation (`no-new-privileges`), and resource limits (`mem_limit: 512m`,
+  `cpus: 1.0`, `pids_limit: 200`).
+- **`__Host-` cookie prefix** under HTTPS. Session cookies are named
+  `__Host-pr_admin` / `__Host-pr_user` (requires `Secure` + `Path=/`), so a
+  vulnerable subdomain can't inject a cookie that shadows the session.
+  Over dev HTTP the plain names apply (the prefix requires `Secure`).
+- **SMTP STARTTLS required** on port 587/25. A network MITM can't strip the
+  `STARTTLS` ad and carry magic links / alert bodies in cleartext.
+- **Billing gateway URLs must be `https`** (or `http://localhost` for a local
+  sandbox). A misconfigured `http://` gateway would leak credentials.
+- **CSP pins the exact Chart.js bundle**, not the whole `cdn.jsdelivr.net`
+  origin, so a stored-XSS payload can't pull an arbitrary jsdelivr script.
+- **Backup retention vs erasure**: `/delete` is a hard delete against the live
+  DB. An `admin_audit` trail of operator actions is intentionally retained
+  (disclosed in the `/privacy` text). If you restore a managed-DB backup
+  (Neon, RDS), deleted users can reappear — set a backup-retention window
+  consistent with your erasure obligations.

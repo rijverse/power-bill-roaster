@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from '../core/http';
+import { logger } from '../logger';
 import { CheckoutSession, PaymentProvider, PaymentStatus } from './types';
 
 export interface BkashConfig {
@@ -94,7 +95,7 @@ export class BkashProvider implements PaymentProvider {
       }
       execStatus = exec.transactionStatus;
     } catch (error) {
-      console.error('bKash execute failed, falling back to status query:', error);
+      logger.error('bKash execute failed, falling back to status query', error);
     }
 
     const status: StatusResponse = await this.authedPost('/tokenized/checkout/payment/status', {
@@ -117,6 +118,10 @@ export class BkashProvider implements PaymentProvider {
       },
       body: JSON.stringify({ app_key: this.config.appKey, app_secret: this.config.appSecret }),
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`bKash token grant returned ${res.status}: ${text.slice(0, 200)}`);
+    }
     const body = (await res.json()) as GrantTokenResponse;
     if (!body.id_token) {
       throw new Error(`bKash token grant failed: ${body.statusMessage ?? JSON.stringify(body)}`);
@@ -140,6 +145,10 @@ export class BkashProvider implements PaymentProvider {
       },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`bKash ${path} returned ${res.status}: ${text.slice(0, 200)}`);
+    }
     return (await res.json()) as T;
   }
 }

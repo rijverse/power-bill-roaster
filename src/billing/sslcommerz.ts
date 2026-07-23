@@ -72,6 +72,10 @@ export class SslcommerzProvider implements PaymentProvider {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
     });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`SSLCommerz session returned ${res.status}: ${text.slice(0, 200)}`);
+    }
     const body = (await res.json()) as SessionResponse;
     if (body.status !== 'SUCCESS' || !body.GatewayPageURL) {
       throw new Error(`SSLCommerz session failed: ${body.failedreason ?? JSON.stringify(body)}`);
@@ -87,6 +91,10 @@ export class SslcommerzProvider implements PaymentProvider {
       `&store_passwd=${encodeURIComponent(this.config.storePassword)}` +
       `&v=1&format=json`;
     const res = await fetchWithTimeout(url);
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`SSLCommerz validation returned ${res.status}: ${text.slice(0, 200)}`);
+    }
     const body = (await res.json()) as ValidationResponse;
     const status = body.element?.[0]?.status;
     return mapSslcommerzStatus(status);

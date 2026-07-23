@@ -90,32 +90,34 @@ async function main(): Promise<void> {
       await discordDm.sendDm(user.discordUserId, embed);
     }
   };
-  subscriptions.notifyDowngrade = async (user, expiredPlan, pausedMeters) => {
-    const pausedNote =
-      pausedMeters > 0
-        ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
-        : '';
-    await notifyPlanChange(
-      user,
-      `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
-      {
-        title: '⏳ Plan expired',
-        description: `Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
-        color: 0xed4245, // red, matching COLOR.critical in the Discord bot
-      }
-    );
-  };
-  subscriptions.notifyUpgrade = async (user, plan) => {
-    await notifyPlanChange(
-      user,
-      `✅ Payment confirmed - you're on *${plan}* now. Add a phone for SMS alerts with /sms <number>.`,
-      {
-        title: '✅ Payment confirmed',
-        description: `You're on **${plan}** now. Add a phone for SMS alerts with /sms.`,
-        color: 0x3ba55d, // green, matching COLOR.ok in the Discord bot
-      }
-    );
-  };
+  subscriptions.setHooks({
+    notifyDowngrade: async (user, expiredPlan, pausedMeters) => {
+      const pausedNote =
+        pausedMeters > 0
+          ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
+          : '';
+      await notifyPlanChange(
+        user,
+        `⏳ Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
+        {
+          title: '⏳ Plan expired',
+          description: `Your ${expiredPlan} plan expired, so you're back on free.${pausedNote}`,
+          color: 0xed4245, // red, matching COLOR.critical in the Discord bot
+        }
+      );
+    },
+    notifyUpgrade: async (user, plan) => {
+      await notifyPlanChange(
+        user,
+        `✅ Payment confirmed - you're on *${plan}* now. Add a phone for SMS alerts with /sms <number>.`,
+        {
+          title: '✅ Payment confirmed',
+          description: `You're on **${plan}** now. Add a phone for SMS alerts with /sms.`,
+          color: 0x3ba55d, // green, matching COLOR.ok in the Discord bot
+        }
+      );
+    },
+  });
 
   const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer, discordDm);
   // outbox drain worker - flips rows to 'sent' / 'failed' and pings admin on

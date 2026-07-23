@@ -64,3 +64,34 @@ describe('init migration (squashed pre-launch)', () => {
     expect(sql).toMatch(/"telegram_chat_id" bigint/);
   });
 });
+
+describe('add_indexes migration', () => {
+  it('indexes every hot path the dispatcher and admin queries hit', () => {
+    const entries = readJournal();
+    const addIndexes = entries.find(e => e.tag.endsWith('_add_indexes'));
+    expect(addIndexes).toBeDefined();
+    const sql = fs.readFileSync(path.join(DRIZZLE_DIR, `${addIndexes!.tag}.sql`), 'utf-8');
+
+    // alerts_log: append-only, scanned by admin overview ($count sentAt >= dayAgo),
+    // the 24h delivery counts ($count deliveryStatus+sentAt), the deliveries list
+    // (ORDER BY sentAt, join on meterId), and the per-alert SMS budget $count.
+    expect(sql).toMatch(
+      /CREATE INDEX "alerts_log_sent_at_idx" ON "alerts_log" USING btree \("sent_at"\)/
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "alerts_log_status_sent_idx" ON "alerts_log" USING btree \("delivery_status","sent_at"\)/
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "alerts_log_meter_idx" ON "alerts_log" USING btree \("meter_id"\)/
+    );
+    // channels: dispatcher loads a user's channels WHERE user_id = ? per alert.
+    expect(sql).toMatch(/CREATE INDEX "channels_user_idx" ON "channels" USING btree \("user_id"\)/);
+    // subscriptions: activeFor (user_id, status) and expireOverdue (status, period_end).
+    expect(sql).toMatch(
+      /CREATE INDEX "subscriptions_user_status_idx" ON "subscriptions" USING btree \("user_id","status"\)/
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "subscriptions_status_period_end_idx" ON "subscriptions" USING btree \("status","current_period_end"\)/
+    );
+  });
+});

@@ -39,6 +39,30 @@ export const users = pgTable(
   ]
 );
 
+// A user's login identities, one row per provider they've connected. This is
+// the normalized replacement for the telegram_chat_id / discord_user_id / email
+// columns above (kept dual-written until the readers are ported, then dropped).
+// provider_uid is the provider's own id: the telegram chat id as text, the
+// Discord snowflake, or lower(email). Two uniques: the identity is globally
+// unique (provider + uid), and a user holds at most one identity per provider.
+export const identities = pgTable(
+  'identities',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    provider: text('provider').notNull(), // telegram | discord | email (+ future oauth)
+    providerUid: text('provider_uid').notNull(),
+    verified: boolean('verified').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [
+    uniqueIndex('identities_provider_uid_idx').on(table.provider, table.providerUid),
+    uniqueIndex('identities_user_provider_idx').on(table.userId, table.provider),
+  ]
+);
+
 export const meters = pgTable(
   'meters',
   {
@@ -99,44 +123,63 @@ export const alertState = pgTable('alert_state', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const channels = pgTable('channels', {
-  id: serial('id').primaryKey(),
-  userId: integer('user_id')
-    .notNull()
-    .references(() => users.id),
-  type: text('type').notNull(), // telegram | email | sms | discord (webhook) | discord-dm
-  address: text('address').notNull(), // chat id, email, phone, webhook URL, or discord user id
-  verified: boolean('verified').notNull().default(false),
-  enabled: boolean('enabled').notNull().default(true),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const channels = pgTable(
+  'channels',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    type: text('type').notNull(), // telegram | email | sms | discord (webhook) | discord-dm
+    address: text('address').notNull(), // chat id, email, phone, webhook URL, or discord user id
+    verified: boolean('verified').notNull().default(false),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [index('channels_user_idx').on(table.userId)]
+);
 
-export const alertsLog = pgTable('alerts_log', {
-  id: serial('id').primaryKey(),
-  meterId: integer('meter_id')
-    .notNull()
-    .references(() => meters.id),
-  channelId: integer('channel_id').references(() => channels.id),
-  level: text('level').notNull(),
-  action: text('action').notNull(),
-  deliveryStatus: text('delivery_status').notNull(),
-  sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const alertsLog = pgTable(
+  'alerts_log',
+  {
+    id: serial('id').primaryKey(),
+    meterId: integer('meter_id')
+      .notNull()
+      .references(() => meters.id),
+    channelId: integer('channel_id').references(() => channels.id),
+    level: text('level').notNull(),
+    action: text('action').notNull(),
+    deliveryStatus: text('delivery_status').notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [
+    index('alerts_log_sent_at_idx').on(table.sentAt),
+    index('alerts_log_status_sent_idx').on(table.deliveryStatus, table.sentAt),
+    index('alerts_log_meter_idx').on(table.meterId),
+  ]
+);
 
-export const subscriptions = pgTable('subscriptions', {
-  id: serial('id').primaryKey(),
-  userId: integer('user_id')
-    .notNull()
-    .references(() => users.id),
-  plan: text('plan').notNull(), // plus | business
-  provider: text('provider').notNull(), // sandbox | bkash | sslcommerz | manual
-  status: text('status').notNull().default('pending'), // pending | active | cancelled | expired
-  externalRef: text('external_ref'), // provider-side payment/agreement id
-  currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
-  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const subscriptions = pgTable(
+  'subscriptions',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    plan: text('plan').notNull(), // plus | business
+    provider: text('provider').notNull(), // sandbox | bkash | sslcommerz | manual
+    status: text('status').notNull().default('pending'), // pending | active | cancelled | expired
+    externalRef: text('external_ref'), // provider-side payment/agreement id
+    currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [
+    index('subscriptions_user_status_idx').on(table.userId, table.status),
+    index('subscriptions_status_period_end_idx').on(table.status, table.currentPeriodEnd),
+  ]
+);
 
 // Immutable money ledger: one row per confirmed payment. Subscriptions track
 // state; this table is the record for reconciliation and disputes. The unique
@@ -211,6 +254,7 @@ export const pendingAlerts = pgTable(
 );
 
 export type User = typeof users.$inferSelect;
+export type Identity = typeof identities.$inferSelect;
 export type Meter = typeof meters.$inferSelect;
 export type Reading = typeof readings.$inferSelect;
 export type AlertStateRow = typeof alertState.$inferSelect;

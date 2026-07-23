@@ -8,4 +8,12 @@ module.exports = {
   // Stop undici pooling a keep-alive socket per ephemeral test port - see the file.
   setupFilesAfterEnv: ['<rootDir>/src/__tests__/helpers/setup-fetch.ts'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/__tests__/**', '!src/**/index.ts'],
+  coverageThreshold: {
+    global: {
+      branches: 55,
+      functions: 70,
+      lines: 70,
+      statements: 70,
+    },
+  },
 };

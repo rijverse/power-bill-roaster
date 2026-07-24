@@ -6,7 +6,9 @@
 import fs from 'fs';
 import path from 'path';
 
-const DRIZZLE_DIR = path.join(__dirname, '..', 'drizzle');
+const DRIZZLE_DIR = process.env.DRIZZLE_DIR
+  ? path.resolve(process.env.DRIZZLE_DIR)
+  : path.join(__dirname, '..', 'drizzle');
 
 function listMigrationFiles(): string[] {
   return fs

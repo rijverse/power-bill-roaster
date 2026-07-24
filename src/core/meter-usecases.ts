@@ -42,6 +42,14 @@ export async function ensureUser(db: Db, identity: PlatformIdentity): Promise<sc
         : { discordUserId: identity.discordUserId }
     )
     .returning();
+  // The normalized identity row. Dual-written alongside the legacy users column
+  // above until the readers are ported off it.
+  await db.insert(schema.identities).values({
+    userId: user.id,
+    provider: identity.kind,
+    providerUid: identity.kind === 'telegram' ? String(identity.chatId) : identity.discordUserId,
+    verified: true,
+  });
   await db.insert(schema.channels).values({
     userId: user.id,
     type: identity.kind === 'telegram' ? 'telegram' : 'discord-dm',

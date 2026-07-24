@@ -88,11 +88,12 @@ describe('user-owned table registry', () => {
     }
   });
 
-  it('counts 11 foreign keys - a 12th forces a decision here', () => {
+  it('counts 12 foreign keys - a 13th forces a decision here', () => {
     // The old note said 7; it undercounted. Pinning the real number means a new
-    // FK anywhere in the schema trips this test and gets looked at.
+    // FK anywhere in the schema trips this test and gets looked at. (identities
+    // added the 12th, its user_id FK.)
     const total = tables().reduce((n, t) => n + foreignKeysOf(t.table).length, 0);
-    expect(total).toBe(11);
+    expect(total).toBe(12);
   });
 
   it('leaves admin_audit deliberately un-FK-ed, so it outlives an erased account', () => {

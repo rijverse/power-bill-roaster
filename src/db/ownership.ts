@@ -48,6 +48,10 @@ export const USER_OWNED: OwnedTable[] = [
   },
   { table: schema.meters, userId: schema.meters.userId, repointOnMerge: true },
   { table: schema.channels, userId: schema.channels.userId, repointOnMerge: true },
+  // Login identities. Merge repoints these itself (with same-provider collision
+  // resolution), so this entry drives eraseUser; nothing references identities,
+  // so its position among the user-keyed tables is free.
+  { table: schema.identities, userId: schema.identities.userId, repointOnMerge: true },
   // FKs users AND subscriptions, so it has to precede subscriptions.
   { table: schema.payments, userId: schema.payments.userId, repointOnMerge: true },
   { table: schema.subscriptions, userId: schema.subscriptions.userId, repointOnMerge: true },

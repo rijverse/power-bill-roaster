@@ -25,6 +25,16 @@ export interface AcctSummary {
   plan: string;
 }
 
+export interface LinkOptions {
+  /**
+   * Point an existing same-provider identity at the new uid instead of returning
+   * 'provider-conflict'. Only the email-change path wants this: swapping the
+   * address on an account is legitimate, whereas silently moving a telegram or
+   * discord link to a different id would hide a mistake.
+   */
+  replaceSameProvider?: boolean;
+}
+
 export type LinkResult =
   | { status: 'linked' }
   | { status: 'already' }
@@ -189,7 +199,8 @@ async function classifyExisting(
 export async function linkIdentity(
   db: Db,
   targetUserId: number,
-  input: LinkInput
+  input: LinkInput,
+  opts: LinkOptions = {}
 ): Promise<LinkResult> {
   const { provider, uid } = descriptorFor(input);
 
@@ -210,21 +221,30 @@ export async function linkIdentity(
     .where(
       and(eq(schema.identities.userId, targetUserId), eq(schema.identities.provider, provider))
     );
-  if (ownProvider) {
+  if (ownProvider && !opts.replaceSameProvider) {
     return { status: 'provider-conflict', existingUid: ownProvider.providerUid };
   }
 
-  try {
+  if (ownProvider) {
+    // Caller asked to replace: point the existing row at the new uid rather than
+    // refusing. Changing the account email is the flow this exists for.
     await db
-      .insert(schema.identities)
-      .values({ userId: targetUserId, provider, providerUid: uid, verified: true });
-  } catch {
-    // Lost a race to another link for the same identity - re-resolve.
-    const post = await classifyExisting(db, targetUserId, provider, uid);
-    if (post) {
-      return post;
+      .update(schema.identities)
+      .set({ providerUid: uid, verified: true })
+      .where(eq(schema.identities.id, ownProvider.id));
+  } else {
+    try {
+      await db
+        .insert(schema.identities)
+        .values({ userId: targetUserId, provider, providerUid: uid, verified: true });
+    } catch {
+      // Lost a race to another link for the same identity - re-resolve.
+      const post = await classifyExisting(db, targetUserId, provider, uid);
+      if (post) {
+        return post;
+      }
+      throw new Error('identity insert failed');
     }
-    throw new Error('identity insert failed');
   }
 
   await db

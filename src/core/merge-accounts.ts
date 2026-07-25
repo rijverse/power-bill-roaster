@@ -56,12 +56,28 @@ export function shadowedChannelIds(
   return loserChannels.filter(c => survivorKeys.has(channelKey(c))).map(c => c.id);
 }
 
-/** The survivor's post-merge identity: keep its own email/discord id, else inherit the loser's, and keep whichever plan is paid - so no login or paid plan is lost in a merge. */
+/** The survivor's post-merge identity: keep its own telegram/email/discord id, else inherit the loser's, and keep whichever plan is paid - so no login or paid plan is lost in a merge. */
 export function mergedIdentity(
-  survivor: { email: string | null; discordUserId: string | null; plan: string },
-  loser: { email: string | null; discordUserId: string | null; plan: string }
-): { email: string | null; discordUserId: string | null; plan: string } {
+  survivor: {
+    telegramChatId: number | null;
+    email: string | null;
+    discordUserId: string | null;
+    plan: string;
+  },
+  loser: {
+    telegramChatId: number | null;
+    email: string | null;
+    discordUserId: string | null;
+    plan: string;
+  }
+): {
+  telegramChatId: number | null;
+  email: string | null;
+  discordUserId: string | null;
+  plan: string;
+} {
   return {
+    telegramChatId: survivor.telegramChatId ?? loser.telegramChatId,
     email: survivor.email ?? loser.email,
     discordUserId: survivor.discordUserId ?? loser.discordUserId,
     plan: survivor.plan !== 'free' ? survivor.plan : loser.plan,
@@ -71,15 +87,14 @@ export function mergedIdentity(
 /**
  * Merge the loser account into the survivor: move meters (dropping duplicates the
  * survivor already has), channels, subscriptions, payments, and pending alerts,
- * then delete the loser and stamp the survivor with the linking Telegram chat id
- * (plus the loser's email/plan if the survivor lacked them). Finally re-applies
+ * then delete the loser and stamp the survivor with the merged identity columns
+ * (each login the survivor lacked is inherited from the loser). Finally re-applies
  * the survivor's meter cap. All the row moves run in one transaction.
  */
 export async function mergeAccounts(
   db: Db,
   survivorId: number,
-  loserId: number,
-  telegramChatId: number
+  loserId: number
 ): Promise<'merged' | 'missing'> {
   const outcome = await db.transaction(async tx => {
     const [survivor] = await tx.select().from(schema.users).where(eq(schema.users.id, survivorId));
@@ -152,7 +167,13 @@ export async function mergeAccounts(
       .set({ userId: survivorId })
       .where(eq(schema.pendingAlerts.userId, loserId));
 
-    const { email, discordUserId, plan } = mergedIdentity(survivor, loser);
+    const { telegramChatId, email, discordUserId, plan } = mergedIdentity(survivor, loser);
+    // The loser's identity rows FK users with ON DELETE no action, so they have
+    // to go before the user row (ownership.ts flags identities repointOnMerge -
+    // this is where merge honors it). We rebuild the survivor's rows from the
+    // merged columns below rather than repointing, since a same-provider
+    // collision would trip the (user_id, provider) unique.
+    await tx.delete(schema.identities).where(eq(schema.identities.userId, loserId));
     // Delete the loser first so its telegram_chat_id / discord_user_id /
     // lower(email) uniques are free before we stamp them onto the survivor.
     await tx.delete(schema.users).where(eq(schema.users.id, loserId));
@@ -160,6 +181,38 @@ export async function mergeAccounts(
       .update(schema.users)
       .set({ telegramChatId, discordUserId, email, plan })
       .where(eq(schema.users.id, survivorId));
+    // Keep the survivor's identity rows in step with the columns just stamped
+    // (the dual-write invariant): one row per provider it now has, right uid.
+    const wanted = [
+      telegramChatId !== null ? { provider: 'telegram', uid: String(telegramChatId) } : null,
+      discordUserId !== null ? { provider: 'discord', uid: discordUserId } : null,
+      email !== null ? { provider: 'email', uid: email.toLowerCase() } : null,
+    ].filter((x): x is { provider: string; uid: string } => x !== null);
+    const survivorIds = await tx
+      .select()
+      .from(schema.identities)
+      .where(eq(schema.identities.userId, survivorId));
+    for (const row of survivorIds) {
+      const want = wanted.find(w => w.provider === row.provider);
+      if (!want || want.uid !== row.providerUid) {
+        await tx.delete(schema.identities).where(eq(schema.identities.id, row.id));
+      }
+    }
+    const kept = new Set(
+      survivorIds
+        .filter(row => wanted.some(w => w.provider === row.provider && w.uid === row.providerUid))
+        .map(row => row.provider)
+    );
+    for (const w of wanted) {
+      if (!kept.has(w.provider)) {
+        await tx.insert(schema.identities).values({
+          userId: survivorId,
+          provider: w.provider,
+          providerUid: w.uid,
+          verified: true,
+        });
+      }
+    }
     return { status: 'merged' as const, plan };
   });
 

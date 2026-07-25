@@ -48,9 +48,12 @@ export const USER_OWNED: OwnedTable[] = [
   },
   { table: schema.meters, userId: schema.meters.userId, repointOnMerge: true },
   { table: schema.channels, userId: schema.channels.userId, repointOnMerge: true },
-  // Login identities. Merge repoints these itself (with same-provider collision
-  // resolution), so this entry drives eraseUser; nothing references identities,
-  // so its position among the user-keyed tables is free.
+  // Login identities. Merge does NOT repoint these row-for-row: it deletes the
+  // loser's and rebuilds the survivor's from the merged identity columns, because
+  // the (user_id, provider) unique makes a blind repoint collide whenever both
+  // sides hold the same provider. Flagged repointOnMerge because merge owns them
+  // (they must not outlive the loser); this entry also drives eraseUser. Nothing
+  // references identities, so its position among the user-keyed tables is free.
   { table: schema.identities, userId: schema.identities.userId, repointOnMerge: true },
   // FKs users AND subscriptions, so it has to precede subscriptions.
   { table: schema.payments, userId: schema.payments.userId, repointOnMerge: true },

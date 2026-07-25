@@ -3,14 +3,32 @@ import {
   partitionMeters,
   mergedIdentity,
   shadowedChannelIds,
+  mergeAccounts,
 } from '../../core/merge-accounts';
 import { enforceMeterCap } from '../../core/meter-cap';
-import { Db } from '../../db';
+import { Db, schema } from '../../db';
+import { USER_OWNED } from '../../db/ownership';
+import { getTableConfig } from 'drizzle-orm/pg-core';
 
-function fakeDb(activeMeters: { id: number }[]) {
+type Row = Record<string, unknown>;
+
+// enforceMeterCap reads the account's override before counting meters, so the
+// fake has to answer both selects: the users row, then the active meters.
+function fakeDb(activeMeters: { id: number }[], meterLimit: number | null = null) {
   let updated = false;
   const db = {
-    select: () => ({ from: () => ({ where: () => ({ orderBy: async () => activeMeters }) }) }),
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => {
+          const rows: unknown[] = table === schema.meters ? activeMeters : [{ meterLimit }];
+          const p = Promise.resolve(rows) as Promise<unknown[]> & {
+            orderBy: () => Promise<unknown[]>;
+          };
+          p.orderBy = async () => rows;
+          return p;
+        },
+      }),
+    }),
     update: () => ({
       set: () => ({
         where: async () => {
@@ -38,6 +56,18 @@ describe('enforceMeterCap', () => {
   it('keeps everything on an unlimited plan', async () => {
     const { db } = fakeDb([{ id: 1 }, { id: 2 }, { id: 3 }]);
     expect(await enforceMeterCap(db, 7, 'business')).toBe(0);
+  });
+
+  it('honors an operator override above the plan default', async () => {
+    // free caps at 1, but this account is comped to 3 - only the 4th is paused
+    const { db } = fakeDb([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }], 3);
+    expect(await enforceMeterCap(db, 7, 'free')).toBe(1);
+  });
+
+  it('honors an operator override below the plan default', async () => {
+    // business is unlimited, but this account is pinned to 1
+    const { db } = fakeDb([{ id: 1 }, { id: 2 }, { id: 3 }], 1);
+    expect(await enforceMeterCap(db, 7, 'business')).toBe(2);
   });
 });
 
@@ -85,23 +115,23 @@ describe('partitionMeters', () => {
 });
 
 describe('mergedIdentity', () => {
-  it('keeps the survivor email/discord id/plan when it has them', () => {
+  it('keeps the survivor telegram/email/discord id/plan when it has them', () => {
     expect(
       mergedIdentity(
-        { email: 'a@b.com', discordUserId: '111', plan: 'plus' },
-        { email: 'c@d.com', discordUserId: '222', plan: 'free' }
+        { telegramChatId: 10, email: 'a@b.com', discordUserId: '111', plan: 'plus' },
+        { telegramChatId: 20, email: 'c@d.com', discordUserId: '222', plan: 'free' }
       )
-    ).toEqual({ email: 'a@b.com', discordUserId: '111', plan: 'plus' });
+    ).toEqual({ telegramChatId: 10, email: 'a@b.com', discordUserId: '111', plan: 'plus' });
   });
 
-  it('inherits the loser email, discord id, and paid plan when the survivor lacks them', () => {
-    // survivor has no email/discord and is free; the loser's identities and paid plan survive
+  it('inherits the loser telegram, email, discord id, and paid plan when the survivor lacks them', () => {
+    // survivor has no logins and is free; the loser's identities and paid plan survive
     expect(
       mergedIdentity(
-        { email: null, discordUserId: null, plan: 'free' },
-        { email: 'c@d.com', discordUserId: '222', plan: 'business' }
+        { telegramChatId: null, email: null, discordUserId: null, plan: 'free' },
+        { telegramChatId: 20, email: 'c@d.com', discordUserId: '222', plan: 'business' }
       )
-    ).toEqual({ email: 'c@d.com', discordUserId: '222', plan: 'business' });
+    ).toEqual({ telegramChatId: 20, email: 'c@d.com', discordUserId: '222', plan: 'business' });
   });
 
   it('never drops a discord identity in a telegram+web merge', () => {
@@ -109,10 +139,147 @@ describe('mergedIdentity', () => {
     // that had already linked Discord - the discord id must carry over
     expect(
       mergedIdentity(
-        { email: 'a@b.com', discordUserId: null, plan: 'free' },
-        { email: null, discordUserId: '333', plan: 'free' }
-      ).discordUserId
-    ).toBe('333');
+        { telegramChatId: null, email: 'a@b.com', discordUserId: null, plan: 'free' },
+        { telegramChatId: 20, email: null, discordUserId: '333', plan: 'free' }
+      )
+    ).toMatchObject({ telegramChatId: 20, discordUserId: '333' });
+  });
+});
+
+// A recording fake with transaction support: canned SELECT results per table are
+// consumed in call order, writes are recorded. Mirrors the link-identity fake but
+// covers the full mergeAccounts transaction (the FK-safe identity reconciliation).
+function mergeFakeDb(queues: {
+  users: Row[][];
+  meters: Row[][];
+  channels: Row[][];
+  identities: Row[][];
+}) {
+  const idx: Record<string, number> = { users: 0, meters: 0, channels: 0, identities: 0 };
+  const inserts: { table: unknown; values: Row }[] = [];
+  const updates: { table: unknown; values: Row }[] = [];
+  const deletes: { table: unknown }[] = [];
+  type TableKey = 'users' | 'meters' | 'channels' | 'identities';
+  const keyOf = (t: unknown): TableKey | null =>
+    t === schema.users
+      ? 'users'
+      : t === schema.meters
+        ? 'meters'
+        : t === schema.channels
+          ? 'channels'
+          : t === schema.identities
+            ? 'identities'
+            : null;
+  const pull = (t: unknown): Row[] => {
+    const k = keyOf(t);
+    if (!k) return [];
+    return (queues[k] ?? [])[idx[k]++] ?? [];
+  };
+  const handle = {
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => {
+          const rows = pull(table);
+          const p = Promise.resolve(rows) as Promise<Row[]> & { orderBy: () => Promise<Row[]> };
+          p.orderBy = async () => rows;
+          return p;
+        },
+      }),
+    }),
+    insert: (table: unknown) => ({
+      values: (values: Row) => {
+        inserts.push({ table, values });
+        return { then: (resolve: (v: unknown) => void) => resolve(undefined) };
+      },
+    }),
+    update: (table: unknown) => ({
+      set: (values: Row) => ({ where: async () => void updates.push({ table, values }) }),
+    }),
+    delete: (table: unknown) => ({ where: async () => void deletes.push({ table }) }),
+  };
+  const db = {
+    ...handle,
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(handle),
+  } as unknown as Db;
+  return { db, inserts, updates, deletes };
+}
+
+describe('mergeAccounts', () => {
+  it('deletes the loser identities before the user row and re-syncs the survivor', async () => {
+    // Regression: a bot-created loser holds an identity row FK-ing users
+    // (ON DELETE no action). Deleting the user without clearing identities first
+    // FK-violates. Here the loser is a telegram account, the survivor a web one.
+    const survivor = {
+      id: 1,
+      telegramChatId: null,
+      email: 'web@x.com',
+      discordUserId: null,
+      plan: 'free',
+    };
+    const loser = {
+      id: 2,
+      telegramChatId: 555,
+      email: null,
+      discordUserId: null,
+      plan: 'free',
+    };
+    const { db, inserts, updates, deletes } = mergeFakeDb({
+      users: [[survivor], [loser]],
+      meters: [[], [], []], // survivor, loser, then enforceMeterCap's active list
+      channels: [[], []],
+      identities: [[{ id: 10, userId: 1, provider: 'email', providerUid: 'web@x.com' }]],
+    });
+
+    expect(await mergeAccounts(db, 1, 2)).toBe('merged');
+
+    const identitiesDeletedAt = deletes.findIndex(d => d.table === schema.identities);
+    const userDeletedAt = deletes.findIndex(d => d.table === schema.users);
+    expect(identitiesDeletedAt).toBeGreaterThanOrEqual(0);
+    expect(identitiesDeletedAt).toBeLessThan(userDeletedAt);
+
+    // survivor inherits the loser's telegram: synced identity row + legacy column
+    expect(inserts.find(i => i.table === schema.identities)?.values).toMatchObject({
+      userId: 1,
+      provider: 'telegram',
+      providerUid: '555',
+      verified: true,
+    });
+    expect(updates.find(u => u.table === schema.users)?.values).toMatchObject({
+      telegramChatId: 555,
+      email: 'web@x.com',
+    });
+  });
+
+  // The behavioral half of the ownership registry. ownership.test.ts pins the
+  // FK *structure*; nothing pinned that merge actually acts on each table it
+  // claims to own - which is how identities sat in the registry, marked
+  // repointOnMerge, while merge never touched it (a live FK violation).
+  it('writes to every user-keyed table the registry says it repoints', async () => {
+    const survivor = {
+      id: 1,
+      telegramChatId: null,
+      email: 'web@x.com',
+      discordUserId: null,
+      plan: 'free',
+    };
+    const loser = { id: 2, telegramChatId: 555, email: null, discordUserId: null, plan: 'free' };
+    const { db, updates, deletes } = mergeFakeDb({
+      users: [[survivor], [loser]],
+      // loser holds a meter the survivor lacks, so the meters repoint fires
+      meters: [[], [{ id: 30, provider: 'desco', accountNo: 'A1', meterNo: 'M1' }], []],
+      channels: [[], []],
+      identities: [[{ id: 10, userId: 1, provider: 'email', providerUid: 'web@x.com' }]],
+    });
+
+    expect(await mergeAccounts(db, 1, 2)).toBe('merged');
+
+    const touched = new Set([...updates, ...deletes].map(w => w.table));
+    const missed = USER_OWNED.filter(
+      o => o.repointOnMerge && o.userId && !touched.has(o.table)
+    ).map(o => getTableConfig(o.table).name);
+    // If this fails: mergeAccounts has to handle the new table (follow the user,
+    // or clear rows that must not outlive the loser) before it can be registered.
+    expect(missed).toEqual([]);
   });
 });
 

@@ -18,6 +18,43 @@ Two ground rules that bit us before and still apply:
 
 ## Still open
 
+### Free-tier cap is per-account (email), not provably per-human
+
+The 1-meter free cap is enforced per account, and accounts are created only by
+verified-email signup on the web. The bots no longer create accounts or register
+meters (onboarding moved to the dashboard), which closes the old "one free meter
+per platform" bypass: connecting Telegram, Discord, or WhatsApp to an account
+never adds a meter slot. What it does **not** close:
+
+- **Disposable email addresses.** A determined user can still make several
+  accounts with several real inboxes. Far weaker than the old bypass, and
+  tightenable later (block disposable domains at signup).
+- **No proof of meter ownership.** DESCO's public balance endpoint takes just the
+  account + meter numbers (both printed on the bill) and offers no OTP channel, so
+  we can't verify the requester owns the meter. Deferred until a DESCO-side
+  verification path exists.
+
+WhatsApp ships as a provider-agnostic seam with a **stubbed sender**
+(`src/notifications/whatsapp`): the channel, dispatcher fan-out, connect webhook,
+and config are all live, but outbound sends log instead of calling Meta until the
+real Cloud API sender is wired.
+
+The per-account cap is adjustable: `users.meter_limit` (set from the admin panel)
+overrides the plan default in either direction, and lowering it pauses the excess
+immediately. `effectiveMeterLimit` in `src/core/plans.ts` is the one place that
+resolves it.
+
+### The dashboard SPA is still a template string
+
+`web/app-html.ts` and `web/admin-html.ts` ship their client code as inline
+`<script>` inside a template literal, so it gets no typechecking and no linting.
+`__tests__/web/inline-scripts.test.ts` now compiles every generated block (and
+checks the CSP nonce), which catches the silent-failure mode: a syntax error or a
+missing nonce used to reach the browser and render a dead page with no server-side
+error. What it does **not** cover is behavior. Extracting the client code into
+real modules with a build step is the actual fix, deferred because it is a large
+blind refactor with no browser-level tests to catch regressions.
+
 ### The uptime monitor is external and unconfigured
 
 `/health` reports `ok` / `stale` / `db-down`, the Dockerfile has a `HEALTHCHECK`

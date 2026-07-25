@@ -221,24 +221,27 @@ and could let SMS overshoot the plan budget. Scale vertically; if you ever need
 horizontal scale, move the rate-limit/OTP state to shared storage (e.g. Redis)
 and gate the SMS budget in the database first.
 
-## 6. Email channel (optional)
+## 6. Email — required for accounts
 
-The email sender speaks plain SMTP. To enable it, set `SMTP_HOST`, `SMTP_PORT`,
-`SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` (an address on a domain with proper
-SPF/DKIM) in `.env`. Any transactional email provider works.
+Accounts are created only by verified-email signup on the web dashboard (the chat
+bots no longer create accounts or register meters), so **email must be configured
+or nobody can sign up.** The sender speaks plain SMTP: set `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM` (an address on a domain
+with proper SPF/DKIM) in `.env`. Any transactional email provider works. It powers
+both magic-link sign-in and email alerts.
 
-Discord needs no server config: it's a free per-user channel. A user pastes a
-channel webhook URL into `/discord <url>` in the bot (or the web app's Alerts
-screen); the app validates it, fires a test message, and stores the URL against
+Discord webhooks need no server config: a user pastes a channel webhook URL into
+`/discord <url>` in Telegram, `/webhook <url>` in Discord, or the web app's Alerts
+screen; the app validates it, fires a test message, and stores the URL against
 their account. Deleting the account (or `/discord off`) removes it.
 
 ## 7. Discord bot (optional)
 
-The same product as the Telegram bot, on Discord: users run slash commands
-(`/register`, `/balance`, `/threshold`, …) and get their alerts as DMs from the
-bot. It's off until the three `DISCORD_*` variables are set. The per-user
-webhook channel (`/discord` in Telegram, `/webhook` in Discord) works with or
-without it.
+The same product as the Telegram bot, on Discord: users run read-only slash
+commands (`/balance`, `/meters`, `/connect`, …) and get their alerts as DMs from
+the bot. Meters are managed on the web dashboard, not the bot. It's off until the
+three `DISCORD_*` variables are set. The per-user webhook channel (`/discord` in
+Telegram, `/webhook` in Discord) works with or without it.
 
 Setup, once:
 
@@ -265,19 +268,19 @@ Setup, once:
 
 4. Generate an invite from **Installation** (or OAuth2 URL generator) with the
    `bot` + `applications.commands` scopes - no bot permissions are needed
-   beyond DMs. Users invite it to a server (or install it) and run `/register`.
+   beyond DMs. Users invite it to a server (or install it), sign up on the web,
+   then run `/connect` to link Discord to their account.
 
 Operational notes:
 
-- **DM delivery can fail** for users who block DMs from server members. The
-  bot test-DMs on `/register` and warns right there (pointing at `/webhook` as
-  the fallback); if it fails later anyway, the outbox marks the delivery
-  failed and retries like any other channel.
-- **One account across platforms**: `/telegram` in Discord replies with a
-  `t.me/<bot>?start=link_...` deep link (set `BOT_USERNAME` so it renders as a
-  tappable link). Opening it connects or merges the accounts; meters, plan,
-  and alert channels all carry over. The web app's Connect Telegram flow
-  chains into the same account.
+- **DM delivery can fail** for users who block DMs from server members. When a
+  DM bounces, the outbox marks that delivery failed and retries like any other
+  channel; a channel webhook (`/webhook`) is the fallback.
+- **One account across platforms**: `/connect` in Discord replies with a
+  `PUBLIC_BASE_URL/app/connect/discord?token=...` link. Opening it (while signed
+  in on the web) attaches Discord to that account, merging a legacy Discord-only
+  account into it if one exists. The web app's Connect Telegram flow chains into
+  the same account from the other direction.
 - The bot **never reads messages** - it only receives slash-command
   interactions on the HTTPS endpoint, so there's no gateway connection to
   babysit and no privileged intents to request.
@@ -286,7 +289,48 @@ Operational notes:
   the tunnel URL, or just test through the unit suite - the endpoint,
   signature check, and commands are all covered.
 
-## 8. Billing (paid plans)
+## 8. WhatsApp channel (optional)
+
+Alerts over WhatsApp, plus a connect flow keyed to the user's dashboard account.
+Off until all five `WHATSAPP_*` variables are set (a partial set refuses to boot).
+
+> The outbound sender is **stubbed** today: it logs instead of calling Meta, so
+> the channel, connect webhook, and dashboard button are all live but no real
+> WhatsApp message goes out until the Cloud API sender is wired
+> (`src/notifications/whatsapp`). Everything below is the setup that sender needs.
+
+Setup, once:
+
+1. Create a Meta app with WhatsApp (Cloud API) at
+   <https://developers.facebook.com/>. From the WhatsApp setup copy the **Phone
+   number ID** and an **access token**; from **App Settings → Basic** copy the
+   **App Secret**. Choose any string for the webhook verify token. Put them in
+   `.env`:
+
+   ```env
+   WHATSAPP_PHONE_NUMBER_ID=...
+   WHATSAPP_ACCESS_TOKEN=...
+   WHATSAPP_VERIFY_TOKEN=<any secret string>
+   WHATSAPP_APP_SECRET=...
+   WHATSAPP_DISPLAY_NUMBER=8801XXXXXXXXX   # business number, digits only, for wa.me links
+   ```
+
+2. Restart the app. `/whatsapp/webhook` now serves the GET handshake and signed
+   POST events (it 404s while WhatsApp is unset).
+
+3. In the Meta app's **WhatsApp → Configuration**, set the **Callback URL** to
+   `https://<your PUBLIC_BASE_URL host>/whatsapp/webhook`, the **Verify token** to
+   your `WHATSAPP_VERIFY_TOKEN`, then subscribe to the `messages` field. Meta
+   probes the URL with the handshake; the app echoes the challenge only when the
+   token matches, and rejects any POST whose `X-Hub-Signature-256` HMAC (over the
+   raw body, keyed by the App Secret) doesn't check out.
+
+How a user connects: on the dashboard **Alerts** screen they tap **Connect
+WhatsApp**, which opens WhatsApp with a signed `connect <token>` message
+prefilled. They send it; the inbound webhook verifies the token and attaches their
+number as a verified WhatsApp channel on the account that minted it.
+
+## 9. Billing (paid plans)
 
 `BILLING_PROVIDER=none` (default) keeps paid plans off - `/upgrade` replies
 "coming soon", so you can launch free-only without a merchant account. Switch to
@@ -335,7 +379,7 @@ Requirements:
 
 Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment.
 
-## 9. Operations runbook
+## 10. Operations runbook
 
 - **App won't start with "Missing required environment variables"**: set
   `DATABASE_URL` and `TELEGRAM_BOT_TOKEN` (server mode) or the seven
@@ -374,7 +418,7 @@ Use `/grant <chat id> <plan> [days]` (admin only) to comp a plan without payment
   (emails, phones, account/meter numbers). For log shippers (Datadog, etc.),
   add a redaction processor at the agent level.
 
-## 10. Security hardening (prod)
+## 11. Security hardening (prod)
 
 The production compose (`docker-compose.prod.yml`) runs the container hardened:
 

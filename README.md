@@ -1,18 +1,30 @@
 # Power-Roast
 
-A TypeScript-based DESCO prepaid electricity balance monitor that sends brutally honest notifications (Discord or email) when your balance gets dangerously low. Because sometimes you need tough love to remember to recharge.
+A TypeScript-based DESCO prepaid electricity monitor that predicts when you'll run out of credit and sends brutally honest alerts before the lights go. Because sometimes you need tough love to remember to recharge.
 
 ## What It Does
 
-It checks your DESCO prepaid meter balance and fires off angry alerts if you're getting close to zero 
+It watches your DESCO prepaid meter and tells you **when you will actually run
+out**, not just that the number looks small. From your recent balance history it
+works out how fast you are burning credit and projects the run-out date:
+
+> ~3 days left at this rate, ৳48/day
+
+That projection rides along with every alert, so "৳140 left" becomes "৳140 left,
+you go dark Thursday" and you can decide whether to recharge tonight or on payday.
+
+Threshold alerts still fire on the way down:
 
 - **Below 150 BDT** (configurable) Warning shot  "Your Electricity About to Ghost You"
 - **Below 100 BDT** (configurable) DEFCON 1  "You're About to Live in the Stone Age"
 
+Every alert carries a one-tap recharge link, and you can snooze the nagging or
+re-check the balance on demand right from the message.
+
 ## Two Ways to Run It
 
 1. **Self-hosted (free forever) ** just fork this repo, toss your details into GitHub secrets, and the workflow does its thing on a schedule. Zero servers, zero cost. The setup guide below covers this.
-2. **Hosted (Telegram + Discord bots) ** a bot that does it all for you  no fork, no secrets, just message the bot. Run-out predictions ("~3 days left at this rate"), a web dashboard with balance history charts, multi-meter support, free Discord alerts (via a channel webhook), and SMS alerts on paid plans (bKash / SSLCommerz billing). The same product is also a **Discord bot**: slash commands (`/register`, `/balance`, `/threshold`, ) with alerts delivered as DMs  see the Discord bot section of [docs/DEPLOY.md](docs/DEPLOY.md). Deploy your own with [docs/DEPLOY.md](docs/DEPLOY.md).
+2. **Hosted (Telegram + Discord bots)** sign up on the web dashboard with your email, add your meter there, then connect Telegram or Discord to get alerts where you already chat. Run-out predictions ("~3 days left at this rate"), a web dashboard with balance history charts, multi-meter support, free Discord alerts (via a channel webhook or bot DMs), and SMS alerts on paid plans (bKash / SSLCommerz billing). The bots deliver alerts and answer quick commands like `/balance`, `/meters`, and `/connect`. Meters and thresholds are managed on the dashboard. See the [User Guide](docs/USER_GUIDE.md) for end-user steps, or [docs/DEPLOY.md](docs/DEPLOY.md) to deploy your own.
 
 ### Operator admin dashboard
 

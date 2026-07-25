@@ -348,7 +348,7 @@ describe('AlertDispatcherWorker quiet hours', () => {
 });
 
 describe('logger PII masks', () => {
-  const { maskEmail, maskPhone, maskAccount, maskMeterNo } = require('../../logger');
+  const { maskEmail, maskPhone, maskAccount, maskMeterNo, redactUrl } = require('../../logger');
 
   it('masks email addresses', () => {
     expect(maskEmail('rijoanul.shanto@gmail.com')).toBe('ri***@gmail.com');
@@ -366,5 +366,22 @@ describe('logger PII masks', () => {
 
   it('masks meter numbers keeping first 2 and last 2', () => {
     expect(maskMeterNo('87654321')).toBe('87****21');
+  });
+
+  // The timeout log used to print the whole URL. BulkSMSBD carries api_key, the
+  // customer's number and the message text in the query string, and SSLCommerz
+  // validation carries store_passwd, so any upstream stall wrote them to the log.
+  it('drops the query string when logging a URL', () => {
+    expect(redactUrl('https://sms.example/smsapi?api_key=SECRET&number=01712345678')).toBe(
+      'https://sms.example/smsapi?***'
+    );
+    expect(redactUrl('https://pay.example/validator/api.php?store_passwd=hunter2')).toBe(
+      'https://pay.example/validator/api.php?***'
+    );
+  });
+
+  it('keeps a query-less URL readable and refuses to echo a malformed one', () => {
+    expect(redactUrl('https://desco.example/getBalance')).toBe('https://desco.example/getBalance');
+    expect(redactUrl('not a url at all')).toBe('***');
   });
 });

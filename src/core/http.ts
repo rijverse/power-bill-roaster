@@ -1,5 +1,5 @@
 import type { Dispatcher } from 'undici';
-import { logger } from '../logger';
+import { logger, redactUrl } from '../logger';
 
 // every outbound call goes through here so a hung upstream (desco, payment
 // gateway, sms provider) can't stall a request or wedge the poll cycle.
@@ -25,7 +25,8 @@ export async function fetchWithTimeout(
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      logger.warn(`HTTP timeout after ${timeoutMs}ms: ${url}`);
+      // redacted: some upstreams carry api keys and passwords in the query string
+      logger.warn(`HTTP timeout after ${timeoutMs}ms: ${redactUrl(url)}`);
     }
     throw error;
   } finally {

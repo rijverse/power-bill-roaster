@@ -26,7 +26,9 @@ const PAGES: { name: string; html: string }[] = [
 /** Every inline <script> block on the page, with its opening tag. */
 function scriptBlocks(html: string): { tag: string; code: string }[] {
   const blocks: { tag: string; code: string }[] = [];
-  const re = /<script([^>]*)>([\s\S]*?)<\/script>/g;
+  // case-insensitive: the builders emit lowercase today, but a matcher that only
+  // sees <script> would quietly skip a block rather than check it
+  const re = /<script([^>]*)>([\s\S]*?)<\/script>/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(html)) !== null) {
     blocks.push({ tag: match[1], code: match[2] });

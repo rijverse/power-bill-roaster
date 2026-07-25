@@ -7,7 +7,10 @@ const isProd = process.env.NODE_ENV === 'production';
 // emails, bd phone numbers, "account:NNNN" / "meter:NNNN" pairs, and bearer-
 // style hex tokens (40+ chars). the matcher is greedy on purpose; if a log
 // line contains PII we want it gone, not partially redacted.
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+// Lengths are bounded (RFC caps the local part at 64 and a domain label at 63):
+// an unbounded `+` before the `@` backtracks quadratically on a long run of '%'
+// or '.', and log lines carry user-supplied text.
+const EMAIL_RE = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}/g;
 const BD_PHONE_RE = /(?:\+?88)?01[3-9]\d{8}\b/g;
 const ACCOUNT_RE =
   /\b(account(?:_no)?\s*[=:]\s*|meter(?:_no)?\s*[=:]\s*|account\s+is\s+)(\d{5,20})\b/gi;
@@ -43,6 +46,21 @@ export function maskAccount(value: string): string {
 export function maskMeterNo(value: string): string {
   if (value.length <= 4) return '****';
   return `${value.slice(0, 2)}${'*'.repeat(Math.max(0, value.length - 4))}${value.slice(-2)}`;
+}
+
+/**
+ * A URL safe to log: origin + path, with the query string dropped. Several
+ * upstreams take credentials as query params (BulkSMSBD puts api_key, the
+ * customer's number and the message text there; SSLCommerz validation puts
+ * store_passwd there), so logging a full URL on a timeout leaks them.
+ */
+export function redactUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}${url.search ? '?***' : ''}`;
+  } catch {
+    return '***';
+  }
 }
 
 // keep host + webhook id (useful for correlating), drop the secret token segment

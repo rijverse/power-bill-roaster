@@ -4,64 +4,12 @@
 // lowercase names ≤32 chars, descriptions 1-100 chars.
 
 const STRING = 3;
-const INTEGER = 4;
 
 export const DISCORD_COMMANDS = [
   { name: 'help', description: 'All commands' },
   { name: 'privacy', description: 'What we store and why' },
-  {
-    name: 'register',
-    description: 'Add your DESCO meter',
-    options: [
-      {
-        type: STRING,
-        name: 'account',
-        description: "Your DESCO account number (it's on your bill)",
-        required: true,
-      },
-      {
-        type: STRING,
-        name: 'meter',
-        description: 'Your DESCO meter number',
-        required: true,
-      },
-    ],
-  },
   { name: 'balance', description: 'Check balances right now' },
   { name: 'meters', description: 'List your registered meters' },
-  {
-    name: 'threshold',
-    description: 'Set alert levels for all your meters',
-    options: [
-      {
-        type: INTEGER,
-        name: 'low',
-        description: 'Warn below this (BDT)',
-        required: true,
-        min_value: 1,
-      },
-      {
-        type: INTEGER,
-        name: 'critical',
-        description: 'Lose my mind below this (BDT, lower than low)',
-        required: true,
-        min_value: 0,
-      },
-    ],
-  },
-  {
-    name: 'nickname',
-    description: 'Name your meter (e.g. Flat 3B)',
-    options: [
-      { type: STRING, name: 'name', description: 'The nickname', required: true },
-      {
-        type: STRING,
-        name: 'meter',
-        description: 'Meter number (only needed with multiple meters)',
-        required: false,
-      },
-    ],
-  },
   { name: 'plan', description: 'Your current plan' },
   { name: 'dashboard', description: 'Balance history charts in your browser' },
   {
@@ -92,7 +40,7 @@ export const DISCORD_COMMANDS = [
       },
     ],
   },
-  { name: 'telegram', description: 'Connect the Telegram bot - one account on both apps' },
+  { name: 'connect', description: 'Connect this Discord to your Power Roast web account' },
   { name: 'stop', description: 'Pause all monitoring' },
   {
     name: 'delete',

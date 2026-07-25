@@ -117,10 +117,11 @@ describe('Discord bot commands', () => {
     expect((reply.immediate.data as { flags: number }).flags).toBe(64);
   });
 
-  it('/help lists the commands', async () => {
+  it('/help lists the dashboard-first commands', async () => {
     const bot = createDiscordBot(fakeDb({}).db, config, subscriptions);
     const reply = await bot.handleInteraction(command('help'));
-    expect(contentOf(reply)).toContain('/register');
+    expect(contentOf(reply)).toContain('/balance');
+    expect(contentOf(reply)).not.toContain('/register');
   });
 
   it('unknown commands get a pointer to /help', async () => {
@@ -129,169 +130,24 @@ describe('Discord bot commands', () => {
     expect(contentOf(reply)).toContain('/help');
   });
 
-  it('/register rejects non-numeric input without touching DESCO', async () => {
-    const bot = createDiscordBot(fakeDb({}).db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: 'abc' },
-        { name: 'meter', value: '87654321' },
-      ])
-    );
-    expect(contentOf(reply)).toContain('digits only');
-    expect(reply.followUp).toBeUndefined();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('/register enforces the plan meter cap before the DESCO lookup', async () => {
-    const { db } = fakeDb({ users: [USER], meters: [METER] });
+  it('meter management commands are gone from Discord (managed on the web now)', async () => {
+    // register / threshold / nickname were removed from the command set, so an
+    // invocation falls through to the unknown-command pointer and never writes.
+    const { db, inserted, updated } = fakeDb({ users: [USER], meters: [METER] });
     const bot = createDiscordBot(db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: '11112222' },
-        { name: 'meter', value: '99998888' },
-      ])
-    );
-    expect(contentOf(reply)).toContain('free plan');
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('/register verifies with DESCO, creates the user + discord-dm channel + meter', async () => {
-    fetchSpy.mockResolvedValue({
-      json: async () => ({ code: 200, data: { balance: 42.5 } }),
-    });
-    const { db, inserted } = fakeDb({});
-    const bot = createDiscordBot(db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: '12345678' },
-        { name: 'meter', value: '87654321' },
-      ])
-    );
-    expect(reply.immediate.type).toBe(5); // deferred while DESCO answers
-    const payload = await reply.followUp!();
-    expect(payload.content).toContain('✅ Registered');
-    expect(payload.content).toContain('42.50');
-
-    const users = inserted.filter(i => i.table === schema.users);
-    const channels = inserted.filter(i => i.table === schema.channels);
-    const meters = inserted.filter(i => i.table === schema.meters);
-    expect(users).toHaveLength(1);
-    expect(users[0].values.discordUserId).toBe('111222333444555666');
-    expect(channels).toHaveLength(1);
-    expect(channels[0].values).toMatchObject({
-      type: 'discord-dm',
-      address: '111222333444555666',
-      verified: true,
-    });
-    expect(meters).toHaveLength(1);
-    expect(meters[0].values).toMatchObject({
-      accountNo: '12345678',
-      meterNo: '87654321',
-      lowThreshold: 150,
-      criticalThreshold: 100,
-    });
-  });
-
-  it('/register proves the DM route with a test message when a sender is wired', async () => {
-    fetchSpy.mockResolvedValue({
-      json: async () => ({ code: 200, data: { balance: 42.5 } }),
-    });
-    const sendDm = jest.fn(async (_userId: string) => undefined);
-    const bot = createDiscordBot(fakeDb({}).db, config, subscriptions, { sendDm });
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: '12345678' },
-        { name: 'meter', value: '87654321' },
-      ])
-    );
-    const payload = await reply.followUp!();
-    expect(sendDm).toHaveBeenCalledWith('111222333444555666', expect.anything());
-    expect(payload.content).toContain('test DM');
-  });
-
-  it('/register warns and points at /webhook when the test DM bounces (closed DMs)', async () => {
-    fetchSpy.mockResolvedValue({
-      json: async () => ({ code: 200, data: { balance: 42.5 } }),
-    });
-    const sendDm = jest.fn(async (_userId: string) => {
-      throw new Error('Discord API POST /users/@me/channels returned 403');
-    });
-    const bot = createDiscordBot(fakeDb({}).db, config, subscriptions, { sendDm });
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: '12345678' },
-        { name: 'meter', value: '87654321' },
-      ])
-    );
-    const payload = await reply.followUp!();
-    expect(payload.content).toContain('✅ Registered'); // registration still stands
-    expect(payload.content).toContain("couldn't DM you");
-    expect(payload.content).toContain('/webhook');
-  });
-
-  it("/register words a DESCO mismatch as the user's numbers, not an outage", async () => {
-    fetchSpy.mockResolvedValue({ json: async () => ({ code: 200, data: {} }) });
-    const bot = createDiscordBot(fakeDb({}).db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: '12345678' },
-        { name: 'meter', value: '87654321' },
-      ])
-    );
-    const payload = await reply.followUp!();
-    expect(payload.content).toContain("didn't recognize");
-  });
-
-  it('/register words a network failure as an outage, not bad numbers', async () => {
-    fetchSpy.mockRejectedValue(new Error('connect timeout'));
-    const bot = createDiscordBot(fakeDb({}).db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('register', [
-        { name: 'account', value: '12345678' },
-        { name: 'meter', value: '87654321' },
-      ])
-    );
-    const payload = await reply.followUp!();
-    expect(payload.content).toContain("isn't responding");
-  });
-
-  it('/threshold rejects critical >= low', async () => {
-    const { db, updated } = fakeDb({ users: [USER], meters: [METER] });
-    const bot = createDiscordBot(db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('threshold', [
-        { name: 'low', value: 100 },
-        { name: 'critical', value: 200 },
-      ])
-    );
-    expect(contentOf(reply)).toContain('below low');
+    for (const name of ['register', 'threshold', 'nickname']) {
+      const reply = await bot.handleInteraction(command(name));
+      expect(contentOf(reply)).toContain('/help');
+    }
+    expect(inserted).toHaveLength(0);
     expect(updated).toHaveLength(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('/threshold updates every active meter', async () => {
-    const { db, updated } = fakeDb({ users: [USER], meters: [METER] });
-    const bot = createDiscordBot(db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('threshold', [
-        { name: 'low', value: 200 },
-        { name: 'critical', value: 120 },
-      ])
-    );
-    expect(contentOf(reply)).toContain('৳200');
-    expect(updated).toEqual([
-      { table: schema.meters, values: { lowThreshold: 200, criticalThreshold: 120 } },
-    ]);
-  });
-
-  it('/threshold with no account explains /register', async () => {
+  it('a command with no account points at the dashboard signup', async () => {
     const bot = createDiscordBot(fakeDb({}).db, config, subscriptions);
-    const reply = await bot.handleInteraction(
-      command('threshold', [
-        { name: 'low', value: 200 },
-        { name: 'critical', value: 100 },
-      ])
-    );
-    expect(contentOf(reply)).toContain('/register');
+    const reply = await bot.handleInteraction(command('dashboard'));
+    expect(contentOf(reply)).toContain('http://localhost:3000/app');
   });
 
   it('/delete without CONFIRM warns and erases nothing', async () => {
@@ -337,20 +193,14 @@ describe('Discord bot commands', () => {
     expect(updated).toEqual([{ table: schema.meters, values: { active: false } }]);
   });
 
-  it('/telegram hands out a valid discord-link token even without an account', async () => {
+  it('/connect hands out a web connect link with a valid discord-link token', async () => {
     const bot = createDiscordBot(fakeDb({}).db, config, subscriptions);
-    const reply = await bot.handleInteraction(command('telegram'));
+    const reply = await bot.handleInteraction(command('connect'));
     const content = contentOf(reply);
-    const token = /link_([\w.~-]+)/.exec(content)?.[1];
+    expect(content).toContain('http://localhost:3000/app/connect/discord?token=');
+    const token = /token=([\w.~-]+)/.exec(content)?.[1];
     expect(token).toBeTruthy();
     expect(verifyDiscordLinkToken(token!, 'secret')).toBe('111222333444555666');
-  });
-
-  it('/telegram says already-connected when the account has a telegram chat', async () => {
-    const linked = { ...USER, telegramChatId: 100 };
-    const bot = createDiscordBot(fakeDb({ users: [linked] }).db, config, subscriptions);
-    const reply = await bot.handleInteraction(command('telegram'));
-    expect(contentOf(reply)).toContain('Already connected');
   });
 
   it('/webhook with a bad URL is rejected without a test send', async () => {

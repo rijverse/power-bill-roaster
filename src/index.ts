@@ -5,6 +5,7 @@ import { Scheduler } from './core/scheduler';
 import { Dispatcher, AlertButton, DiscordDmSender } from './notifications/dispatcher';
 import { AlertDispatcherWorker } from './core/alert-dispatcher';
 import { createSmsGateway } from './notifications/sms';
+import { createWhatsAppSender } from './notifications/whatsapp';
 import { createMailer } from './services/mailer';
 import { createPaymentProvider, SubscriptionService } from './billing';
 import { createWebServer } from './web/server';
@@ -52,6 +53,10 @@ async function main(): Promise<void> {
   if (mailer) {
     logger.info(`Email channel enabled (from ${mailer.from})`);
   }
+  const whatsappSender = createWhatsAppSender(config);
+  if (whatsappSender) {
+    logger.info(`WhatsApp channel enabled via ${whatsappSender.name} sender`);
+  }
   const subscriptions = new SubscriptionService(db, createPaymentProvider(config));
   const bot = createBot(db, config, subscriptions, smsGateway, mailer);
   const telegramSender = {
@@ -73,7 +78,7 @@ async function main(): Promise<void> {
     // one DM route shared by alert dispatch and the bot's register-time test
     discordDm = { sendDm: (userId, embed) => api.sendDm(userId, { embeds: [embed] }) };
     discordInteractions = {
-      bot: createDiscordBot(db, config, subscriptions, discordDm),
+      bot: createDiscordBot(db, config, subscriptions),
       api,
       appId: config.discord.appId,
       publicKey: discordPublicKey(config.discord.publicKey),
@@ -119,7 +124,14 @@ async function main(): Promise<void> {
     },
   });
 
-  const dispatcher = new Dispatcher(db, telegramSender, smsGateway, mailer, discordDm);
+  const dispatcher = new Dispatcher(
+    db,
+    telegramSender,
+    smsGateway,
+    mailer,
+    discordDm,
+    whatsappSender
+  );
   // outbox drain worker - flips rows to 'sent' / 'failed' and pings admin on
   // dead letters. owns dispatch end-to-end.
   const alertWorker = new AlertDispatcherWorker({
@@ -132,13 +144,26 @@ async function main(): Promise<void> {
   });
   const scheduler = new Scheduler(db, pool, telegramSender, config, subscriptions, discordDm);
 
+  // Inbound WhatsApp webhook deps (connect handshake + signed events). Null when
+  // WhatsApp isn't configured, which 404s the route.
+  const whatsappInbound = config.whatsapp
+    ? {
+        db,
+        secret: config.dashboardSecret,
+        verifyToken: config.whatsapp.verifyToken,
+        appSecret: config.whatsapp.appSecret,
+        sender: whatsappSender,
+      }
+    : null;
+
   const healthServer = createWebServer(
     db,
     scheduler,
     config,
     subscriptions,
     mailer,
-    discordInteractions
+    discordInteractions,
+    whatsappInbound
   );
   healthServer.listen(config.port, () => {
     logger.info(`Web server on :${config.port} (/health, /dash, /app, /admin, /pay)`);
@@ -207,16 +232,13 @@ async function main(): Promise<void> {
   // telegram's "/" autocomplete menu (user-facing commands only)
   try {
     await bot.api.setMyCommands([
-      { command: 'register', description: 'Add your DESCO meter' },
       { command: 'balance', description: 'Check balances right now' },
       { command: 'dashboard', description: 'Balance history charts' },
-      { command: 'settings', description: 'Tone, quiet hours, thresholds' },
+      { command: 'settings', description: 'Tone and quiet hours' },
       { command: 'menu', description: 'Quick action buttons' },
-      { command: 'threshold', description: 'Set alert levels' },
-      { command: 'nickname', description: 'Name your meter' },
       { command: 'sms', description: 'Get alerts by SMS (paid plans)' },
       { command: 'discord', description: 'Get alerts in Discord (free)' },
-      { command: 'email', description: 'Use the web app with this account' },
+      { command: 'email', description: 'Sign in to the web dashboard' },
       { command: 'plan', description: 'Your current plan' },
       { command: 'upgrade', description: 'More meters, SMS alerts' },
       { command: 'meters', description: 'List your meters' },

@@ -7,6 +7,7 @@ const config = {
   telegramBotToken: 'test:token',
   telegramApiRoot: null,
   billing: { provider: 'none' },
+  publicBaseUrl: 'https://roast.test',
 } as unknown as ServerConfig;
 
 // Fake db covering findUser (select from users) and userMeters (join projecting
@@ -79,18 +80,20 @@ function makeBot(db: Db) {
 
 const user = { id: 5, telegramChatId: 100, plan: 'free' };
 
-describe('raw account-number detection', () => {
-  it('offers to register a bare account number when the user has no meters', async () => {
+// Meters are created only on the web dashboard now: the bot no longer registers
+// meters or creates accounts, so free-form text is never a registration step.
+describe('meter setup is dashboard-only', () => {
+  it('/register points at the dashboard instead of starting a flow', async () => {
     const bot = makeBot(fakeDb({ user, meters: [] }));
-    await bot.send('12345678');
-    expect(bot.last().text).toMatch(/DESCO account number/i);
-    expect(JSON.stringify(bot.last().reply_markup)).toContain('reg:12345678');
+    await bot.send('/register', true);
+    expect(bot.last().text).toContain('https://roast.test/app');
   });
 
-  it('ignores a bare number when the user already has a meter', async () => {
-    const bot = makeBot(fakeDb({ user, meters: [{ id: 1 }] }));
+  it('a bare account number is no longer a registration step', async () => {
+    const bot = makeBot(fakeDb({ user, meters: [] }));
     await bot.send('12345678');
     expect(bot.last().text).toMatch(/Not sure what you mean/i);
+    expect(JSON.stringify(bot.last().reply_markup ?? '')).not.toContain('reg:');
   });
 
   it('ignores non-numeric text', async () => {
@@ -99,12 +102,9 @@ describe('raw account-number detection', () => {
     expect(bot.last().text).toMatch(/Not sure what you mean/i);
   });
 
-  it('treats a number as the account when a registration is already in progress', async () => {
-    const bot = makeBot(fakeDb({ user, meters: [] }));
-    await bot.send('/register', true);
-    await bot.send('12345678');
-    // it advanced the register flow rather than showing the "register it?" prompt
-    expect(bot.last().text).toMatch(/meter number/i);
-    expect(bot.last().text).not.toMatch(/want me to register/i);
+  it('sends a brand-new chat with no account to sign up on the web', async () => {
+    const bot = makeBot(fakeDb({ meters: [] }));
+    await bot.send('/start', true);
+    expect(bot.last().text).toContain('https://roast.test/app');
   });
 });

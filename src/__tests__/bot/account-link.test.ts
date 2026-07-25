@@ -10,6 +10,7 @@ const config = {
   telegramApiRoot: null,
   dashboardSecret: SECRET,
   billing: { provider: 'none' },
+  publicBaseUrl: 'https://roast.test',
 } as unknown as ServerConfig;
 
 // users selects are consumed in call order: the handler looks up the web user by
@@ -17,6 +18,7 @@ const config = {
 function fakeDb(usersQueue: unknown[][]) {
   let i = 0;
   const updates: unknown[] = [];
+  const inserts: { table: unknown; values: Record<string, unknown> }[] = [];
   const db = {
     select: () => ({
       from: (t: unknown) => {
@@ -28,8 +30,14 @@ function fakeDb(usersQueue: unknown[][]) {
       },
     }),
     update: () => ({ set: (v: unknown) => ({ where: async () => void updates.push(v) }) }),
+    insert: (table: unknown) => ({
+      values: (values: Record<string, unknown>) => {
+        inserts.push({ table, values });
+        return { then: (resolve: (v: unknown) => void) => resolve(undefined) };
+      },
+    }),
   } as unknown as Db;
-  return { db, updates };
+  return { db, updates, inserts };
 }
 
 function makeBot(db: Db) {
@@ -70,11 +78,18 @@ const webUser = { id: 9, telegramChatId: null, email: 'w@e.com', plan: 'free' };
 describe('/start link_ payload', () => {
   it('links the chat to the web account when the chat has no account yet', async () => {
     // web-user lookup returns the account; findUser returns none
-    const { db, updates } = fakeDb([[webUser], []]);
+    const { db, updates, inserts } = fakeDb([[webUser], []]);
     const bot = makeBot(db);
     await bot.start(`link_${signLinkToken(9, SECRET)}`);
     expect(bot.replies.join(' ')).toMatch(/Linked/i);
     expect(updates).toContainEqual({ telegramChatId: 100 });
+    // and the identity row lands too - linking must not write the legacy column
+    // alone, or the identities table silently diverges from the real logins
+    expect(inserts.find(x => x.table === schema.identities)?.values).toMatchObject({
+      userId: 9,
+      provider: 'telegram',
+      providerUid: '100',
+    });
   });
 
   it('reports an expired/invalid link without touching the db', async () => {

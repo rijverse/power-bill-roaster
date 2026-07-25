@@ -7,6 +7,7 @@ const config = {
   telegramBotToken: 'test:token',
   telegramApiRoot: null,
   billing: { provider: 'none' },
+  publicBaseUrl: 'https://roast.test',
 } as unknown as ServerConfig;
 
 function fakeDb(opts: { user?: unknown } = {}) {

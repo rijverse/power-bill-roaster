@@ -1,13 +1,11 @@
-import { eq } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
-import { getProvider, ProviderUnavailableError } from '../providers';
+import { getProvider } from '../providers';
 import { RateLimiter } from '../core/rate-limiter';
-import { maxMetersFor, smsPerMonthFor, billingLive } from '../core/plans';
+import { effectiveMeterLimit, smsPerMonthFor, billingLive } from '../core/plans';
 import { predictRunOut, formatDaysLeft } from '../core/prediction';
 import { signDashboardToken } from '../web/token';
 import { eraseUser } from '../core/erase-user';
-import { sanitizeNickname } from '../core/sanitize';
 import { normalizeTone } from '../core/tone';
 import { isValidDiscordWebhookUrl, DiscordEmbed } from '../notifications/discord';
 import {
@@ -17,10 +15,7 @@ import {
 } from '../core/discord-connect';
 import {
   findUserByIdentity,
-  ensureUser,
   activeMeters,
-  upsertMeter,
-  applyThresholdsForUser,
   recentPrediction,
   setTone,
   stopMonitoring,
@@ -29,7 +24,6 @@ import {
 } from '../core/meter-usecases';
 import { SubscriptionService } from '../billing';
 import { signDiscordLinkToken } from '../web/user-auth';
-import { DiscordDmSender } from '../notifications/dispatcher';
 import { DiscordMessagePayload } from './api';
 import { maskWebhookUrl } from '../logger';
 
@@ -47,7 +41,6 @@ const DEFERRED_CHANNEL_MESSAGE = 5;
 const EPHEMERAL = 1 << 6;
 
 const DASHBOARD_LINK_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_NICKNAME_LENGTH = 30;
 
 // Same politeness caps as the Telegram bot, keyed by Discord user id.
 const DESCO_LOOKUPS_PER_WINDOW = 6;
@@ -58,25 +51,26 @@ const WEBHOOK_TEST_WINDOW_MS = 10 * 60 * 1000;
 // gold / red / green, matching the alert embeds in discord-templates
 const COLOR = { ok: 0x3ba55d, low: 0xfbb024, critical: 0xe23b3b } as const;
 
-const HELP_TEXT = [
-  '⚡ **Power Roast** - your brutally honest prepaid balance watchdog.',
-  '',
-  '`/register` - add your DESCO meter',
-  '`/balance` - check balances right now',
-  '`/threshold` - set alert levels',
-  '`/nickname` - name your meter (e.g. "Flat 3B")',
-  '`/tone` - savage or mild alerts',
-  '`/webhook` - also post alerts to a channel webhook',
-  '`/telegram` - connect the Telegram bot (one account, both apps)',
-  '`/plan` - your current plan',
-  '`/dashboard` - balance history charts in your browser',
-  '`/meters` - list your registered meters',
-  '`/stop` - pause all monitoring',
-  '`/delete` - erase your account and all data',
-  '`/privacy` - what we store and why',
-  '',
-  'Alerts arrive as DMs from this bot - make sure DMs from server members are on.',
-].join('\n');
+function helpText(appUrl: string): string {
+  return [
+    '⚡ **Power Roast** - your brutally honest prepaid balance watchdog.',
+    '',
+    `Add meters, set thresholds, and rename them on your dashboard: ${appUrl}`,
+    '',
+    '`/balance` - check balances right now',
+    '`/meters` - list your registered meters',
+    '`/tone` - savage or mild alerts',
+    '`/webhook` - also post alerts to a channel webhook',
+    '`/connect` - connect this Discord to your web account',
+    '`/plan` - your current plan',
+    '`/dashboard` - balance history charts in your browser',
+    '`/stop` - pause all monitoring',
+    '`/delete` - erase your account and all data',
+    '`/privacy` - what we store and why',
+    '',
+    'Alerts arrive as DMs from this bot - make sure DMs from server members are on.',
+  ].join('\n');
+}
 
 const PRIVACY_TEXT = [
   '🔒 **Privacy, the short version**',
@@ -143,12 +137,17 @@ function optionMap(options: InteractionOption[] | undefined): Map<string, string
 export function createDiscordBot(
   db: Db,
   config: ServerConfig,
-  subscriptions: SubscriptionService,
-  dm: DiscordDmSender | null = null
+  subscriptions: SubscriptionService
 ): DiscordBot {
   const descoLookups = new RateLimiter(DESCO_LOOKUPS_PER_WINDOW, DESCO_LOOKUP_WINDOW_MS);
   const webhookTests = new RateLimiter(WEBHOOK_TESTS_PER_WINDOW, WEBHOOK_TEST_WINDOW_MS);
   const live = billingLive(config.billing);
+  const appUrl = `${config.publicBaseUrl.replace(/\/+$/, '')}/app`;
+  const HELP_TEXT = helpText(appUrl);
+  // Accounts are created on the web now; point unlinked Discord users there.
+  const signupPointer =
+    `You don't have an account yet. Sign up (or sign in) at ${appUrl}, then connect ` +
+    'Discord from your dashboard. Already use the Telegram bot? Run /telegram here to link it.';
 
   const identity = (discordUserId: string) => ({ kind: 'discord' as const, discordUserId });
 
@@ -197,79 +196,11 @@ export function createDiscordBot(
     };
   }
 
-  async function handleRegister(
-    discordUserId: string,
-    accountNo: string,
-    meterNo: string
-  ): Promise<InteractionReply> {
-    if (!/^\d{5,20}$/.test(accountNo) || !/^\d{5,20}$/.test(meterNo)) {
-      return reply('Account and meter numbers are digits only (5-20 of them). Double-check both.');
-    }
-    const user = await findUserByIdentity(db, identity(discordUserId));
-    if (user) {
-      const meters = await activeMeters(db, user.id);
-      const limit = maxMetersFor(user.plan);
-      if (meters.length >= limit) {
-        return reply(
-          `The free plan watches ${limit} meter - and you're already using it. Multi-meter support is coming with paid plans. (/stop frees the slot if you want to switch meters.)`
-        );
-      }
-    }
-    if (!descoLookups.allow(discordUserId)) {
-      return reply('Too many lookups right now. Wait a few minutes and try /register again.');
-    }
-    // DESCO can take longer than Discord's 3s response deadline: defer, verify,
-    // then fill in the placeholder.
-    return deferred(async () => {
-      let balance: number;
-      try {
-        const data = await getProvider('desco').getBalance({ accountNo, meterNo });
-        balance = data.balance;
-      } catch (error) {
-        return {
-          content:
-            error instanceof ProviderUnavailableError
-              ? "DESCO's service isn't responding right now - your numbers may be fine. Try /register again in a few minutes."
-              : "DESCO didn't recognize that meter number for this account. Double-check both and try /register again.",
-        };
-      }
-      const owner = await ensureUser(db, identity(discordUserId));
-      await upsertMeter(db, owner.id, accountNo, meterNo, config.defaultThresholds);
-      // Alerts arrive by DM, and closed DMs fail silently at the worst possible
-      // moment - so prove the route works right now, the same way /webhook
-      // test-sends. If it bounces, say so here and point at the fallback.
-      let dmNote = '';
-      if (dm) {
-        try {
-          await dm.sendDm(discordUserId, {
-            title: 'Power Roast is watching ✅',
-            description:
-              "Your meter is registered. Low-balance alerts will land right here. If you're reading this, the route works.",
-            color: COLOR.ok,
-          });
-          dmNote = "\n\nI just sent you a test DM - that's where alerts arrive.";
-        } catch {
-          dmNote =
-            "\n\n⚠️ I couldn't DM you - and alerts arrive by DM. Allow direct messages from server members (Server → Privacy Settings), or run /webhook to route alerts to a channel instead.";
-        }
-      }
-      return {
-        content:
-          [
-            `✅ Registered! Current balance: ৳${balance.toFixed(2)}.`,
-            '',
-            `I'll check every ${config.pollIntervalHours} hours and DM you below ৳${config.defaultThresholds.low} (full meltdown below ৳${config.defaultThresholds.critical}).`,
-            'Tune with /threshold. Name it with /nickname (optional).',
-          ].join('\n') + dmNote,
-      };
-    });
-  }
-
   async function handleBalance(discordUserId: string): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     const meters = user ? await activeMeters(db, user.id) : [];
     if (!user || meters.length === 0) {
-      return reply('No meters registered yet. Use /register to add one.');
+      return reply(`No meters yet. Add one on your dashboard: ${appUrl}`);
     }
     if (!descoLookups.allow(discordUserId)) {
       return reply(
@@ -299,62 +230,11 @@ export function createDiscordBot(
     });
   }
 
-  async function handleThreshold(
-    discordUserId: string,
-    low: number,
-    critical: number
-  ): Promise<InteractionReply> {
-    if (!Number.isFinite(low) || !Number.isFinite(critical) || critical >= low || critical < 0) {
-      return reply('Critical must be below low (e.g. low 200, critical 100).');
-    }
-    const user = await findUserByIdentity(db, identity(discordUserId));
-    const count = user ? await applyThresholdsForUser(db, user.id, low, critical) : 0;
-    if (count === 0) {
-      return reply('No meters registered yet. Use /register to add one.');
-    }
-    return reply(`Done. I'll warn you under ৳${low} and lose my mind under ৳${critical}.`);
-  }
-
-  async function handleNickname(
-    discordUserId: string,
-    rawName: string,
-    meterNo: string | null
-  ): Promise<InteractionReply> {
-    const user = await findUserByIdentity(db, identity(discordUserId));
-    const meters = user ? await activeMeters(db, user.id) : [];
-    if (meters.length === 0) {
-      return reply('No meters registered yet. Use /register to add one.');
-    }
-    let target = meters[0];
-    if (meterNo) {
-      const byMeterNo = meters.find(m => m.meterNo === meterNo);
-      if (!byMeterNo) {
-        return reply(`None of your meters has number ${meterNo}. /meters lists them.`);
-      }
-      target = byMeterNo;
-    } else if (meters.length > 1) {
-      return reply('You have multiple meters - pass the meter option to say which one.');
-    }
-    const name = sanitizeNickname(rawName);
-    if (!name) {
-      return reply(
-        'After removing the fancy characters there was nothing left. Letters and numbers, please.'
-      );
-    }
-    if (name.length > MAX_NICKNAME_LENGTH) {
-      return reply(
-        `That's a novel, not a nickname. Keep it under ${MAX_NICKNAME_LENGTH} characters.`
-      );
-    }
-    await db.update(schema.meters).set({ nickname: name }).where(eq(schema.meters.id, target.id));
-    return reply(`Done. Meter ${target.meterNo} now answers to "${name}".`);
-  }
-
   async function handleMeters(discordUserId: string): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     const meters = user ? await activeMeters(db, user.id) : [];
     if (meters.length === 0) {
-      return reply('No meters registered yet. Use /register to add one.');
+      return reply(`No meters yet. Add one on your dashboard: ${appUrl}`);
     }
     return reply(
       meters
@@ -369,11 +249,11 @@ export function createDiscordBot(
   async function handlePlan(discordUserId: string): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     if (!user) {
-      return reply('No account yet - /register a meter first.');
+      return reply(signupPointer);
     }
     const lines = [
       `Plan: **${user.plan}**`,
-      `Meters: up to ${maxMetersFor(user.plan)}`,
+      `Meters: up to ${effectiveMeterLimit(user)}`,
       `SMS budget: ${smsPerMonthFor(user.plan)}/month`,
     ];
     const subscription = await subscriptions.activeFor(user.id);
@@ -394,7 +274,7 @@ export function createDiscordBot(
   async function handleDashboard(discordUserId: string): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     if (!user) {
-      return reply('No account yet - /register a meter first.');
+      return reply(signupPointer);
     }
     const token = signDashboardToken(
       user.id,
@@ -412,7 +292,7 @@ export function createDiscordBot(
   async function handleTone(discordUserId: string, style: string): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     if (!user) {
-      return reply('No account yet - /register a meter first.');
+      return reply(signupPointer);
     }
     const tone = normalizeTone(style);
     await setTone(db, user.id, tone);
@@ -432,7 +312,7 @@ export function createDiscordBot(
   ): Promise<InteractionReply> {
     const user = await findUserByIdentity(db, identity(discordUserId));
     if (!user) {
-      return reply('Register a meter first with /register.');
+      return reply(signupPointer);
     }
     const existing = await discordWebhook(db, user.id);
     const howTo =
@@ -482,33 +362,20 @@ export function createDiscordBot(
     });
   }
 
-  // One account across platforms: hand the user a Telegram deep link carrying
-  // a signed token with their Discord id. The Telegram bot consumes it and
-  // stamps this Discord id onto the account there (or merges two existing
-  // accounts) - works whether or not a Discord-side account exists yet.
-  async function handleTelegramLink(discordUserId: string): Promise<InteractionReply> {
-    const user = await findUserByIdentity(db, identity(discordUserId));
-    if (user?.telegramChatId != null) {
-      return reply(
-        'Already connected ✅ Telegram and Discord are the same account here - alerts and commands work from either.'
-      );
-    }
+  // One account across surfaces: hand the user a web link carrying a signed
+  // token with their Discord id. They open it while signed in on the web, and
+  // the web side attaches this Discord id to their account (folding in a legacy
+  // Discord-only account if one exists). Discord has no ?start= deep link, so the
+  // connect runs bot-to-web, the opposite of the Telegram flow.
+  function handleConnect(discordUserId: string): InteractionReply {
     const token = signDiscordLinkToken(discordUserId, config.dashboardSecret);
-    const note = user
-      ? 'Your meters come along - it all becomes one account.'
-      : "If you already use the Telegram bot, this links that account; if not, register there or here - it's one account either way.";
-    if (config.botUsername) {
-      return reply(
-        [
-          'Tap to connect Telegram (link valid 15 minutes):',
-          `https://t.me/${config.botUsername}?start=link_${token}`,
-          '',
-          note,
-        ].join('\n')
-      );
-    }
     return reply(
-      `Open the Telegram bot and send this within 15 minutes:\n\`/start link_${token}\`\n\n${note}`
+      [
+        'Connect Discord to your Power Roast account (link valid 15 minutes):',
+        `${appUrl}/connect/discord?token=${token}`,
+        '',
+        "Sign in on the web first if you haven't - then alerts and slash commands here share that account.",
+      ].join('\n')
     );
   }
 
@@ -555,24 +422,14 @@ export function createDiscordBot(
       const value = options.get(name);
       return typeof value === 'string' ? value.trim() : null;
     };
-    const num = (name: string) => {
-      const value = options.get(name);
-      return typeof value === 'number' ? value : NaN;
-    };
 
     switch (interaction.data?.name) {
       case 'help':
         return reply(HELP_TEXT);
       case 'privacy':
         return reply(PRIVACY_TEXT);
-      case 'register':
-        return handleRegister(discordUserId, str('account') ?? '', str('meter') ?? '');
       case 'balance':
         return handleBalance(discordUserId);
-      case 'threshold':
-        return handleThreshold(discordUserId, num('low'), num('critical'));
-      case 'nickname':
-        return handleNickname(discordUserId, str('name') ?? '', str('meter'));
       case 'meters':
         return handleMeters(discordUserId);
       case 'plan':
@@ -583,8 +440,8 @@ export function createDiscordBot(
         return handleTone(discordUserId, str('style') ?? '');
       case 'webhook':
         return handleWebhook(discordUserId, str('url'));
-      case 'telegram':
-        return handleTelegramLink(discordUserId);
+      case 'connect':
+        return handleConnect(discordUserId);
       case 'stop':
         return handleStop(discordUserId);
       case 'delete':

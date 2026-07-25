@@ -11,6 +11,7 @@ const config = {
   telegramApiRoot: null,
   dashboardSecret: SECRET,
   billing: { provider: 'none' },
+  publicBaseUrl: 'https://roast.test',
 } as unknown as ServerConfig;
 
 // users selects are consumed in call order: the discord-link handler looks up
@@ -94,15 +95,15 @@ describe('/start link_ with a discord-link token', () => {
     });
   });
 
-  it('creates the telegram account first when the chat has none', async () => {
-    // discord-id lookup: none; findUser: none; ensureUser re-checks: none
-    const { db, updates, inserted } = fakeDb([[], [], []]);
+  it('sends the user to sign up when neither side has an account', async () => {
+    // discord-id lookup: none; findUser: none. Accounts are created on the web
+    // now, so the bot links nothing and points at signup.
+    const { db, updates, inserted } = fakeDb([[], []]);
     const bot = makeBot(db);
     await bot.start(`link_${signDiscordLinkToken(DISCORD_ID, SECRET)}`);
-    expect(bot.replies.join(' ')).toMatch(/Linked/i);
-    const users = inserted.filter(x => x.table === schema.users);
-    expect(users[0].values).toMatchObject({ telegramChatId: 100 });
-    expect(updates).toContainEqual({ discordUserId: DISCORD_ID });
+    expect(bot.replies.join(' ')).toMatch(/sign up|dashboard/i);
+    expect(inserted.filter(x => x.table === schema.users)).toHaveLength(0);
+    expect(updates).toHaveLength(0);
   });
 
   it('attaches telegram to an existing discord-only account', async () => {

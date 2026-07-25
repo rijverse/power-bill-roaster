@@ -75,6 +75,15 @@ jobs:
         env:
           DATABASE_URL: postgres://powerroast:powerroast@localhost:5432/powerroast
 
+      # The unit suites run against in-memory fakes, which cannot enforce a
+      # foreign key or a unique index - a missing FK cleanup once passed every one
+      # of them and still failed in production. These run against the real
+      # Postgres above, in their own throwaway database per run.
+      - name: Integration tests (real Postgres constraints)
+        run: bun run test:integration
+        env:
+          DATABASE_URL: postgres://powerroast:powerroast@localhost:5432/powerroast
+
   e2e:
     runs-on: ubuntu-latest
 

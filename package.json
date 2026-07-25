@@ -6,6 +6,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks || true",
     "test": "jest",
+    "test:integration": "jest -c jest.integration.config.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "check-balance": "tsx src/cli.ts",

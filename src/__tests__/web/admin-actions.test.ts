@@ -53,7 +53,19 @@ async function startServer(state: State) {
   };
   const db = {
     select: () => ({ from: (t: unknown) => q(rowsFor(t)) }),
-    update: () => ({ set: (v: unknown) => ({ where: async () => updates.push({ values: v }) }) }),
+    update: (t: unknown) => ({
+      set: (v: unknown) => ({
+        where: async () => {
+          updates.push({ values: v });
+          // Persist users writes: actions that write then re-read (setting a meter
+          // cap, then enforcing it) are only meaningfully tested if the second
+          // read sees the first write.
+          if (t === schema.users && state.user) {
+            Object.assign(state.user as Record<string, unknown>, v);
+          }
+        },
+      }),
+    }),
     insert: (t: unknown) => ({
       values: async (v: unknown) => void inserts.push({ table: t, values: v }),
     }),
@@ -190,5 +202,60 @@ describe('admin grant', () => {
     const detail = (audit?.values as { detail: string }).detail;
     expect(detail).toContain('reason=beta tester');
     expect(detail).toContain('plan=plus');
+  });
+});
+
+describe('admin meter-cap override', () => {
+  it('sets an override above the plan default and reports nothing paused', async () => {
+    const { base, updates, inserts } = await startServer({
+      user: { id: 7, plan: 'free', meterLimit: null },
+      meters: [meter(1, true)],
+    });
+    const r = (await (await post(base, '/admin/api/users/7/meterlimit', { limit: 3 })).json()) as {
+      meterLimit: number;
+      pausedMeters: number;
+    };
+    expect(r.meterLimit).toBe(3);
+    expect(r.pausedMeters).toBe(0); // one active meter, cap raised to 3
+    expect(updates).toContainEqual({ values: { meterLimit: 3 } });
+    const audit = inserts.find(i => i.table === schema.adminAudit);
+    expect((audit?.values as { detail: string }).detail).toBe('limit 3');
+  });
+
+  it('pauses the excess when the override is lowered below what is active', async () => {
+    const { base } = await startServer({
+      user: { id: 7, plan: 'business', meterLimit: null },
+      meters: [meter(1, true), meter(2, true), meter(3, true)],
+    });
+    const r = (await (await post(base, '/admin/api/users/7/meterlimit', { limit: 1 })).json()) as {
+      pausedMeters: number;
+    };
+    // business is unlimited, so pinning to 1 has to actually pause the other two
+    expect(r.pausedMeters).toBe(2);
+  });
+
+  it('a blank value clears the override and falls back to the plan', async () => {
+    const { base, updates, inserts } = await startServer({
+      user: { id: 7, plan: 'free', meterLimit: 5 },
+      meters: [],
+    });
+    const r = (await (
+      await post(base, '/admin/api/users/7/meterlimit', { limit: null })
+    ).json()) as { meterLimit: number | null; effective: number };
+    expect(r.meterLimit).toBeNull();
+    expect(r.effective).toBe(1); // free plan default
+    expect(updates).toContainEqual({ values: { meterLimit: null } });
+    const audit = inserts.find(i => i.table === schema.adminAudit);
+    expect((audit?.values as { detail: string }).detail).toBe('cleared (plan default)');
+  });
+
+  it('rejects a nonsense limit without writing', async () => {
+    const { base, updates } = await startServer({
+      user: { id: 7, plan: 'free', meterLimit: null },
+    });
+    for (const limit of [-1, 9999, 'abc', 1.5]) {
+      expect((await post(base, '/admin/api/users/7/meterlimit', { limit })).status).toBe(400);
+    }
+    expect(updates).toHaveLength(0);
   });
 });

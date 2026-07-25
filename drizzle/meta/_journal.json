@@ -22,6 +22,13 @@
       "when": 1784793842507,
       "tag": "0002_add_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784971867601,
+      "tag": "0003_add_meter_limit",
+      "breakpoints": true
     }
   ]
 }

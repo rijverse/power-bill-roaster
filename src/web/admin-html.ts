@@ -380,7 +380,7 @@ async function openDetail(id) {
         (u.telegramChatId != null ? copyChip('Copy chat id', String(u.telegramChatId)) : '') +
         (u.discordUserId ? copyChip('Copy discord id', u.discordUserId) : '') +
       '</div>' +
-      '<p class="muted" style="font-size:13px;margin-top:8px">Subscription: ' + sub + ', meter cap ' + esc(d.limits.maxMeters) + ', SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
+      '<p class="muted" style="font-size:13px;margin-top:8px">Subscription: ' + sub + ', meter cap ' + esc(d.limits.maxMeters) + (u.meterLimit != null ? ' (override, plan allows ' + esc(d.limits.planMaxMeters) + ')' : '') + ', SMS ' + esc(d.limits.smsPerMonth) + '/mo</p>' +
       '<div class="row" style="margin-top:14px;gap:10px;flex-wrap:wrap">' +
         '<select id="grantPlan" class="pr-input" aria-label="Plan to grant" style="width:auto;min-width:120px"><option value="plus">plus</option><option value="business">business</option></select>' +
         '<input id="grantDays" class="pr-input mono" type="text" value="30" style="width:70px" aria-label="Days" title="days">' +
@@ -393,6 +393,14 @@ async function openDetail(id) {
         '<button class="pr-btn danger" type="button" id="eraseBtn">Erase customer</button>' +
       '</div>' +
       '<input id="grantReason" class="pr-input" type="text" placeholder="Reason for grant (optional, saved to the audit log)" style="margin-top:8px">' +
+      // Meter cap override: blank means follow the plan. Lowering it pauses the
+      // excess right away, so the number always matches what is being watched.
+      '<div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<span class="mono muted" style="font-size:11.5px">Meter cap override</span>' +
+        '<input id="meterLimit" class="pr-input mono" type="text" value="' + (u.meterLimit != null ? esc(u.meterLimit) : '') + '" placeholder="plan default" style="width:110px" aria-label="Meter cap override">' +
+        '<button class="pr-btn ghost sm" type="button" id="meterLimitBtn">Save cap</button>' +
+        '<span class="mono muted" id="meterLimitMsg" style="font-size:11.5px"></span>' +
+      '</div>' +
       '<p class="pr-err" id="detailErr" style="margin-top:8px"></p></div>';
 
   for (let i = 0; i < d.active.meters.length; i++) {
@@ -454,6 +462,20 @@ async function openDetail(id) {
     err.textContent = '';
     try { await action(u.id, 'grant', { plan: host.querySelector('#grantPlan').value, days: Number(host.querySelector('#grantDays').value), reason: host.querySelector('#grantReason').value }); await loadOverview(); await openDetail(u.id); } catch (e) { err.textContent = e.message; }
   };
+  host.querySelector('#meterLimitBtn').onclick = async () => {
+    err.textContent = '';
+    const msg = host.querySelector('#meterLimitMsg');
+    const raw = host.querySelector('#meterLimit').value.trim();
+    msg.textContent = 'saving...';
+    try {
+      // blank clears the override; the server pauses any excess and reports it
+      const r = await action(u.id, 'meterlimit', { limit: raw === '' ? null : raw });
+      msg.textContent = (r.meterLimit == null ? 'using plan default' : 'cap ' + r.meterLimit) +
+        (r.pausedMeters > 0 ? ', paused ' + r.pausedMeters : '');
+      await openDetail(u.id);
+      await loadList();
+    } catch (e) { msg.textContent = ''; err.textContent = e.message; }
+  };
   const revokeBtn = host.querySelector('#revokeBtn');
   if (revokeBtn) revokeBtn.onclick = async () => {
     if (!(await prModal({ title: 'Revoke plan', body: 'Cancel this customer\\'s plan and drop them to free? Meters beyond the free cap will be paused.', confirmLabel: 'Revoke plan', danger: true }))) return;
@@ -489,7 +511,12 @@ function deliveryRow(l) {
   const statusPill = l.status === 'sent'
     ? '<span class="pr-pill ok">Delivered</span>'
     : '<span class="pr-pill crit">Failed</span>';
-  const chan = l.channel === 'discord-dm' ? 'Discord DM' : l.channel.charAt(0).toUpperCase() + l.channel.slice(1);
+  const chan =
+    l.channel === 'discord-dm'
+      ? 'Discord DM'
+      : l.channel === 'whatsapp'
+        ? 'WhatsApp'
+        : l.channel.charAt(0).toUpperCase() + l.channel.slice(1);
   return '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;align-items:center;padding:13px 22px;border-bottom:1px solid var(--border-soft)">' +
     '<span class="mono" style="font-size:12px;color:var(--muted)">' + date + ' ' + time + '</span>' +
     '<span class="mono" style="font-size:12px;color:var(--text-2)">' + esc(l.meterNo) + '</span>' +
@@ -508,7 +535,7 @@ function renderLogs() {
   const chOpt = (key, label) => '<option value="' + key + '"' + (logChannel === key ? ' selected' : '') + '>' + label + '</option>';
   h += '<div class="pr-card" style="padding:8px 0"><div class="pr-section-head" style="padding:14px 22px;margin:0"><div style="font-size:14px;font-weight:700;color:var(--text)">Delivery attempts</div><span class="mono muted" style="font-size:12px">newest first</span></div>' +
     '<div class="row" style="padding:0 22px 12px;gap:8px;flex-wrap:wrap">' + sChip('all', 'All') + sChip('sent', 'Sent') + sChip('failed', 'Failed') +
-      '<select id="chanSel" class="pr-input sm" style="width:auto;min-width:130px">' + chOpt('all', 'All channels') + chOpt('telegram', 'Telegram') + chOpt('email', 'Email') + chOpt('sms', 'SMS') + chOpt('discord', 'Discord webhook') + chOpt('discord-dm', 'Discord DM') + '</select></div>' +
+      '<select id="chanSel" class="pr-input sm" style="width:auto;min-width:130px">' + chOpt('all', 'All channels') + chOpt('telegram', 'Telegram') + chOpt('email', 'Email') + chOpt('sms', 'SMS') + chOpt('discord', 'Discord webhook') + chOpt('discord-dm', 'Discord DM') + chOpt('whatsapp', 'WhatsApp') + '</select></div>' +
     '<div class="pr-tableshell" style="overflow-x:auto"><div style="min-width:760px">' +
     '<div style="display:grid;grid-template-columns:1.1fr 1fr 1.3fr 0.9fr 0.9fr 1.1fr;gap:12px;padding:11px 22px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)" class="mono">' +
     ['Time', 'Meter', 'Recipient', 'Channel', 'Type', 'Status'].map(c => '<span style="font-size:10.5px;text-transform:uppercase;letter-spacing:0.06em;color:var(--faint)">' + c + '</span>').join('') + '</div>' +

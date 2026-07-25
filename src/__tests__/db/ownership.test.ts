@@ -119,6 +119,9 @@ describe('user-owned table registry', () => {
         'discord_user_id',
         'email',
         'plan',
+        // operator override for the plan's meter cap; not an identity column, but
+        // pinned with the rest so any new users column gets a decision here
+        'meter_limit',
         'tone_pref',
         'quiet_start',
         'quiet_end',

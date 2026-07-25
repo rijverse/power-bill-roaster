@@ -26,6 +26,16 @@ export function maxMetersFor(plan: string): number {
   return (PLAN_LIMITS[plan] ?? PLAN_LIMITS.free).maxMeters;
 }
 
+/**
+ * The account's real meter cap. An operator override (users.meter_limit, set from
+ * the admin panel) wins over the plan default in both directions: a comped
+ * account can watch more without inventing a plan, and one that is abusing the
+ * free tier can be pinned lower. Null falls back to the plan.
+ */
+export function effectiveMeterLimit(user: { plan: string; meterLimit: number | null }): number {
+  return user.meterLimit ?? maxMetersFor(user.plan);
+}
+
 /** Monthly SMS budget - the hard cap that keeps gateway costs bounded per user. */
 export function smsPerMonthFor(plan: string): number {
   return (PLAN_LIMITS[plan] ?? PLAN_LIMITS.free).smsPerMonth;

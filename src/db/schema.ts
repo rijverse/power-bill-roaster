@@ -27,6 +27,11 @@ export const users = pgTable(
     quietStart: integer('quiet_start'),
     quietEnd: integer('quiet_end'),
     plan: text('plan').notNull().default('free'),
+    // Operator override for this account's meter cap, set from the admin panel.
+    // Null = use the plan's default (see effectiveMeterLimit); a number wins over
+    // the plan either way, so a comped account can watch more without a fake plan
+    // and an abusive one can be pinned lower.
+    meterLimit: integer('meter_limit'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   // Email is the web app's login identity, so it must be unique - but

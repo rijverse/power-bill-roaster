@@ -23,9 +23,11 @@ import { Scheduler } from '../core/scheduler';
 import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
 import { enforceMeterCap } from '../core/meter-cap';
+import { atMeterCap } from '../core/meter-usecases';
 import {
   isPurchasablePlan,
   maxMetersFor,
+  effectiveMeterLimit,
   smsPerMonthFor,
   priceBdtFor,
   billingLive,
@@ -180,7 +182,8 @@ async function deliveries(db: Db, status: string, channel: string, page: number)
     channel === 'email' ||
     channel === 'sms' ||
     channel === 'discord' ||
-    channel === 'discord-dm'
+    channel === 'discord-dm' ||
+    channel === 'whatsapp'
   ) {
     conds.push(eq(schema.channels.type, channel));
   }
@@ -438,10 +441,16 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
       discordUserId: user.discordUserId,
       email: user.email,
       plan: user.plan,
+      // null = following the plan default; a number is the operator override
+      meterLimit: user.meterLimit,
       tonePref: user.tonePref,
       createdAt: user.createdAt.toISOString(),
     },
-    limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
+    limits: {
+      maxMeters: effectiveMeterLimit(user),
+      planMaxMeters: maxMetersFor(user.plan),
+      smsPerMonth: smsPerMonthFor(user.plan),
+    },
     impact: { meters: allMeters.length, readings: readingCount, payments: paymentCount },
     active: await dashboardData(db, userId),
     pausedMeters: allMeters
@@ -552,7 +561,7 @@ async function resumeAllMeters(db: Db, userId: number): Promise<{ status: number
     .orderBy(schema.meters.createdAt);
   const activeCount = all.filter(m => m.active).length;
   const inactive = all.filter(m => !m.active);
-  const slots = Math.max(0, maxMetersFor(user.plan) - activeCount);
+  const slots = Math.max(0, effectiveMeterLimit(user) - activeCount);
   const toActivate = inactive.slice(0, slots);
   if (toActivate.length > 0) {
     await db
@@ -591,11 +600,7 @@ async function setMeterActive(
   }
   if (active && !meter.active) {
     const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
-    const activeCount = await db.$count(
-      schema.meters,
-      and(eq(schema.meters.userId, userId), eq(schema.meters.active, true))
-    );
-    if (user && activeCount >= maxMetersFor(user.plan)) {
+    if (user && (await atMeterCap(db, user))) {
       return {
         status: 400,
         body: { error: 'Plan meter cap is full - pause another meter or raise the plan first.' },
@@ -623,6 +628,67 @@ async function revoke(
   await db.update(schema.users).set({ plan: 'free' }).where(eq(schema.users.id, userId));
   const paused = await enforceMeterCap(db, userId, 'free');
   return { status: 200, body: { ok: true, pausedMeters: paused } };
+}
+
+// A sanity ceiling on the operator override. Not a business rule, just a guard so
+// a fat-fingered "1000" can't quietly point the scheduler at a thousand meters.
+const MAX_METER_LIMIT = 100;
+
+/**
+ * Set or clear this account's meter-cap override. Blank hands the account back to
+ * its plan default. Lowering the cap pauses the excess immediately (oldest kept),
+ * the same way a plan downgrade does, so the number always reflects reality.
+ */
+async function setMeterLimit(
+  db: Db,
+  userId: number,
+  bodyText: string
+): Promise<{ status: number; body: unknown }> {
+  const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!user) {
+    return { status: 404, body: { error: 'No such user.' } };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText || '{}');
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON.' } };
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { status: 400, body: { error: 'Invalid body.' } };
+  }
+  const raw = (parsed as Record<string, unknown>).limit;
+
+  if (raw === null || raw === undefined || raw === '') {
+    await db.update(schema.users).set({ meterLimit: null }).where(eq(schema.users.id, userId));
+    const paused = await enforceMeterCap(db, userId, user.plan);
+    return {
+      status: 200,
+      body: {
+        ok: true,
+        meterLimit: null,
+        effective: maxMetersFor(user.plan),
+        pausedMeters: paused,
+      },
+    };
+  }
+
+  const limit =
+    typeof raw === 'number' ? raw : typeof raw === 'string' ? parseInt(raw) : Number.NaN;
+  if (!Number.isInteger(limit) || limit < 0 || limit > MAX_METER_LIMIT) {
+    return {
+      status: 400,
+      body: {
+        error: `Meter limit must be a whole number from 0 to ${MAX_METER_LIMIT}, or blank to use the plan default.`,
+      },
+    };
+  }
+  await db.update(schema.users).set({ meterLimit: limit }).where(eq(schema.users.id, userId));
+  const paused = await enforceMeterCap(db, userId, user.plan);
+  return {
+    status: 200,
+    body: { ok: true, meterLimit: limit, effective: limit, pausedMeters: paused },
+  };
 }
 
 /** Poll DESCO for one meter right now, store the reading, and hand back the balance. */
@@ -881,9 +947,8 @@ export async function handleAdminRequest(
       return true;
     }
 
-    const userMatch = /^\/admin\/api\/users\/(\d+)(?:\/(grant|pause|erase|resume|revoke))?$/.exec(
-      path
-    );
+    const userMatch =
+      /^\/admin\/api\/users\/(\d+)(?:\/(grant|pause|erase|resume|revoke|meterlimit))?$/.exec(path);
     if (userMatch) {
       const userId = parseInt(userMatch[1]);
       const action = userMatch[2];
@@ -907,6 +972,11 @@ export async function handleAdminRequest(
           result = await grant(db, subscriptions, userId, bodyText);
           // record a readable detail (plan / days / operator reason), not raw JSON
           detail = grantAuditDetail(bodyText);
+        } else if (action === 'meterlimit') {
+          const bodyText = await readBody(req);
+          result = await setMeterLimit(db, userId, bodyText);
+          const applied = (result.body as { meterLimit?: number | null }).meterLimit;
+          detail = applied === null ? 'cleared (plan default)' : `limit ${String(applied)}`;
         } else if (action === 'pause') {
           result = await pause(db, userId);
         } else if (action === 'resume') {

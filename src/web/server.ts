@@ -16,6 +16,11 @@ import { homeHtml, HERO_GRID_JS } from './home-html';
 import { Mailer } from '../services/mailer';
 import { RateLimiter } from '../core/rate-limiter';
 import { handleDiscordInteraction, DiscordInteractionDeps } from '../discord/interactions';
+import {
+  handleWhatsAppVerification,
+  handleWhatsAppEvent,
+  WhatsAppInboundDeps,
+} from '../notifications/whatsapp/webhook';
 import { json, readBody } from './http-utils';
 import { pollIsStale } from '../core/health';
 import { logger } from '../logger';
@@ -180,7 +185,8 @@ export function createWebServer(
   config: ServerConfig,
   subscriptions: SubscriptionService,
   mailer: Mailer | null = null,
-  discordInteractions: DiscordInteractionDeps | null = null
+  discordInteractions: DiscordInteractionDeps | null = null,
+  whatsappInbound: WhatsAppInboundDeps | null = null
 ): http.Server {
   const startedAt = Date.now();
   // fully static and search-engine indexed - built once and memoized on first
@@ -240,6 +246,26 @@ export function createWebServer(
         }
         const rawBody = await readBody(req);
         await handleDiscordInteraction(req, res, rawBody, discordInteractions);
+        return;
+      }
+
+      // WhatsApp Cloud API webhook: GET is Meta's subscribe handshake, POST is a
+      // signed message event. Config-gated like the Discord endpoint.
+      if (url.pathname === '/whatsapp/webhook') {
+        if (!whatsappInbound) {
+          res.writeHead(404).end();
+          return;
+        }
+        if (req.method === 'GET') {
+          handleWhatsAppVerification(url, res, whatsappInbound);
+          return;
+        }
+        if (req.method === 'POST') {
+          const rawBody = await readBody(req);
+          await handleWhatsAppEvent(req, res, rawBody, whatsappInbound);
+          return;
+        }
+        res.writeHead(405).end();
         return;
       }
 

@@ -10,7 +10,7 @@ import { Db } from '../../db';
 // hands back every row and lets the real filtering logic run - which is both
 // simpler and a truer test.
 
-export type ChannelType = 'telegram' | 'email' | 'sms' | 'discord' | 'discord-dm';
+export type ChannelType = 'telegram' | 'email' | 'sms' | 'discord' | 'discord-dm' | 'whatsapp';
 
 export interface FakeChannel {
   id: number;

@@ -12,6 +12,7 @@ import { emailAlert } from './email-templates';
 import { discordAlertEmbed } from './discord-templates';
 import { sendDiscordAlert as postDiscordWebhook, DiscordEmbed } from './discord';
 import { SmsGateway } from './sms';
+import { WhatsAppSender } from './whatsapp';
 import { Mailer } from '../services/mailer';
 import { logger, maskEmail, maskPhone, maskWebhookUrl } from '../logger';
 
@@ -69,7 +70,7 @@ function deliverable(channels: schema.Channel[], type: string): schema.Channel[]
 /** One channel type's fan-out: what to send, to whom, and how to account for it. */
 interface FanOut {
   channels: schema.Channel[];
-  keyPrefix: 'email' | 'sms' | 'discord' | 'discord-dm';
+  keyPrefix: 'email' | 'sms' | 'discord' | 'discord-dm' | 'whatsapp';
   meter: schema.Meter;
   action: AlertAction;
   level: AlertLevel;
@@ -99,7 +100,8 @@ export class Dispatcher {
     private telegram: TelegramSender,
     private sms: SmsGateway | null,
     private mailer: Mailer | null = null,
-    private discordDm: DiscordDmSender | null = null
+    private discordDm: DiscordDmSender | null = null,
+    private whatsapp: WhatsAppSender | null = null
   ) {}
 
   async dispatchAlert(
@@ -135,6 +137,9 @@ export class Dispatcher {
       ),
       this.runChannel('discord-dm', () =>
         this.sendDiscordDmAlert(meter, action, level, ctx, tone, alreadyDelivered, channels)
+      ),
+      this.runChannel('whatsapp', () =>
+        this.sendWhatsAppAlert(meter, action, level, ctx, tone, alreadyDelivered, channels)
       ),
     ]);
     return {
@@ -402,6 +407,41 @@ export class Dispatcher {
   // command proves the user controls that snowflake). The DM itself can still
   // fail (closed DMs, bot blocked); that's a failed delivery and the outbox
   // retries it.
+  private async sendWhatsAppAlert(
+    meter: schema.Meter,
+    action: AlertAction,
+    level: AlertLevel,
+    ctx: MeterContext,
+    tone: Tone,
+    alreadyDelivered: ReadonlySet<string>,
+    channels: schema.Channel[]
+  ): Promise<DispatchResult> {
+    const sender = this.whatsapp;
+    if (!sender) {
+      return empty();
+    }
+    const message = renderAlert(action, ctx, tone);
+    if (!message) {
+      return empty();
+    }
+    // WhatsApp is a free-ish channel like Discord, so it gets the full action set.
+    // verified rows are numbers proven via the connect webhook.
+    return this.fanOut({
+      channels: deliverable(channels, 'whatsapp'),
+      keyPrefix: 'whatsapp',
+      meter,
+      action,
+      level,
+      alreadyDelivered,
+      send: c => sender.send(c.address, message),
+      onError: (c, e) =>
+        logger.error(
+          `WhatsApp alert failed for meter ${meter.id} to ${maskPhone(c.address)}`,
+          errMsg(e)
+        ),
+    });
+  }
+
   private async sendDiscordDmAlert(
     meter: schema.Meter,
     action: AlertAction,

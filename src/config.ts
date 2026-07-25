@@ -139,6 +139,21 @@ export interface ServerConfig {
     /** override the Discord REST root (mock servers). Null = https://discord.com/api/v10 */
     apiBaseUrl: string | null;
   } | null;
+  /**
+   * WhatsApp Cloud API: delivery channel + the inbound connect webhook. null = off.
+   * The sender is stubbed for now (see notifications/whatsapp); this config gates
+   * the channel, the wa.me connect link, and the /whatsapp/webhook route.
+   */
+  whatsapp: {
+    phoneNumberId: string;
+    accessToken: string;
+    /** the token set in the Meta dashboard; echoed back on GET webhook verification */
+    verifyToken: string;
+    /** app secret, for validating X-Hub-Signature-256 on inbound POSTs */
+    appSecret: string;
+    /** the business number (digits only) for wa.me connect links */
+    displayNumber: string;
+  } | null;
   billing:
     | { provider: 'none' }
     | { provider: 'sandbox' }
@@ -300,6 +315,34 @@ function getDiscordConfig(): ServerConfig['discord'] {
   };
 }
 
+// WhatsApp is all-or-nothing like the Discord bot: a half-filled set is almost
+// certainly a typo, so name what's missing rather than half-enabling the channel.
+const WHATSAPP_VARS = [
+  'WHATSAPP_PHONE_NUMBER_ID',
+  'WHATSAPP_ACCESS_TOKEN',
+  'WHATSAPP_VERIFY_TOKEN',
+  'WHATSAPP_APP_SECRET',
+  'WHATSAPP_DISPLAY_NUMBER',
+] as const;
+
+function getWhatsAppConfig(): ServerConfig['whatsapp'] {
+  const set = WHATSAPP_VARS.filter(key => process.env[key]);
+  if (set.length === 0) {
+    return null;
+  }
+  if (set.length < WHATSAPP_VARS.length) {
+    const missing = WHATSAPP_VARS.filter(key => !process.env[key]);
+    throw new Error(`Incomplete WhatsApp config - also set: ${missing.join(', ')}`);
+  }
+  return {
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID!,
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN!,
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN!,
+    appSecret: process.env.WHATSAPP_APP_SECRET!,
+    displayNumber: process.env.WHATSAPP_DISPLAY_NUMBER!.replace(/\D/g, ''),
+  };
+}
+
 const REQUIRED_SERVER_ENV_VARS = ['DATABASE_URL', 'TELEGRAM_BOT_TOKEN'] as const;
 
 export function getServerConfig(): ServerConfig {
@@ -361,6 +404,7 @@ export function getServerConfig(): ServerConfig {
     rechargeUrl: process.env.RECHARGE_URL || DEFAULT_RECHARGE_URL,
     sms: getSmsConfig(),
     discord: getDiscordConfig(),
+    whatsapp: getWhatsAppConfig(),
     billing: getBillingConfig(publicBaseUrl),
   };
 }

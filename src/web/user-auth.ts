@@ -147,6 +147,27 @@ export function verifyDiscordLinkToken(
   return id && /^\d{5,25}$/.test(id) ? id : null;
 }
 
+// WhatsApp connect token: proves a signed-in web user asked to connect WhatsApp.
+// It rides (prefilled) in the wa.me deep link's message text; the inbound webhook
+// reads it back and attaches the sender's number to this account. Carries our
+// account id, so no server-side pending state is needed - same shape as tg-link.
+export function signWhatsAppConnectToken(
+  userId: number,
+  secret: string,
+  expiresAtMs = Date.now() + LINK_TTL_MS
+): string {
+  return sign('wa-connect', `${userId}\n${expiresAtMs}`, secret);
+}
+
+/** Returns the userId for a valid, unexpired WhatsApp connect token, else null. */
+export function verifyWhatsAppConnectToken(
+  token: string,
+  secret: string,
+  now = Date.now()
+): number | null {
+  return accountId(unsignExpiring('wa-connect', token, secret, now));
+}
+
 /** One of our numeric account ids, or null if the payload didn't carry one. */
 function accountId(raw: string | null): number | null {
   if (raw === null) {

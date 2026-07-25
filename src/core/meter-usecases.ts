@@ -1,5 +1,6 @@
 import { and, eq, gte } from 'drizzle-orm';
 import { Db, schema } from '../db';
+import { effectiveMeterLimit } from './plans';
 import { RunOutPrediction, predictRunOut } from './prediction';
 import { Tone } from './tone';
 
@@ -65,6 +66,22 @@ export async function activeMeters(db: Db, userId: number): Promise<schema.Meter
     .select()
     .from(schema.meters)
     .where(and(eq(schema.meters.userId, userId), eq(schema.meters.active, true)));
+}
+
+/**
+ * Whether the user is already at (or over) their plan's meter cap. The single
+ * gate every add-a-meter surface shares, so the count-then-compare can't drift
+ * between them.
+ */
+export async function atMeterCap(
+  db: Db,
+  user: { id: number; plan: string; meterLimit: number | null }
+): Promise<boolean> {
+  const active = await db.$count(
+    schema.meters,
+    and(eq(schema.meters.userId, user.id), eq(schema.meters.active, true))
+  );
+  return active >= effectiveMeterLimit(user);
 }
 
 /**

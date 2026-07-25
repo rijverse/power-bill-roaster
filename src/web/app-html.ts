@@ -505,6 +505,29 @@ function renderAlerts() {
   const tgConnect = ch.telegram.connectUrl
     ? '<div style="margin-top:12px"><a href="' + ch.telegram.connectUrl + '" target="_blank" rel="noopener" class="pr-btn blue block" style="text-decoration:none">Connect Telegram</a><p class="mono" style="font-size:11px;color:var(--faint);margin:6px 0 0">Get instant alerts and manage meters from the bot too.</p></div>'
     : '';
+  // Discord DMs connect the other way (Discord has no web deep link): the user
+  // runs /connect in the bot and opens the link it returns.
+  const dcConnect = '<div style="margin-top:12px"><div class="mono" style="font-size:11px;color:var(--faint)">Want alerts as a Discord DM? Run <b>/connect</b> in the Power Roast Discord bot and open the link it gives you.</div></div>';
+  // Shown only when WhatsApp is configured and this account has no number yet.
+  const waConnect =
+    ch.whatsapp && ch.whatsapp.connectUrl
+      ? '<div style="margin-top:12px"><a href="' + ch.whatsapp.connectUrl + '" target="_blank" rel="noopener" class="pr-btn block" style="text-decoration:none;background:#25d366;color:#04310f">Connect WhatsApp</a><p class="mono" style="font-size:11px;color:var(--faint);margin:6px 0 0">Opens WhatsApp with a prefilled code - just hit send to link this number.</p></div>'
+      : '';
+  // "Get the bots" - install / open each app on the user's side, so they can run
+  // /connect, /balance, etc. Only the platforms the server has configured show up.
+  const apps = DATA.apps || {};
+  const appLink = (url, label) =>
+    url
+      ? '<a href="' + url + '" target="_blank" rel="noopener" class="pr-btn ghost" style="text-decoration:none;padding:8px 12px;font-size:12.5px;margin:0 6px 6px 0;display:inline-block">' + label + '</a>'
+      : '';
+  const appsBlock =
+    apps.telegram || apps.discord || apps.whatsapp
+      ? '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-soft)"><div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Get the bots</div>' +
+        appLink(apps.telegram, '📨 Telegram') +
+        appLink(apps.discord, '🎮 Add to Discord') +
+        appLink(apps.whatsapp, '💬 WhatsApp') +
+        '<p class="mono" style="font-size:11px;color:var(--faint);margin:8px 0 0">Add a bot, then use /connect to link it to this account and /balance to check anytime.</p></div>'
+      : '';
 
   let h = '<div class="pr-grid pr-2col-even">';
   h += '<div class="pr-stack">';
@@ -514,7 +537,10 @@ function renderAlerts() {
   '<div style="margin-top:12px"><div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Discord webhook</div>' +
     '<div class="row" style="gap:8px"><input type="text" id="dcUrl" class="pr-input" placeholder="https://discord.com/api/webhooks/..." style="flex:1;min-width:160px"><button class="pr-btn ghost" id="dcBtn" type="button">' + (dc.connected ? 'Update' : 'Connect') + '</button></div>' +
     '<p class="mono" id="dcMsg" style="font-size:11.5px;margin-top:6px;color:var(--faint)">We send a test message to confirm it works.</p></div>' +
+  dcConnect +
+  waConnect +
   tgConnect +
+  appsBlock +
   '<p class="pr-err" id="chErr" style="margin-top:8px"></p></div>';
 
   h += '<div class="pr-card"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Thresholds</span><span class="mono muted" style="font-size:12px">' + esc(clip(m.label, 18)) + '</span></div><div class="pr-card-sub" style="margin-bottom:22px">Defaults are ৳150 / ৳100. Higher if you like a buffer, lower if you like danger.</div>' +

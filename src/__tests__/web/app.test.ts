@@ -2,10 +2,16 @@ import { listen, closeServers } from '../helpers/http-server';
 import { createWebServer } from '../../web/server';
 import { Scheduler } from '../../core/scheduler';
 import { SubscriptionService } from '../../billing';
-import { Db } from '../../db';
+import { Db, schema } from '../../db';
 import { ServerConfig } from '../../config';
 import { Mailer } from '../../services/mailer';
-import { signUserSession, signMagicLink, magicCode, csrfFor } from '../../web/user-auth';
+import {
+  signUserSession,
+  signMagicLink,
+  magicCode,
+  csrfFor,
+  signDiscordLinkToken,
+} from '../../web/user-auth';
 import { eraseUser } from '../../core/erase-user';
 
 jest.mock('../../core/erase-user', () => ({ eraseUser: jest.fn(async () => undefined) }));
@@ -15,20 +21,22 @@ const cookieToken = signUserSession(1, SECRET);
 const COOKIE = `pr_user=${cookieToken}`;
 const CSRF = csrfFor(cookieToken, SECRET);
 
-async function startServer(opts: { mailer?: Mailer | null } = {}) {
+async function startServer(opts: { mailer?: Mailer | null; db?: Db } = {}) {
   // Every select returns one row that satisfies both "user" and "verified email
   // channel" shapes, so find-or-create takes the existing-account path.
-  const db = {
-    select: () => ({
-      from: () => ({
-        where: async () => [
-          { id: 1, email: 'me@example.com', plan: 'free', verified: true, enabled: true },
-        ],
+  const db =
+    opts.db ??
+    ({
+      select: () => ({
+        from: () => ({
+          where: async () => [
+            { id: 1, email: 'me@example.com', plan: 'free', verified: true, enabled: true },
+          ],
+        }),
       }),
-    }),
-    update: () => ({ set: () => ({ where: async () => undefined }) }),
-    $count: async () => 0,
-  } as unknown as Db;
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+      $count: async () => 0,
+    } as unknown as Db);
   const scheduler = { lastCycleCompletedAt: new Date() } as unknown as Scheduler;
   const config = {
     port: 0,
@@ -182,6 +190,62 @@ describe('app - logout', () => {
     const res = await logout(base, {});
     expect(res.status).toBe(302);
     expect(res.headers.get('set-cookie')).toBeNull();
+  });
+});
+
+describe('app - connect Discord', () => {
+  const DISCORD_ID = '111222333444555666';
+
+  it('bounces to sign-in when not signed in', async () => {
+    const { base } = await startServer();
+    const token = signDiscordLinkToken(DISCORD_ID, SECRET);
+    const res = await fetch(`${base}/app/connect/discord?token=${encodeURIComponent(token)}`, {
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/app?status=signin-to-connect');
+  });
+
+  it('rejects a bad token', async () => {
+    const { base } = await startServer();
+    const res = await fetch(`${base}/app/connect/discord?token=garbage`, {
+      headers: { Cookie: COOKIE },
+      redirect: 'manual',
+    });
+    expect(res.headers.get('location')).toBe('/app?status=badlink');
+  });
+
+  it('attaches a free Discord identity to the signed-in account', async () => {
+    // identities + channels selects return [], so linkIdentity takes the fresh
+    // "linked" path (no merge). users returns the signed-in account.
+    const inserts: { table: unknown; values: Record<string, unknown> }[] = [];
+    const db = {
+      select: () => ({
+        from: (t: unknown) => ({
+          where: async () => (t === schema.users ? [{ id: 1, plan: 'free' }] : []),
+        }),
+      }),
+      insert: (table: unknown) => ({
+        values: (values: Record<string, unknown>) => {
+          inserts.push({ table, values });
+          return { then: (resolve: (v: unknown) => void) => resolve(undefined) };
+        },
+      }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+      $count: async () => 0,
+    } as unknown as Db;
+    const { base } = await startServer({ db });
+    const token = signDiscordLinkToken(DISCORD_ID, SECRET);
+    const res = await fetch(`${base}/app/connect/discord?token=${encodeURIComponent(token)}`, {
+      headers: { Cookie: COOKIE },
+      redirect: 'manual',
+    });
+    expect(res.headers.get('location')).toBe('/app?status=discord-connected');
+    expect(inserts.find(i => i.table === schema.identities)?.values).toMatchObject({
+      userId: 1,
+      provider: 'discord',
+      providerUid: DISCORD_ID,
+    });
   });
 });
 

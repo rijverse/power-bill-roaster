@@ -1,5 +1,5 @@
 import http from 'http';
-import { eq, and, ne, sql, desc } from 'drizzle-orm';
+import { eq, and, sql, desc } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { Mailer } from '../services/mailer';
@@ -8,6 +8,7 @@ import { eraseUser } from '../core/erase-user';
 import { sanitizeNickname } from '../core/sanitize';
 import {
   maxMetersFor,
+  effectiveMeterLimit,
   smsPerMonthFor,
   priceBdtFor,
   isPurchasablePlan,
@@ -15,11 +16,13 @@ import {
   billingLive,
 } from '../core/plans';
 import { Tone, normalizeTone, TONES } from '../core/tone';
-import { setTone } from '../core/meter-usecases';
+import { setTone, atMeterCap } from '../core/meter-usecases';
+import { linkIdentity } from '../core/identities';
+import { mergeAccounts, chooseSurvivor } from '../core/merge-accounts';
 import { SubscriptionService } from '../billing';
 import { getProvider } from '../providers';
 import { connectDiscordWebhook } from '../core/discord-connect';
-import { logger, maskWebhookUrl } from '../logger';
+import { logger, maskEmail, maskWebhookUrl } from '../logger';
 import { dashboardData } from './queries';
 import {
   clientIp,
@@ -41,6 +44,8 @@ import {
   verifyMagicCode,
   signLinkToken,
   verifyLinkToken,
+  verifyDiscordLinkToken,
+  signWhatsAppConnectToken,
   signUserSession,
   verifyUserSession,
   csrfFor,
@@ -93,26 +98,20 @@ async function findOrCreateByEmail(db: Db, email: string): Promise<schema.User> 
     await db.insert(schema.users).values({ email }).onConflictDoNothing();
     [user] = await lookup();
   }
-  // make sure the verified, enabled email channel exists so alerts reach them
-  const [channel] = await db
-    .select()
-    .from(schema.channels)
-    .where(
-      and(
-        eq(schema.channels.userId, user.id),
-        eq(schema.channels.type, 'email'),
-        eq(schema.channels.address, email)
-      )
-    );
-  if (!channel) {
-    await db
-      .insert(schema.channels)
-      .values({ userId: user.id, type: 'email', address: email, verified: true, enabled: true });
-  } else if (!channel.verified || !channel.enabled) {
-    await db
-      .update(schema.channels)
-      .set({ verified: true, enabled: true })
-      .where(eq(schema.channels.id, channel.id));
+  // linkIdentity writes the email identity row and the verified, enabled email
+  // channel together, and backfills the identity for accounts that predate the
+  // table. Sign-in must not fail on an odd link outcome (the users row is
+  // authoritative today), so the result is logged rather than surfaced.
+  const result = await linkIdentity(
+    db,
+    user.id,
+    { provider: 'email', email },
+    {
+      replaceSameProvider: true,
+    }
+  );
+  if (result.status === 'needs-merge') {
+    logger.warn(`email identity ${maskEmail(email)} is held by another account; not linked`);
   }
   return user;
 }
@@ -135,40 +134,23 @@ export async function attachEmailToUser(
   if (existing && existing.id !== userId) {
     return 'conflict';
   }
-  await db.update(schema.users).set({ email }).where(eq(schema.users.id, userId));
-  // A replaced address must stop receiving alerts: the dispatcher fans out to
-  // every enabled email row, so a stale-but-enabled row would keep leaking
-  // balance mail to an address the user may no longer control. Disabled, not
-  // deleted - alerts_log rows FK the channel, and re-adding re-enables it.
-  await db
-    .update(schema.channels)
-    .set({ enabled: false })
-    .where(
-      and(
-        eq(schema.channels.userId, userId),
-        eq(schema.channels.type, 'email'),
-        ne(schema.channels.address, email)
-      )
-    );
-  const [channel] = await db
-    .select()
-    .from(schema.channels)
-    .where(
-      and(
-        eq(schema.channels.userId, userId),
-        eq(schema.channels.type, 'email'),
-        eq(schema.channels.address, email)
-      )
-    );
-  if (!channel) {
-    await db
-      .insert(schema.channels)
-      .values({ userId, type: 'email', address: email, verified: true, enabled: true });
-  } else if (!channel.verified || !channel.enabled) {
-    await db
-      .update(schema.channels)
-      .set({ verified: true, enabled: true })
-      .where(eq(schema.channels.id, channel.id));
+  // One write path: linkIdentity sets the identity row and legacy users.email,
+  // retires any stale email channel (a replaced address must stop receiving
+  // alerts - the dispatcher fans out to every enabled email row), and leaves a
+  // verified, enabled channel for this address. replaceSameProvider because
+  // changing the address on an account is the point of this function.
+  const result = await linkIdentity(
+    db,
+    userId,
+    { provider: 'email', email },
+    {
+      replaceSameProvider: true,
+    }
+  );
+  // The identities table says another account holds this address. Same conflict
+  // from the caller's side, and we never auto-merge on the email path.
+  if (result.status === 'needs-merge') {
+    return 'conflict';
   }
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
   return user;
@@ -198,11 +180,12 @@ async function me(db: Db, userId: number, live = false) {
   const tg = chans.find(c => c.type === 'telegram');
   const sms = chans.find(c => c.type === 'sms' && c.verified);
   const discord = chans.find(c => c.type === 'discord' && c.verified);
+  const whatsapp = chans.find(c => c.type === 'whatsapp' && c.verified);
   const emailAlerts = !!(email && email.verified && email.enabled);
   return {
     email: user.email,
     plan: user.plan,
-    limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
+    limits: { maxMeters: effectiveMeterLimit(user), smsPerMonth: smsPerMonthFor(user.plan) },
     tone: normalizeTone(user.tonePref),
     quietStart: user.quietStart,
     quietEnd: user.quietEnd,
@@ -227,6 +210,19 @@ async function me(db: Db, userId: number, live = false) {
         enabled: !!(discord && discord.enabled),
         address: discord ? maskWebhookUrl(discord.address) : null,
       },
+      whatsapp: {
+        available: !!whatsapp,
+        enabled: !!(whatsapp && whatsapp.enabled),
+        // filled in by the /app/api/me route when WhatsApp is configured
+        connectUrl: null as string | null,
+      },
+    },
+    // "Get the bot" links (install / open the app on the user's side), filled in
+    // by the /app/api/me route from config. Null when that platform is off.
+    apps: {
+      telegram: null as string | null,
+      discord: null as string | null,
+      whatsapp: null as string | null,
     },
     billingLive: live,
     ...(await dashboardData(db, userId)),
@@ -377,7 +373,7 @@ async function billing(db: Db, subscriptions: SubscriptionService, userId: numbe
     live,
     plan: user.plan,
     priceBdt: priceBdtFor(user.plan),
-    limits: { maxMeters: maxMetersFor(user.plan), smsPerMonth: smsPerMonthFor(user.plan) },
+    limits: { maxMeters: effectiveMeterLimit(user), smsPerMonth: smsPerMonthFor(user.plan) },
     catalog: planCatalog(),
     subscription: subscription
       ? {
@@ -443,14 +439,12 @@ async function addMeter(
   if (!user) {
     return { status: 404, body: { error: 'No such account.' } };
   }
-  const active = await db.$count(
-    schema.meters,
-    and(eq(schema.meters.userId, userId), eq(schema.meters.active, true))
-  );
-  if (active >= maxMetersFor(user.plan)) {
+  if (await atMeterCap(db, user)) {
     return {
       status: 400,
-      body: { error: `Your plan watches ${maxMetersFor(user.plan)} meter(s). That's the limit.` },
+      body: {
+        error: `Your plan watches ${effectiveMeterLimit(user)} meter(s). That's the limit.`,
+      },
     };
   }
   if (!meterLimiter.allow(userId)) {
@@ -684,6 +678,51 @@ export async function handleAppRequest(
     return true;
   }
 
+  // Discord connect: the Discord bot's /connect hands the user this link with a
+  // signed token carrying their Discord id. They must be signed in on the web,
+  // and we attach that Discord id to the signed-in account (folding in a legacy
+  // Discord-only account if one exists). Discord has no ?start= deep link, so the
+  // flow runs this direction rather than the Telegram-style web-to-bot one.
+  if (path === '/app/connect/discord' && method === 'GET') {
+    if (!authed) {
+      redirect(res, '/app?status=signin-to-connect');
+      return true;
+    }
+    const discordUserId = verifyDiscordLinkToken(url.searchParams.get('token') ?? '', secret);
+    if (!discordUserId) {
+      redirect(res, '/app?status=badlink');
+      return true;
+    }
+    const result = await linkIdentity(db, userId, { provider: 'discord', discordUserId });
+    if (result.status === 'provider-conflict') {
+      redirect(res, '/app?status=discord-conflict');
+      return true;
+    }
+    if (result.status === 'needs-merge') {
+      // The Discord id already belongs to another (legacy) account. Merge it into
+      // whichever account keeps its plan; move the session there if it was merged.
+      const webHasSub = (await deps.subscriptions.activeFor(userId)) !== null;
+      const otherHasSub = (await deps.subscriptions.activeFor(result.otherUserId)) !== null;
+      const { survivorId, loserId } = chooseSurvivor(
+        { id: userId, hasSubscription: webHasSub },
+        { id: result.otherUserId, hasSubscription: otherHasSub }
+      );
+      const merged = await mergeAccounts(db, survivorId, loserId);
+      if (merged !== 'merged') {
+        redirect(res, '/app?status=discord-conflict');
+        return true;
+      }
+      redirect(
+        res,
+        '/app?status=discord-connected',
+        userCookie(signUserSession(survivorId, secret), secure)
+      );
+      return true;
+    }
+    redirect(res, '/app?status=discord-connected');
+    return true;
+  }
+
   if (path === '/app/logout' && method === 'POST') {
     // Plain form POST, so the token is in the body rather than the header the
     // API routes echo. Sits above the /app/api/ choke point, so it needs its own.
@@ -715,6 +754,23 @@ export async function handleAppRequest(
           const token = signLinkToken(userId, secret);
           data.channels.telegram.connectUrl = `https://t.me/${config.botUsername}?start=link_${token}`;
         }
+        // WhatsApp connects the other way: hand out a wa.me link with a signed
+        // token prefilled, which the inbound webhook reads back to attach the
+        // sender's number. Only when WhatsApp is configured and not yet linked.
+        if (config.whatsapp && !data.channels.whatsapp.available) {
+          const token = signWhatsAppConnectToken(userId, secret);
+          const text = encodeURIComponent(`connect ${token}`);
+          data.channels.whatsapp.connectUrl = `https://wa.me/${config.whatsapp.displayNumber}?text=${text}`;
+        }
+        // "Get the bot" links: add/open each app on the user's side, so they can
+        // then run /connect, /balance, etc. Shown only for configured platforms.
+        data.apps = {
+          telegram: config.botUsername ? `https://t.me/${config.botUsername}` : null,
+          discord: config.discord
+            ? `https://discord.com/oauth2/authorize?client_id=${config.discord.appId}&scope=${encodeURIComponent('bot applications.commands')}`
+            : null,
+          whatsapp: config.whatsapp ? `https://wa.me/${config.whatsapp.displayNumber}` : null,
+        };
         json(res, 200, data);
       }
       return true;

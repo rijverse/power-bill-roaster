@@ -4,7 +4,7 @@ import { schema } from '../../db';
 import { mergeAccounts } from '../../core/merge-accounts';
 import { enforceMeterCap } from '../../core/meter-cap';
 import { eraseUser } from '../../core/erase-user';
-import { linkIdentity } from '../../core/identities';
+import { linkIdentity, unlinkIdentity } from '../../core/identities';
 
 // Constraint-level behavior against a real Postgres. Everything here is a thing
 // the in-memory fakes cannot express: an FK that refuses a delete, a unique index
@@ -51,22 +51,18 @@ describe('mergeAccounts against real constraints', () => {
   it('merges a bot account holding an identity row without tripping the FK', async () => {
     // The exact shape that used to throw: identities.user_id is ON DELETE no
     // action, and merge deletes the loser's users row.
-    const web = await makeUser({ email: 'web@example.com' });
+    const web = await makeUser();
     await linkIdentity(h.db, web.id, { provider: 'email', email: 'web@example.com' });
-    const bot = await makeUser({ telegramChatId: 555 });
+    const bot = await makeUser();
     await linkIdentity(h.db, bot.id, { provider: 'telegram', chatId: 555 });
     const meter = await makeMeter(bot.id, 'M-bot');
 
     await expect(mergeAccounts(h.db, web.id, bot.id)).resolves.toBe('merged');
 
-    const [survivor] = await h.db.select().from(schema.users).where(eq(schema.users.id, web.id));
-    expect(survivor.telegramChatId).toBe(555);
-    expect(survivor.email).toBe('web@example.com');
-
     const loserRows = await h.db.select().from(schema.users).where(eq(schema.users.id, bot.id));
     expect(loserRows).toHaveLength(0);
 
-    // identity rows follow the survivor and match its columns
+    // both identity rows now hang off the survivor
     const identities = await h.db
       .select()
       .from(schema.identities)
@@ -88,15 +84,15 @@ describe('mergeAccounts against real constraints', () => {
   });
 
   it('keeps the survivor a single identity per provider when both sides have one', async () => {
-    const web = await makeUser({ email: 'a@example.com', telegramChatId: 111 });
+    const web = await makeUser();
     await linkIdentity(h.db, web.id, { provider: 'telegram', chatId: 111 });
-    const bot = await makeUser({ telegramChatId: 222 });
+    const bot = await makeUser();
     await linkIdentity(h.db, bot.id, { provider: 'telegram', chatId: 222 });
 
     expect(await mergeAccounts(h.db, web.id, bot.id)).toBe('merged');
 
     // the (user_id, provider) unique would reject a blind repoint of the loser's
-    // telegram row; the survivor keeps exactly one, matching its own column
+    // telegram row; the survivor keeps exactly one, its own
     const identities = await h.db
       .select()
       .from(schema.identities)
@@ -105,12 +101,56 @@ describe('mergeAccounts against real constraints', () => {
     expect(telegram).toHaveLength(1);
     expect(telegram[0].providerUid).toBe('111');
   });
+
+  it("disables the loser's stale email channel so the survivor keeps one address", async () => {
+    // Two email accounts merge (the duplicate-by-email case). The survivor keeps
+    // its own address; the loser's email channel is repointed but must be turned
+    // off, or the dispatcher fans balance mail to both addresses.
+    const survivor = await makeUser();
+    await linkIdentity(h.db, survivor.id, { provider: 'email', email: 'keep@example.com' });
+    const loser = await makeUser();
+    await linkIdentity(h.db, loser.id, { provider: 'email', email: 'old@example.com' });
+
+    expect(await mergeAccounts(h.db, survivor.id, loser.id)).toBe('merged');
+
+    const channels = await h.db
+      .select()
+      .from(schema.channels)
+      .where(eq(schema.channels.userId, survivor.id));
+    expect(channels.find(c => c.address === 'keep@example.com')?.enabled).toBe(true);
+    expect(channels.find(c => c.address === 'old@example.com')?.enabled).toBe(false);
+  });
+});
+
+describe('unlinkIdentity', () => {
+  it('drops a method when others remain, and refuses to remove the last one', async () => {
+    const user = await makeUser();
+    await linkIdentity(h.db, user.id, { provider: 'email', email: 'multi@example.com' });
+    await linkIdentity(h.db, user.id, { provider: 'telegram', chatId: 321 });
+
+    // telegram goes (email still lets them in): identity gone and the telegram
+    // channel turned off
+    expect(await unlinkIdentity(h.db, user.id, 'telegram')).toEqual({ status: 'unlinked' });
+    const ids = await h.db
+      .select()
+      .from(schema.identities)
+      .where(eq(schema.identities.userId, user.id));
+    expect(ids.map(i => i.provider)).toEqual(['email']);
+    const chans = await h.db
+      .select()
+      .from(schema.channels)
+      .where(eq(schema.channels.userId, user.id));
+    expect(chans.find(c => c.type === 'telegram')?.enabled).toBe(false);
+
+    // email is now the only way in, so it can't be removed
+    expect(await unlinkIdentity(h.db, user.id, 'email')).toEqual({ status: 'last-identity' });
+  });
 });
 
 describe('unique indexes', () => {
   it('refuses to give one provider identity to two accounts', async () => {
-    const a = await makeUser({ email: 'a@example.com' });
-    const b = await makeUser({ email: 'b@example.com' });
+    const a = await makeUser();
+    const b = await makeUser();
     await h.db
       .insert(schema.identities)
       .values({ userId: a.id, provider: 'telegram', providerUid: '900' });
@@ -125,26 +165,21 @@ describe('unique indexes', () => {
     expect(isConstraintViolation(error)).toBe(true);
   });
 
-  it('treats account emails case-insensitively', async () => {
-    await makeUser({ email: 'Person@Example.com' });
-    let error: unknown;
-    try {
-      await makeUser({ email: 'person@example.com' });
-    } catch (e) {
-      error = e;
-    }
-    expect(isConstraintViolation(error)).toBe(true);
-  });
-
-  it('lets many accounts stay emailless (partial index)', async () => {
-    await makeUser({ telegramChatId: 1 });
-    await makeUser({ telegramChatId: 2 });
-    const rows = await h.db.select().from(schema.users);
-    expect(rows).toHaveLength(2);
+  it('treats email identities case-insensitively', async () => {
+    // stored lower-cased on the identity, so a differently-cased same address is
+    // recognized as the same login (comes back as needs-merge, not a new row).
+    const a = await makeUser();
+    await linkIdentity(h.db, a.id, { provider: 'email', email: 'Person@Example.com' });
+    const b = await makeUser();
+    const result = await linkIdentity(h.db, b.id, {
+      provider: 'email',
+      email: 'person@example.com',
+    });
+    expect(result.status).toBe('needs-merge');
   });
 
   it('refuses the same physical meter twice on one account', async () => {
-    const user = await makeUser({ email: 'm@example.com' });
+    const user = await makeUser();
     await makeMeter(user.id, 'M1');
     let error: unknown;
     try {
@@ -158,7 +193,7 @@ describe('unique indexes', () => {
 
 describe('enforceMeterCap against real rows', () => {
   it('pauses everything past the operator override, oldest kept', async () => {
-    const user = await makeUser({ email: 'cap@example.com', plan: 'business', meterLimit: 2 });
+    const user = await makeUser({ plan: 'business', meterLimit: 2 });
     const first = await makeMeter(user.id, 'M1');
     await makeMeter(user.id, 'M2');
     const third = await makeMeter(user.id, 'M3');
@@ -173,7 +208,7 @@ describe('enforceMeterCap against real rows', () => {
   });
 
   it('falls back to the plan when no override is set', async () => {
-    const user = await makeUser({ email: 'plan@example.com', plan: 'free' });
+    const user = await makeUser({ plan: 'free' });
     await makeMeter(user.id, 'M1');
     await makeMeter(user.id, 'M2');
     expect(await enforceMeterCap(h.db, user.id, user.plan)).toBe(1); // free allows 1
@@ -182,7 +217,7 @@ describe('enforceMeterCap against real rows', () => {
 
 describe('eraseUser', () => {
   it('leaves nothing behind across every owned table', async () => {
-    const user = await makeUser({ email: 'gone@example.com', telegramChatId: 777 });
+    const user = await makeUser();
     await linkIdentity(h.db, user.id, { provider: 'telegram', chatId: 777 });
     const meter = await makeMeter(user.id, 'M-gone');
     await h.db.insert(schema.readings).values({ meterId: meter.id, balance: 42 });

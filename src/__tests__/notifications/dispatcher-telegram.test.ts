@@ -3,10 +3,10 @@ import { schema } from '../../db';
 import { MeterContext } from '../../notifications/alert-copy';
 import { channel, fakeChannelsDb } from '../helpers/channels-db';
 
-// The Telegram branch had no test at all, which made the fan-out refactor far
-// more dangerous than it looked: Telegram is the one channel that deliberately
-// does NOT filter on `verified`, and a shared "enabled + verified" helper would
-// have silently stopped delivering to every Telegram user.
+// Telegram is the one channel that deliberately does NOT filter on `verified`
+// (talking to the bot IS the verification) and rides its channel row: the chat id
+// is the row's address. A shared "enabled + verified" helper would silently mute
+// every Telegram user, so it keeps its own branch - and its own test.
 
 const ctx: MeterContext = {
   nickname: null,
@@ -18,8 +18,11 @@ const ctx: MeterContext = {
   prediction: null,
 };
 
-const user = { id: 1, telegramChatId: 555, plan: 'free' } as unknown as schema.User;
+const user = { id: 1, plan: 'free' } as unknown as schema.User;
 const meter = { id: 7 } as unknown as schema.Meter;
+const tgRow = (
+  over: Partial<{ id: number; address: string; enabled: boolean; verified: boolean }> = {}
+) => channel({ id: 3, type: 'telegram', address: '555', ...over });
 
 function sender(): TelegramSender {
   return { sendTelegram: jest.fn(async () => undefined) };
@@ -29,7 +32,7 @@ describe('Dispatcher telegram branch', () => {
   it('delivers to an UNVERIFIED telegram row - talking to the bot is the verification', async () => {
     // The load-bearing case. A telegram channel row is never `verified` in the OTP
     // sense; requiring it here would mute every Telegram user.
-    const db = fakeChannelsDb([channel({ id: 3, type: 'telegram', verified: false })]);
+    const db = fakeChannelsDb([tgRow({ verified: false })]);
     const telegram = sender();
     const dispatcher = new Dispatcher(db, telegram, null, null);
 
@@ -39,18 +42,18 @@ describe('Dispatcher telegram branch', () => {
     expect(result).toEqual({ delivered: ['telegram'], failed: [] });
   });
 
-  it('delivers when there is no telegram channel row at all (rides telegramChatId)', async () => {
+  it('sends to the chat id carried on the telegram channel row', async () => {
+    const db = fakeChannelsDb([tgRow({ address: '999' })]);
     const telegram = sender();
-    const dispatcher = new Dispatcher(fakeChannelsDb([]), telegram, null, null);
+    const dispatcher = new Dispatcher(db, telegram, null, null);
 
-    const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
+    await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
 
-    expect(telegram.sendTelegram).toHaveBeenCalledTimes(1);
-    expect(result.delivered).toEqual(['telegram']);
+    expect((telegram.sendTelegram as jest.Mock).mock.calls[0][0]).toBe(999);
   });
 
   it('respects an explicitly disabled telegram row', async () => {
-    const db = fakeChannelsDb([channel({ id: 3, type: 'telegram', enabled: false })]);
+    const db = fakeChannelsDb([tgRow({ enabled: false })]);
     const telegram = sender();
     const dispatcher = new Dispatcher(db, telegram, null, null);
 
@@ -64,8 +67,8 @@ describe('Dispatcher telegram branch', () => {
     // Oldest id wins, deterministically - here the older row is disabled, so the
     // newer enabled one must not resurrect delivery.
     const db = fakeChannelsDb([
-      channel({ id: 9, type: 'telegram', enabled: true }),
-      channel({ id: 4, type: 'telegram', enabled: false }),
+      channel({ id: 9, type: 'telegram', address: '555', enabled: true }),
+      channel({ id: 4, type: 'telegram', address: '555', enabled: false }),
     ]);
     const telegram = sender();
     const dispatcher = new Dispatcher(db, telegram, null, null);
@@ -75,12 +78,11 @@ describe('Dispatcher telegram branch', () => {
     expect(telegram.sendTelegram).not.toHaveBeenCalled();
   });
 
-  it('sends nothing when the user has no telegramChatId', async () => {
-    const noChat = { ...user, telegramChatId: null } as unknown as schema.User;
+  it('sends nothing when there is no telegram channel', async () => {
     const telegram = sender();
     const dispatcher = new Dispatcher(fakeChannelsDb([]), telegram, null, null);
 
-    const result = await dispatcher.dispatchAlert(noChat, meter, 'low-alert', 'low', ctx);
+    const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
 
     expect(telegram.sendTelegram).not.toHaveBeenCalled();
     expect(result).toEqual({ delivered: [], failed: [] });
@@ -88,7 +90,7 @@ describe('Dispatcher telegram branch', () => {
 
   it('does not resend a key already delivered on a previous attempt', async () => {
     const telegram = sender();
-    const dispatcher = new Dispatcher(fakeChannelsDb([]), telegram, null, null);
+    const dispatcher = new Dispatcher(fakeChannelsDb([tgRow()]), telegram, null, null);
 
     const result = await dispatcher.dispatchAlert(
       user,
@@ -109,7 +111,7 @@ describe('Dispatcher telegram branch', () => {
         throw new Error('telegram down');
       }),
     };
-    const dispatcher = new Dispatcher(fakeChannelsDb([]), telegram, null, null);
+    const dispatcher = new Dispatcher(fakeChannelsDb([tgRow()]), telegram, null, null);
 
     const result = await dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
 
@@ -119,7 +121,7 @@ describe('Dispatcher telegram branch', () => {
   describe('buttons', () => {
     const buttonsFor = async (action: 'low-alert' | 'reminder' | 'recovery') => {
       const telegram = sender();
-      const dispatcher = new Dispatcher(fakeChannelsDb([]), telegram, null, null);
+      const dispatcher = new Dispatcher(fakeChannelsDb([tgRow()]), telegram, null, null);
       await dispatcher.dispatchAlert(user, meter, action, 'low', ctx);
       return (telegram.sendTelegram as jest.Mock).mock.calls[0]?.[2];
     };

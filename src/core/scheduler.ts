@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { Db, schema } from '../db';
 import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
 import { recentPrediction } from './meter-usecases';
+import { contactTargets } from './identities';
 import { getProvider } from '../providers';
 import { MeterContext } from '../notifications/alert-copy';
 import { TelegramSender, DiscordDmSender } from '../notifications/dispatcher';
@@ -44,14 +45,14 @@ function sleep(ms: number): Promise<void> {
  * and the Discord bot is running, else nowhere. Exported for tests.
  */
 export function failureNoticeTarget(
-  user: Pick<schema.User, 'telegramChatId' | 'discordUserId'>,
+  targets: { telegramChatId: number | null; discordUserId: string | null },
   discordAvailable: boolean
 ): { kind: 'telegram'; chatId: number } | { kind: 'discord'; discordUserId: string } | null {
-  if (user.telegramChatId !== null) {
-    return { kind: 'telegram', chatId: user.telegramChatId };
+  if (targets.telegramChatId !== null) {
+    return { kind: 'telegram', chatId: targets.telegramChatId };
   }
-  if (discordAvailable && user.discordUserId !== null) {
-    return { kind: 'discord', discordUserId: user.discordUserId };
+  if (discordAvailable && targets.discordUserId !== null) {
+    return { kind: 'discord', discordUserId: targets.discordUserId };
   }
   return null;
 }
@@ -364,7 +365,10 @@ export class Scheduler {
     user: schema.User,
     stateRow: schema.AlertStateRow | null
   ): Promise<void> {
-    const target = failureNoticeTarget(user, this.discordDm !== null);
+    const target = failureNoticeTarget(
+      await contactTargets(this.db, user.id),
+      this.discordDm !== null
+    );
     const consecutiveFailures = (stateRow?.consecutiveFailures ?? 0) + 1;
     const alreadyNotified = stateRow?.failureNotifiedAt != null;
     const shouldNotify =

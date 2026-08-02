@@ -1,10 +1,8 @@
-import { sql } from 'drizzle-orm';
 import {
   pgTable,
   serial,
   text,
   integer,
-  bigint,
   boolean,
   doublePrecision,
   timestamp,
@@ -12,44 +10,29 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 
-export const users = pgTable(
-  'users',
-  {
-    id: serial('id').primaryKey(),
-    telegramChatId: bigint('telegram_chat_id', { mode: 'number' }).unique(),
-    // Discord snowflakes are full 64-bit values that overflow JS safe integers,
-    // so unlike telegram_chat_id this is text, not bigint-as-number.
-    discordUserId: text('discord_user_id').unique(),
-    email: text('email'),
-    tonePref: text('tone_pref').notNull().default('roast'),
-    // Quiet hours (local Asia/Dhaka, 0-23). Both null = always-on. During quiet
-    // hours non-critical alerts are held back; critical alerts always go through.
-    quietStart: integer('quiet_start'),
-    quietEnd: integer('quiet_end'),
-    plan: text('plan').notNull().default('free'),
-    // Operator override for this account's meter cap, set from the admin panel.
-    // Null = use the plan's default (see effectiveMeterLimit); a number wins over
-    // the plan either way, so a comped account can watch more without a fake plan
-    // and an abusive one can be pinned lower.
-    meterLimit: integer('meter_limit'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  // Email is the web app's login identity, so it must be unique - but
-  // case-insensitively, and only among rows that have one (telegram-only users
-  // keep email null and are unaffected).
-  table => [
-    uniqueIndex('users_email_lower_idx')
-      .on(sql`lower(${table.email})`)
-      .where(sql`${table.email} is not null`),
-  ]
-);
+// A user is just preferences + plan now; the logins that identify them live in
+// the identities table (one row per connected provider).
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  tonePref: text('tone_pref').notNull().default('roast'),
+  // Quiet hours (local Asia/Dhaka, 0-23). Both null = always-on. During quiet
+  // hours non-critical alerts are held back; critical alerts always go through.
+  quietStart: integer('quiet_start'),
+  quietEnd: integer('quiet_end'),
+  plan: text('plan').notNull().default('free'),
+  // Operator override for this account's meter cap, set from the admin panel.
+  // Null = use the plan's default (see effectiveMeterLimit); a number wins over
+  // the plan either way, so a comped account can watch more without a fake plan
+  // and an abusive one can be pinned lower.
+  meterLimit: integer('meter_limit'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
-// A user's login identities, one row per provider they've connected. This is
-// the normalized replacement for the telegram_chat_id / discord_user_id / email
-// columns above (kept dual-written until the readers are ported, then dropped).
-// provider_uid is the provider's own id: the telegram chat id as text, the
-// Discord snowflake, or lower(email). Two uniques: the identity is globally
-// unique (provider + uid), and a user holds at most one identity per provider.
+// A user's login identities, one row per provider they've connected - the single
+// source of truth for who a user is. provider_uid is the provider's own id: the
+// telegram chat id as text, the Discord snowflake, or lower(email). Two uniques:
+// the identity is globally unique (provider + uid), and a user holds at most one
+// identity per provider.
 export const identities = pgTable(
   'identities',
   {

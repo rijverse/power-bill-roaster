@@ -61,7 +61,7 @@ function fakeDb(queues: Queues) {
 }
 
 describe('linkIdentity', () => {
-  it('links a free telegram identity: inserts the identity, channel, and legacy column', async () => {
+  it('links a free telegram identity: inserts the identity and its channel', async () => {
     const { db, inserts, updates } = fakeDb({
       identities: [[], []], // by-uid: none; by-user+provider: none
       channels: [[]], // ensureChannel: no existing row
@@ -79,7 +79,8 @@ describe('linkIdentity', () => {
       address: '100',
       verified: true,
     });
-    expect(updates.find(u => u.table === schema.users)?.values).toEqual({ telegramChatId: 100 });
+    // identities are the source of truth now - no users-column write
+    expect(updates.find(u => u.table === schema.users)).toBeUndefined();
   });
 
   it('reports already when the target already owns the identity', async () => {
@@ -128,13 +129,10 @@ describe('linkIdentity', () => {
     });
     const res = await linkIdentity(db, 7, { provider: 'email', email: 'New@Example.com' });
     expect(res).toEqual({ status: 'linked' });
-    // identity uid is lower-cased; legacy column keeps the typed case
+    // the identity uid is lower-cased
     expect(inserts.find(i => i.table === schema.identities)?.values).toMatchObject({
       provider: 'email',
       providerUid: 'new@example.com',
-    });
-    expect(updates.find(u => u.table === schema.users)?.values).toEqual({
-      email: 'New@Example.com',
     });
     // a channels update runs (the retire-stale pass turns other email rows off)
     expect(updates.some(u => u.table === schema.channels && u.values.enabled === false)).toBe(true);
@@ -162,7 +160,7 @@ describe('unlinkIdentity', () => {
     expect(await unlinkIdentity(db, 7, 'discord')).toEqual({ status: 'not-found' });
   });
 
-  it('deletes the identity, clears the legacy column, and disables the channel', async () => {
+  it('deletes the identity and disables the channel', async () => {
     const { db, deletes, updates } = fakeDb({
       identities: [
         [
@@ -173,7 +171,8 @@ describe('unlinkIdentity', () => {
     });
     expect(await unlinkIdentity(db, 7, 'telegram')).toEqual({ status: 'unlinked' });
     expect(deletes.some(d => d.table === schema.identities)).toBe(true);
-    expect(updates.find(u => u.table === schema.users)?.values).toEqual({ telegramChatId: null });
+    // no users-column write - the identity row is the source of truth
+    expect(updates.find(u => u.table === schema.users)).toBeUndefined();
     expect(updates.some(u => u.table === schema.channels && u.values.enabled === false)).toBe(true);
   });
 });

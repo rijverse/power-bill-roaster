@@ -42,9 +42,14 @@ describe('Dispatcher send timeouts', () => {
   });
 
   it('records a hung telegram send as failed', async () => {
-    const user = { id: 1, telegramChatId: 555, plan: 'free' } as unknown as schema.User;
+    const user = { id: 1, plan: 'free' } as unknown as schema.User;
     const telegram: TelegramSender = { sendTelegram: jest.fn(hangs) };
-    const dispatcher = new Dispatcher(fakeChannelsDb([]), telegram, null, null);
+    const dispatcher = new Dispatcher(
+      fakeChannelsDb([channel({ id: 3, type: 'telegram', address: '555' })]),
+      telegram,
+      null,
+      null
+    );
 
     const dispatch = dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);
     await jest.advanceTimersByTimeAsync(SEND_TIMEOUT_MS + 1000);
@@ -55,10 +60,13 @@ describe('Dispatcher send timeouts', () => {
   it('lets a healthy channel through while another one hangs', async () => {
     // Channels fan out in parallel, so one dead transport must not take the rest
     // of the alert down with it.
-    const user = { id: 1, telegramChatId: 555, plan: 'free' } as unknown as schema.User;
+    const user = { id: 1, plan: 'free' } as unknown as schema.User;
     const mailer: Mailer = { from: 'x@y.z', send: jest.fn(hangs) };
     const telegram: TelegramSender = { sendTelegram: jest.fn(async () => undefined) };
-    const db = fakeChannelsDb([channel({ id: 9, type: 'email', address: 'me@example.com' })]);
+    const db = fakeChannelsDb([
+      channel({ id: 9, type: 'email', address: 'me@example.com' }),
+      channel({ id: 3, type: 'telegram', address: '555' }),
+    ]);
     const dispatcher = new Dispatcher(db, telegram, null, mailer);
 
     const dispatch = dispatcher.dispatchAlert(user, meter, 'low-alert', 'low', ctx);

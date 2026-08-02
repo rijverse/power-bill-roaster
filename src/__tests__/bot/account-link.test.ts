@@ -24,7 +24,12 @@ function fakeDb(usersQueue: unknown[][]) {
       from: (t: unknown) => {
         const builder = {
           innerJoin: () => builder,
-          where: async () => (t === schema.users ? (usersQueue[i++] ?? []) : []),
+          // findUserByProvider joins identities -> users and reads `.user`
+          where: async () => {
+            if (t === schema.identities) return (usersQueue[i++] ?? []).map(r => ({ user: r }));
+            if (t === schema.users) return usersQueue[i++] ?? [];
+            return [];
+          },
         };
         return builder;
       },
@@ -78,13 +83,11 @@ const webUser = { id: 9, telegramChatId: null, email: 'w@e.com', plan: 'free' };
 describe('/start link_ payload', () => {
   it('links the chat to the web account when the chat has no account yet', async () => {
     // web-user lookup returns the account; findUser returns none
-    const { db, updates, inserts } = fakeDb([[webUser], []]);
+    const { db, inserts } = fakeDb([[webUser], []]);
     const bot = makeBot(db);
     await bot.start(`link_${signLinkToken(9, SECRET)}`);
     expect(bot.replies.join(' ')).toMatch(/Linked/i);
-    expect(updates).toContainEqual({ telegramChatId: 100 });
-    // and the identity row lands too - linking must not write the legacy column
-    // alone, or the identities table silently diverges from the real logins
+    // linking writes the identity row (the source of truth), not a users column
     expect(inserts.find(x => x.table === schema.identities)?.values).toMatchObject({
       userId: 9,
       provider: 'telegram',

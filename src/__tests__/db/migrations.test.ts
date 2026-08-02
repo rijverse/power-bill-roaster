@@ -54,23 +54,22 @@ describe('drizzle migration journal', () => {
 });
 
 describe('init migration (squashed pre-launch)', () => {
-  it('creates the full users identity surface in one place', () => {
+  it('creates the identities table and its uniques in one place', () => {
     const entries = readJournal();
     const sql = fs.readFileSync(path.join(DRIZZLE_DIR, `${entries[0].tag}.sql`), 'utf-8');
-    // regression guard for the edited-in-place-0000 incident: the Discord
-    // identity column and its unique constraint must exist from migration one
-    expect(sql).toMatch(/"discord_user_id" text/);
-    expect(sql).toMatch(/users_discord_user_id_unique/);
-    expect(sql).toMatch(/"telegram_chat_id" bigint/);
+    // Logins live in identities now (one row per provider). Its two uniques -
+    // globally unique per (provider, uid) and at most one per (user, provider) -
+    // must exist from migration one, the way the users identity columns used to.
+    expect(sql).toMatch(/CREATE TABLE "identities"/);
+    expect(sql).toMatch(/identities_provider_uid_idx/);
+    expect(sql).toMatch(/identities_user_provider_idx/);
   });
 });
 
-describe('add_indexes migration', () => {
+describe('hot-path indexes', () => {
   it('indexes every hot path the dispatcher and admin queries hit', () => {
     const entries = readJournal();
-    const addIndexes = entries.find(e => e.tag.endsWith('_add_indexes'));
-    expect(addIndexes).toBeDefined();
-    const sql = fs.readFileSync(path.join(DRIZZLE_DIR, `${addIndexes!.tag}.sql`), 'utf-8');
+    const sql = fs.readFileSync(path.join(DRIZZLE_DIR, `${entries[0].tag}.sql`), 'utf-8');
 
     // alerts_log: append-only, scanned by admin overview ($count sentAt >= dayAgo),
     // the 24h delivery counts ($count deliveryStatus+sentAt), the deliveries list

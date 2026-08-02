@@ -24,6 +24,7 @@ import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
 import { enforceMeterCap } from '../core/meter-cap';
 import { atMeterCap } from '../core/meter-usecases';
+import { contactTargets } from '../core/identities';
 import {
   isPurchasablePlan,
   maxMetersFor,
@@ -134,7 +135,7 @@ async function revenue(db: Db) {
     .orderBy(monthExpr);
   const recent = await db
     .select({
-      email: schema.users.email,
+      userId: schema.payments.userId,
       plan: schema.users.plan,
       amountBdt: schema.payments.amountBdt,
       provider: schema.payments.provider,
@@ -145,10 +146,14 @@ async function revenue(db: Db) {
     .innerJoin(schema.users, eq(schema.payments.userId, schema.users.id))
     .orderBy(desc(schema.payments.createdAt))
     .limit(PAYMENTS_SHOWN);
+  const recentIdMap = await identityMapFor(
+    db,
+    recent.map(p => p.userId)
+  );
   return {
     mrrSeries: series.map(r => ({ month: r.month, total: Number(r.total ?? 0) })),
     payments: recent.map(p => ({
-      user: p.email ?? 'telegram user',
+      user: recentIdMap.get(p.userId)?.email ?? 'telegram user',
       plan: p.plan,
       amountBdt: p.amountBdt,
       provider: p.provider,
@@ -175,7 +180,7 @@ async function deliveries(db: Db, status: string, channel: string, page: number)
   if (status === 'sent' || status === 'failed') {
     conds.push(eq(schema.alertsLog.deliveryStatus, status));
   }
-  // telegram rides users.telegram_chat_id with no channel row, so match a null type
+  // telegram alerts are logged without a channel row (channelId null), so match a null type
   if (channel === 'telegram') {
     conds.push(sql`${schema.channels.type} is null`);
   } else if (
@@ -196,7 +201,6 @@ async function deliveries(db: Db, status: string, channel: string, page: number)
       meterNo: schema.meters.meterNo,
       chType: schema.channels.type,
       chAddr: schema.channels.address,
-      tgChat: schema.users.telegramChatId,
       userId: schema.users.id,
     })
     .from(schema.alertsLog)
@@ -208,25 +212,32 @@ async function deliveries(db: Db, status: string, channel: string, page: number)
     .limit(DELIVERIES_PAGE + 1)
     .offset(page * DELIVERIES_PAGE);
   const hasMore = rows.length > DELIVERIES_PAGE;
+  const idMap = await identityMapFor(
+    db,
+    rows.map(r => r.userId)
+  );
   return {
     delivered24h,
     failed24h,
     page,
     hasMore,
-    rows: rows.slice(0, DELIVERIES_PAGE).map(r => ({
-      sentAt: r.sentAt.toISOString(),
-      meterNo: r.meterNo,
-      channel: r.chType ?? 'telegram',
-      // webhook URLs carry a secret token - mask them even for the operator
-      recipient:
-        r.chType === 'discord' && r.chAddr
-          ? maskWebhookUrl(r.chAddr)
-          : (r.chAddr ?? (r.tgChat !== null ? `chat ${r.tgChat}` : 'n/a')),
-      level: r.level,
-      action: r.action,
-      status: r.deliveryStatus,
-      userId: r.userId,
-    })),
+    rows: rows.slice(0, DELIVERIES_PAGE).map(r => {
+      const tgChat = idMap.get(r.userId)?.telegramChatId ?? null;
+      return {
+        sentAt: r.sentAt.toISOString(),
+        meterNo: r.meterNo,
+        channel: r.chType ?? 'telegram',
+        // webhook URLs carry a secret token - mask them even for the operator
+        recipient:
+          r.chType === 'discord' && r.chAddr
+            ? maskWebhookUrl(r.chAddr)
+            : (r.chAddr ?? (tgChat !== null ? `chat ${tgChat}` : 'n/a')),
+        level: r.level,
+        action: r.action,
+        status: r.deliveryStatus,
+        userId: r.userId,
+      };
+    }),
   };
 }
 
@@ -287,6 +298,35 @@ async function requeueDeadLetters(
   return { status: 200, body: { ok: true } };
 }
 
+type IdentityRow = {
+  telegramChatId: number | null;
+  discordUserId: string | null;
+  email: string | null;
+};
+
+/** Batch-resolve the identity columns for a set of users (for the operator display). */
+async function identityMapFor(db: Db, userIds: number[]): Promise<Map<number, IdentityRow>> {
+  const map = new Map<number, IdentityRow>();
+  for (const id of userIds) {
+    map.set(id, { telegramChatId: null, discordUserId: null, email: null });
+  }
+  if (userIds.length === 0) {
+    return map;
+  }
+  const rows = await db
+    .select()
+    .from(schema.identities)
+    .where(inArray(schema.identities.userId, userIds));
+  for (const r of rows) {
+    const entry = map.get(r.userId);
+    if (!entry) continue;
+    if (r.provider === 'telegram') entry.telegramChatId = Number(r.providerUid);
+    else if (r.provider === 'discord') entry.discordUserId = r.providerUid;
+    else if (r.provider === 'email') entry.email = r.providerUid;
+  }
+  return map;
+}
+
 async function userList(
   db: Db,
   q: string,
@@ -296,14 +336,25 @@ async function userList(
 ) {
   const filters = [];
   if (q) {
-    const ors = [ilike(schema.users.email, `%${q}%`)];
+    // Email is stored lower-cased, and the telegram chat id / discord snowflake as
+    // text, so a single ilike over provider_uid matches any of the three.
+    const ors = [
+      exists(
+        db
+          .select({ x: sql`1` })
+          .from(schema.identities)
+          .where(
+            and(
+              eq(schema.identities.userId, schema.users.id),
+              ilike(schema.identities.providerUid, `%${q}%`)
+            )
+          )
+      ),
+    ];
     // operators get handed meter numbers and nicknames from support chats, so
     // match any of the user's meters too (nickname always, account/meter when numeric)
     const meterConds = [ilike(schema.meters.nickname, `%${q}%`)];
     if (/^\d+$/.test(q)) {
-      ors.push(eq(schema.users.telegramChatId, Number(q)));
-      // discord snowflakes are numeric too (stored as text)
-      ors.push(eq(schema.users.discordUserId, q));
       meterConds.push(
         ilike(schema.meters.accountNo, `%${q}%`),
         ilike(schema.meters.meterNo, `%${q}%`)
@@ -395,15 +446,17 @@ async function userList(
     }
   }
 
+  const idMap = await identityMapFor(db, ids);
+
   return {
     page,
     hasMore,
     total,
     users: pageRows.map(u => ({
       id: u.id,
-      telegramChatId: u.telegramChatId,
-      discordUserId: u.discordUserId,
-      email: u.email,
+      telegramChatId: idMap.get(u.id)?.telegramChatId ?? null,
+      discordUserId: idMap.get(u.id)?.discordUserId ?? null,
+      email: idMap.get(u.id)?.email ?? null,
       plan: u.plan,
       createdAt: u.createdAt.toISOString(),
       activeMeters: meterCounts.get(u.id) ?? 0,
@@ -434,12 +487,13 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
     db.$count(schema.payments, eq(schema.payments.userId, userId)),
   ]);
 
+  const targets = await contactTargets(db, userId);
   return {
     user: {
       id: user.id,
-      telegramChatId: user.telegramChatId,
-      discordUserId: user.discordUserId,
-      email: user.email,
+      telegramChatId: targets.telegramChatId,
+      discordUserId: targets.discordUserId,
+      email: targets.email,
       plan: user.plan,
       // null = following the plan default; a number is the operator override
       meterLimit: user.meterLimit,

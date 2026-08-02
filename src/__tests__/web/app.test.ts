@@ -22,19 +22,51 @@ const COOKIE = `pr_user=${cookieToken}`;
 const CSRF = csrfFor(cookieToken, SECRET);
 
 async function startServer(opts: { mailer?: Mailer | null; db?: Db } = {}) {
-  // Every select returns one row that satisfies both "user" and "verified email
-  // channel" shapes, so find-or-create takes the existing-account path.
+  // A fake that satisfies the identity-backed sign-in path: the email identity
+  // resolves to user 1 (find-or-create takes the existing-account path, no
+  // insert). findUserByProvider joins identities -> users and reads `.user`,
+  // while linkIdentity/contactTargets read the raw identity row - told apart by
+  // whether innerJoin() was called on the builder.
+  const cannedUser = { id: 1, plan: 'free', tonePref: 'savage', quietStart: null, quietEnd: null };
+  const emailIdentity = { id: 1, userId: 1, provider: 'email', providerUid: 'me@example.com' };
+  const emailChannel = {
+    id: 1,
+    userId: 1,
+    type: 'email',
+    address: 'me@example.com',
+    verified: true,
+    enabled: true,
+  };
   const db =
     opts.db ??
     ({
       select: () => ({
-        from: () => ({
-          where: async () => [
-            { id: 1, email: 'me@example.com', plan: 'free', verified: true, enabled: true },
-          ],
+        from: (table: unknown) => {
+          let joined = false;
+          const builder = {
+            innerJoin: () => {
+              joined = true;
+              return builder;
+            },
+            where: async () => {
+              if (table === schema.identities) {
+                return joined ? [{ user: cannedUser }] : [emailIdentity];
+              }
+              if (table === schema.channels) return [emailChannel];
+              return [cannedUser];
+            },
+          };
+          return builder;
+        },
+      }),
+      insert: () => ({
+        values: () => ({
+          returning: async () => [cannedUser],
+          then: (resolve: (v: unknown) => void) => resolve(undefined),
         }),
       }),
       update: () => ({ set: () => ({ where: async () => undefined }) }),
+      delete: () => ({ where: async () => undefined }),
       $count: async () => 0,
     } as unknown as Db);
   const scheduler = { lastCycleCompletedAt: new Date() } as unknown as Scheduler;

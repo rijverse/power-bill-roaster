@@ -102,10 +102,10 @@ describe('user-owned table registry', () => {
     expect(foreignKeysOf(schema.adminAudit)).toEqual([]);
   });
 
-  it('pins the identity columns on users, because reflection cannot infer intent', () => {
-    // A 3rd platform identity column would have to be handled in mergedIdentity()
-    // too, and no FK reflection can tell you that - so the column set is pinned.
-    // If this fails: add the column to mergedIdentity() if it identifies the user.
+  it('keeps users free of login columns - identities is the source of truth', () => {
+    // Logins live in the identities table now. If a login column reappears on
+    // users, that is a regression toward the old denormalized model; if a
+    // genuinely new preference column is added, pin it here deliberately.
     const columns = Object.keys(
       getTableConfig(schema.users).columns.reduce<Record<string, true>>(
         (acc, c) => ({ ...acc, [c.name]: true }),
@@ -115,12 +115,8 @@ describe('user-owned table registry', () => {
     expect(columns.sort()).toEqual(
       [
         'id',
-        'telegram_chat_id',
-        'discord_user_id',
-        'email',
         'plan',
-        // operator override for the plan's meter cap; not an identity column, but
-        // pinned with the rest so any new users column gets a decision here
+        // operator override for the plan's meter cap
         'meter_limit',
         'tone_pref',
         'quiet_start',

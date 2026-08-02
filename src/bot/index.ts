@@ -26,7 +26,7 @@ import {
 } from '../core/discord-connect';
 import { Mailer } from '../services/mailer';
 import { mergeAccounts, chooseSurvivor } from '../core/merge-accounts';
-import { linkIdentity } from '../core/identities';
+import { linkIdentity, findUserByProvider } from '../core/identities';
 import {
   recentPrediction,
   setTone,
@@ -142,19 +142,21 @@ export function createBot(
     'Already have a web account? Send /email <your address> here to connect.';
 
   async function findUser(chatId: number) {
-    const [user] = await db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.telegramChatId, chatId));
-    return user ?? null;
+    return findUserByProvider(db, 'telegram', String(chatId));
   }
 
   async function userMeters(chatId: number) {
     return db
       .select({ meter: schema.meters })
       .from(schema.meters)
-      .innerJoin(schema.users, eq(schema.meters.userId, schema.users.id))
-      .where(and(eq(schema.users.telegramChatId, chatId), eq(schema.meters.active, true)))
+      .innerJoin(schema.identities, eq(schema.meters.userId, schema.identities.userId))
+      .where(
+        and(
+          eq(schema.identities.provider, 'telegram'),
+          eq(schema.identities.providerUid, String(chatId)),
+          eq(schema.meters.active, true)
+        )
+      )
       .then(rows => rows.map(r => r.meter));
   }
 
@@ -176,10 +178,7 @@ export function createBot(
   async function handleDiscordLinkPayload(ctx: Context, discordUserId: string): Promise<void> {
     if (!ctx.chat) return;
     const chatId = ctx.chat.id;
-    const [discordUser] = await db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.discordUserId, discordUserId));
+    const discordUser = await findUserByProvider(db, 'discord', discordUserId);
     const botUser = await findUser(chatId);
 
     if (discordUser && botUser) {
@@ -551,10 +550,7 @@ export function createBot(
       await ctx.reply('Usage: /grant <telegram chat id> <plus|business> [days=30]');
       return;
     }
-    const [target] = await db
-      .select()
-      .from(schema.users)
-      .where(eq(schema.users.telegramChatId, targetChatId));
+    const target = await findUserByProvider(db, 'telegram', String(targetChatId));
     if (!target) {
       await ctx.reply(`No user with chat id ${targetChatId}.`);
       return;

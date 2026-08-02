@@ -9,6 +9,60 @@
 import { DEFAULT_RECHARGE_URL } from '../core/recharge';
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
+/** Server-side HTML escape for the few standalone pages rendered here. */
+function escHtml(s: string): string {
+  return String(s ?? '').replace(
+    /[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
+  );
+}
+
+export interface MergeAccount {
+  label: string;
+  meterCount: number;
+  planName: string;
+}
+
+/**
+ * Confirmation screen before two accounts are combined into one. Rendered on the
+ * GET; the merge runs on the POST (a plain form with the CSRF token in the body,
+ * like /app/logout), so opening the link never mutates anything - which is what
+ * lets us hand the link out from a bot without it being a one-click account merge.
+ */
+export function mergeConfirmHtml(
+  csrf: string,
+  token: string,
+  a: MergeAccount,
+  b: MergeAccount
+): string {
+  const card = (acc: MergeAccount) =>
+    `<div style="flex:1;min-width:150px;border:1px solid var(--border-soft);border-radius:var(--r-sm);padding:14px 16px">
+      <div style="font-size:15px;font-weight:800;color:var(--text);word-break:break-word">${escHtml(acc.label)}</div>
+      <div class="mono" style="font-size:12px;color:var(--muted);margin-top:6px">${acc.meterCount} meter${acc.meterCount === 1 ? '' : 's'} · ${escHtml(acc.planName)} plan</div>
+    </div>`;
+
+  const body = `<div class="pr-loginwrap" style="max-width:560px;margin:0 auto">
+  <div class="pr-formcard">
+    <div style="margin-bottom:20px">
+      <div style="font-size:22px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin-bottom:6px">Combine these two accounts?</div>
+      <div style="font-size:14px;color:var(--muted);line-height:1.55">We found two Power·Roast accounts that look like you. Combining keeps every meter, alert channel, and any paid plan together in one account.</div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+      ${card(a)}
+      ${card(b)}
+    </div>
+    <p class="mono" style="font-size:11.5px;color:var(--faint);margin:12px 0 18px;line-height:1.5">Any paid plan is kept. Meters beyond the surviving plan's limit are paused, not deleted - you can pick which stay active afterwards. This can't be undone.</p>
+    <form method="POST" action="/app/merge">
+      <input type="hidden" name="csrf" value="${escHtml(csrf)}">
+      <input type="hidden" name="token" value="${escHtml(token)}">
+      <button class="pr-btn gold block" type="submit">Yes, combine them</button>
+    </form>
+    <a href="/app" class="pr-btn ghost block" style="text-decoration:none;margin-top:10px">Not now</a>
+  </div>
+</div>`;
+  return pageDoc('Combine accounts · Power Roast', body);
+}
+
 const LOGIN_STATUS: Record<string, { cls: string; msg: string }> = {
   sent: {
     cls: 'pr-good',
@@ -529,6 +583,27 @@ function renderAlerts() {
         '<p class="mono" style="font-size:11px;color:var(--faint);margin:8px 0 0">Add a bot, then use /connect to link it to this account and /balance to check anytime.</p></div>'
       : '';
 
+  // Sign-in methods: the login identities on this account, each removable unless
+  // it's the only one left (the server refuses to orphan an account, so the UI
+  // hides Disconnect until a second method exists).
+  const lg = DATA.logins || {};
+  const loginList = [
+    lg.email ? { key: 'email', label: 'Email', meta: esc(ch.email.address || '') } : null,
+    lg.telegram ? { key: 'telegram', label: 'Telegram', meta: 'bot chat' } : null,
+    lg.discord ? { key: 'discord', label: 'Discord', meta: 'slash commands + DM' } : null,
+  ].filter(Boolean);
+  const canRemove = loginList.length > 1;
+  const loginsBlock = loginList.length
+    ? '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-soft)"><div class="mono" style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Sign-in methods</div>' +
+      loginList.map(l =>
+        '<div class="row" style="justify-content:space-between;align-items:center;gap:8px;padding:6px 0"><div><span style="font-size:13px;font-weight:600;color:var(--text)">' + l.label + '</span> <span class="mono" style="font-size:11px;color:var(--faint)">' + l.meta + '</span></div>' +
+        (canRemove ? '<button class="pr-btn ghost" type="button" data-disc="' + l.key + '" style="padding:6px 12px;font-size:12px">Disconnect</button>' : '') +
+        '</div>'
+      ).join('') +
+      (canRemove ? '' : '<p class="mono" style="font-size:11px;color:var(--faint);margin:4px 0 0">Connect another method to be able to remove one.</p>') +
+      '<p class="pr-err" id="discErr" style="margin-top:6px"></p></div>'
+    : '';
+
   let h = '<div class="pr-grid pr-2col-even">';
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title">Where it roasts you</div><div class="pr-card-sub" style="margin-bottom:14px">Turn off a channel and you\\'re just choosing which way to be surprised by darkness.</div><div class="pr-list">' +
@@ -540,6 +615,7 @@ function renderAlerts() {
   dcConnect +
   waConnect +
   tgConnect +
+  loginsBlock +
   appsBlock +
   '<p class="pr-err" id="chErr" style="margin-top:8px"></p></div>';
 
@@ -586,6 +662,15 @@ function renderAlerts() {
     try { await post('/discord', { url }); dcMsg.textContent = 'Connected - check Discord for the test message.'; await load(); }
     catch (e) { dcMsg.style.color = 'var(--red-soft)'; dcMsg.textContent = e.message; }
   };
+  // Disconnect a sign-in method (only rendered when more than one exists)
+  host.querySelectorAll('[data-disc]').forEach(b => {
+    b.onclick = async () => {
+      const discErr = host.querySelector('#discErr'); if (discErr) discErr.textContent = '';
+      if (!confirm('Disconnect ' + b.dataset.disc + ' from this account? You can reconnect it later.')) return;
+      try { await post('/identities/disconnect', { provider: b.dataset.disc }); await load(); }
+      catch (e) { if (discErr) discErr.textContent = e.message; }
+    };
+  });
   // roast preview reflects the selected (savable) tone
   function paintRoast() {
     const r = ROASTS[ROAST];

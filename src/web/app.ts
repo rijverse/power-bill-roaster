@@ -1,5 +1,5 @@
 import http from 'http';
-import { eq, and, sql, desc } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { ServerConfig } from '../config';
 import { Mailer } from '../services/mailer';
@@ -17,12 +17,17 @@ import {
 } from '../core/plans';
 import { Tone, normalizeTone, TONES } from '../core/tone';
 import { setTone, atMeterCap } from '../core/meter-usecases';
-import { linkIdentity } from '../core/identities';
+import {
+  linkIdentity,
+  unlinkIdentity,
+  findUserByProvider,
+  contactTargets,
+} from '../core/identities';
 import { mergeAccounts, chooseSurvivor } from '../core/merge-accounts';
 import { SubscriptionService } from '../billing';
 import { getProvider } from '../providers';
 import { connectDiscordWebhook } from '../core/discord-connect';
-import { logger, maskEmail, maskWebhookUrl } from '../logger';
+import { logger, maskWebhookUrl } from '../logger';
 import { dashboardData } from './queries';
 import {
   clientIp,
@@ -35,7 +40,7 @@ import {
   redirect,
 } from './http-utils';
 import { readCookie } from './admin-session';
-import { appShellHtml, loginHtml } from './app-html';
+import { appShellHtml, loginHtml, mergeConfirmHtml, MergeAccount } from './app-html';
 import {
   userCookieName,
   signMagicLink,
@@ -46,6 +51,8 @@ import {
   verifyLinkToken,
   verifyDiscordLinkToken,
   signWhatsAppConnectToken,
+  signMergeToken,
+  verifyMergeToken,
   signUserSession,
   verifyUserSession,
   csrfFor,
@@ -86,34 +93,27 @@ function planCatalog() {
 // ---- account / channel helpers -------------------------------------------
 
 async function findOrCreateByEmail(db: Db, email: string): Promise<schema.User> {
-  const lookup = () =>
-    db
-      .select()
-      .from(schema.users)
-      .where(sql`lower(${schema.users.email}) = ${email}`);
-  let [user] = await lookup();
-  if (!user) {
-    // onConflictDoNothing covers a race between two magic-link clicks for a
-    // brand-new email (the lower(email) unique index makes it safe)
-    await db.insert(schema.users).values({ email }).onConflictDoNothing();
-    [user] = await lookup();
+  const existing = await findUserByProvider(db, 'email', email.toLowerCase());
+  if (existing) {
+    // Idempotently ensure the verified, enabled email channel is present.
+    await linkIdentity(
+      db,
+      existing.id,
+      { provider: 'email', email },
+      { replaceSameProvider: true }
+    );
+    return existing;
   }
-  // linkIdentity writes the email identity row and the verified, enabled email
-  // channel together, and backfills the identity for accounts that predate the
-  // table. Sign-in must not fail on an odd link outcome (the users row is
-  // authoritative today), so the result is logged rather than surfaced.
-  const result = await linkIdentity(
-    db,
-    user.id,
-    { provider: 'email', email },
-    {
-      replaceSameProvider: true,
-    }
-  );
+  // New address: create a bare account and attach the email identity + channel.
+  const [created] = await db.insert(schema.users).values({}).returning();
+  const result = await linkIdentity(db, created.id, { provider: 'email', email });
   if (result.status === 'needs-merge') {
-    logger.warn(`email identity ${maskEmail(email)} is held by another account; not linked`);
+    // Lost a race to another magic-link click for the same address: drop the
+    // stray bare account and use the one that won the identity (unique index).
+    await db.delete(schema.users).where(eq(schema.users.id, created.id));
+    return (await findUserByProvider(db, 'email', email.toLowerCase()))!;
   }
-  return user;
+  return created;
 }
 
 /**
@@ -127,33 +127,48 @@ export async function attachEmailToUser(
   userId: number,
   email: string
 ): Promise<schema.User | 'conflict'> {
-  const [existing] = await db
-    .select()
-    .from(schema.users)
-    .where(sql`lower(${schema.users.email}) = ${email}`);
-  if (existing && existing.id !== userId) {
-    return 'conflict';
-  }
-  // One write path: linkIdentity sets the identity row and legacy users.email,
-  // retires any stale email channel (a replaced address must stop receiving
-  // alerts - the dispatcher fans out to every enabled email row), and leaves a
-  // verified, enabled channel for this address. replaceSameProvider because
-  // changing the address on an account is the point of this function.
+  // linkIdentity is the one write path: it sets the email identity, retires any
+  // stale email channel (a replaced address must stop receiving alerts - the
+  // dispatcher fans out to every enabled email row), and leaves a verified,
+  // enabled channel for this address. replaceSameProvider because changing the
+  // address on an account is the point of this function. A 'needs-merge' means
+  // another account already holds the address - reported as a conflict, since we
+  // never auto-merge on the email path.
   const result = await linkIdentity(
     db,
     userId,
     { provider: 'email', email },
-    {
-      replaceSameProvider: true,
-    }
+    { replaceSameProvider: true }
   );
-  // The identities table says another account holds this address. Same conflict
-  // from the caller's side, and we never auto-merge on the email path.
   if (result.status === 'needs-merge') {
     return 'conflict';
   }
   const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
   return user;
+}
+
+/** Meter count, plan, and a human label for one side of a merge-confirm screen. */
+async function mergeSummary(
+  db: Db,
+  userId: number
+): Promise<(MergeAccount & { userId: number }) | null> {
+  const [u] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!u) {
+    return null;
+  }
+  const meters = await db
+    .select({ id: schema.meters.id })
+    .from(schema.meters)
+    .where(eq(schema.meters.userId, userId));
+  const t = await contactTargets(db, userId);
+  const label =
+    t.email ??
+    (t.telegramChatId !== null
+      ? 'Telegram account'
+      : t.discordUserId !== null
+        ? 'Discord account'
+        : `Account #${userId}`);
+  return { userId, label, meterCount: meters.length, planName: PLAN_NAMES[u.plan] ?? u.plan };
 }
 
 async function ownedMeter(db: Db, userId: number, meterId: number): Promise<schema.Meter | null> {
@@ -172,18 +187,22 @@ async function me(db: Db, userId: number, live = false) {
     return null;
   }
   const chans = await db.select().from(schema.channels).where(eq(schema.channels.userId, userId));
+  const targets = await contactTargets(db, userId);
   // The row for the CURRENT address - after an email change the old address's
-  // (disabled) row may still exist, and it must not speak for the toggle.
-  const email = chans.find(
-    c => c.type === 'email' && c.address.toLowerCase() === (user.email ?? '').toLowerCase()
+  // (disabled) row may still exist, and it must not speak for the toggle. The
+  // login email lives on the identity (lower-cased); the channel keeps the
+  // address as typed, which is what we display.
+  const emailChan = chans.find(
+    c => c.type === 'email' && targets.email !== null && c.address.toLowerCase() === targets.email
   );
+  const displayEmail = emailChan?.address ?? targets.email;
   const tg = chans.find(c => c.type === 'telegram');
   const sms = chans.find(c => c.type === 'sms' && c.verified);
   const discord = chans.find(c => c.type === 'discord' && c.verified);
   const whatsapp = chans.find(c => c.type === 'whatsapp' && c.verified);
-  const emailAlerts = !!(email && email.verified && email.enabled);
+  const emailAlerts = !!(emailChan && emailChan.verified && emailChan.enabled);
   return {
-    email: user.email,
+    email: displayEmail,
     plan: user.plan,
     limits: { maxMeters: effectiveMeterLimit(user), smsPerMonth: smsPerMonthFor(user.plan) },
     tone: normalizeTone(user.tonePref),
@@ -191,9 +210,13 @@ async function me(db: Db, userId: number, live = false) {
     quietEnd: user.quietEnd,
     emailAlerts,
     channels: {
-      email: { address: user.email, verified: !!(email && email.verified), enabled: emailAlerts },
+      email: {
+        address: displayEmail,
+        verified: !!(emailChan && emailChan.verified),
+        enabled: emailAlerts,
+      },
       telegram: {
-        available: user.telegramChatId !== null,
+        available: targets.telegramChatId !== null,
         enabled: !tg || tg.enabled,
         // filled in by the /app/api/me route when a connect link is available
         connectUrl: null as string | null,
@@ -216,6 +239,14 @@ async function me(db: Db, userId: number, live = false) {
         // filled in by the /app/api/me route when WhatsApp is configured
         connectUrl: null as string | null,
       },
+    },
+    // Which sign-in identities this account holds. Drives the disconnect controls;
+    // the last one can't be removed (unlinkIdentity refuses it), so the client
+    // only offers disconnect when more than one is present.
+    logins: {
+      telegram: targets.telegramChatId !== null,
+      discord: targets.discordUserId !== null,
+      email: targets.email !== null,
     },
     // "Get the bot" links (install / open the app on the user's side), filled in
     // by the /app/api/me route from config. Null when that platform is off.
@@ -278,8 +309,9 @@ async function setChannel(
   type: 'email' | 'telegram' | 'sms' | 'discord',
   enabled: boolean
 ): Promise<{ status: number; body: unknown }> {
+  const targets = await contactTargets(db, user.id);
   if (type === 'telegram') {
-    if (user.telegramChatId === null) {
+    if (targets.telegramChatId === null) {
       return {
         status: 400,
         body: { error: 'No Telegram account linked. Open the bot and /start.' },
@@ -295,7 +327,7 @@ async function setChannel(
       await db.insert(schema.channels).values({
         userId: user.id,
         type: 'telegram',
-        address: String(user.telegramChatId),
+        address: String(targets.telegramChatId),
         verified: true,
         enabled,
       });
@@ -319,7 +351,7 @@ async function setChannel(
     );
   const channel =
     type === 'email'
-      ? rows.find(c => c.address.toLowerCase() === (user.email ?? '').toLowerCase())
+      ? rows.find(c => targets.email !== null && c.address.toLowerCase() === targets.email)
       : rows[0];
   if (!channel) {
     const hint =
@@ -658,15 +690,26 @@ export async function handleAppRequest(
       return true;
     }
     // A `link` param (from the bot's /email flow) attaches this email to an
-    // existing bot account instead of creating a fresh one - unless the email
-    // already belongs to someone else, in which case we send them to link from
-    // the web side (we never auto-merge on the email path).
+    // existing bot account instead of creating a fresh one. If the email already
+    // belongs to someone else, the magic link just proved control of that email
+    // and the link token proved the bot account, so offer to combine the two:
+    // sign into the email's account and send to the merge-confirm screen.
     const linkParam = url.searchParams.get('link');
     const attachUserId = linkParam ? verifyLinkToken(linkParam, secret) : null;
     let user: schema.User;
     if (attachUserId !== null) {
       const attached = await attachEmailToUser(db, attachUserId, email);
       if (attached === 'conflict') {
+        const owner = await findUserByProvider(db, 'email', email);
+        if (owner && owner.id !== attachUserId) {
+          const token = signMergeToken(owner.id, attachUserId, secret);
+          redirect(
+            res,
+            `/app/merge?token=${token}`,
+            userCookie(signUserSession(owner.id, secret), secure)
+          );
+          return true;
+        }
         redirect(res, '/app?status=emailtaken');
         return true;
       }
@@ -699,27 +742,77 @@ export async function handleAppRequest(
       return true;
     }
     if (result.status === 'needs-merge') {
-      // The Discord id already belongs to another (legacy) account. Merge it into
-      // whichever account keeps its plan; move the session there if it was merged.
-      const webHasSub = (await deps.subscriptions.activeFor(userId)) !== null;
-      const otherHasSub = (await deps.subscriptions.activeFor(result.otherUserId)) !== null;
-      const { survivorId, loserId } = chooseSurvivor(
-        { id: userId, hasSubscription: webHasSub },
-        { id: result.otherUserId, hasSubscription: otherHasSub }
-      );
-      const merged = await mergeAccounts(db, survivorId, loserId);
-      if (merged !== 'merged') {
-        redirect(res, '/app?status=discord-conflict');
-        return true;
-      }
-      redirect(
-        res,
-        '/app?status=discord-connected',
-        userCookie(signUserSession(survivorId, secret), secure)
-      );
+      // The Discord id already belongs to another (legacy) account. Don't merge
+      // silently - hand the user a confirmation screen. The signed-in account is
+      // the preferred survivor on a tie; the merge itself runs on the POST there.
+      const token = signMergeToken(userId, result.otherUserId, secret);
+      redirect(res, `/app/merge?token=${token}`);
       return true;
     }
     redirect(res, '/app?status=discord-connected');
+    return true;
+  }
+
+  // Confirm-then-merge two accounts. The GET only renders the summary; the merge
+  // runs on the POST (CSRF in the body, like /app/logout), so the link is safe to
+  // hand out and can't combine accounts on a single click. The token names both
+  // sides and the session must be one of them - it's minted only after the server
+  // has established the requester controls both.
+  if (path === '/app/merge' && method === 'GET') {
+    if (!authed) {
+      redirect(res, '/app?status=signin-to-connect');
+      return true;
+    }
+    const raw = url.searchParams.get('token') ?? '';
+    const pair = verifyMergeToken(raw, secret);
+    if (!pair || (userId !== pair.a && userId !== pair.b)) {
+      redirect(res, '/app?status=badlink');
+      return true;
+    }
+    const a = await mergeSummary(db, pair.a);
+    const b = await mergeSummary(db, pair.b);
+    if (!a || !b) {
+      // One side was already merged away or erased since the token was minted.
+      redirect(res, '/app?status=merge-gone');
+      return true;
+    }
+    html(res, 200, mergeConfirmHtml(csrfFor(cookie, secret), raw, a, b));
+    return true;
+  }
+
+  if (path === '/app/merge' && method === 'POST') {
+    if (!authed) {
+      redirect(res, '/app');
+      return true;
+    }
+    const form = new URLSearchParams(await readBody(req));
+    if (!verifyCsrf(cookie, form.get('csrf') ?? '', secret)) {
+      redirect(res, '/app');
+      return true;
+    }
+    const pair = verifyMergeToken(form.get('token') ?? '', secret);
+    if (!pair || (userId !== pair.a && userId !== pair.b)) {
+      redirect(res, '/app?status=badlink');
+      return true;
+    }
+    // `a` is the preferred survivor on a tie; a live paid plan still wins outright.
+    const aHasSub = (await deps.subscriptions.activeFor(pair.a)) !== null;
+    const bHasSub = (await deps.subscriptions.activeFor(pair.b)) !== null;
+    const { survivorId, loserId } = chooseSurvivor(
+      { id: pair.a, hasSubscription: aHasSub },
+      { id: pair.b, hasSubscription: bHasSub }
+    );
+    const merged = await mergeAccounts(db, survivorId, loserId);
+    if (merged !== 'merged') {
+      redirect(res, '/app?status=merge-gone');
+      return true;
+    }
+    // The loser row is gone; keep the session on whichever account survived.
+    if (userId === loserId) {
+      redirect(res, '/app?status=merged', userCookie(signUserSession(survivorId, secret), secure));
+      return true;
+    }
+    redirect(res, '/app?status=merged');
     return true;
   }
 
@@ -813,6 +906,31 @@ export async function handleAppRequest(
       }
       const result = await setSettings(db, userId, body);
       json(res, result.status, result.body);
+      return true;
+    }
+
+    // Disconnect a sign-in identity (telegram / discord / email) from this
+    // account. Refuses the last one so the account can't be orphaned, and turns
+    // off that provider's alert channel on the way out.
+    if (path === '/app/api/identities/disconnect' && method === 'POST') {
+      const body = await parseJson(req);
+      const provider = (body as { provider?: unknown } | null)?.provider;
+      if (provider !== 'telegram' && provider !== 'discord' && provider !== 'email') {
+        json(res, 400, { error: 'Unknown sign-in method.' });
+        return true;
+      }
+      const result = await unlinkIdentity(db, userId, provider);
+      if (result.status === 'last-identity') {
+        json(res, 400, {
+          error: "That's your only way in - connect another sign-in method first.",
+        });
+        return true;
+      }
+      if (result.status === 'not-found') {
+        json(res, 400, { error: 'That sign-in method is not connected.' });
+        return true;
+      }
+      json(res, 200, { ok: true });
       return true;
     }
 

@@ -21,13 +21,17 @@ function fakeDb(opts: { user?: unknown; channel?: unknown }) {
     select: () => ({
       from: (t: unknown) => {
         fromTable = t;
-        return {
+        const builder = {
+          innerJoin: () => builder,
           where: async () => {
+            // findUserByProvider joins identities -> users and reads `.user`
+            if (fromTable === schema.identities) return opts.user ? [{ user: opts.user }] : [];
             if (fromTable === schema.users) return opts.user ? [opts.user] : [];
             if (fromTable === schema.channels) return opts.channel ? [opts.channel] : [];
             return [];
           },
         };
+        return builder;
       },
     }),
     insert: () => ({ values: async (v: unknown) => void inserted.push(v) }),

@@ -29,6 +29,8 @@ function fakeDb(state: FakeDbState) {
   const inserted: { table: unknown; values: Record<string, unknown> }[] = [];
   const updated: { table: unknown; values: Record<string, unknown> }[] = [];
   const rowsFor = (table: unknown): Record<string, unknown>[] => {
+    // findUserByProvider joins identities -> users and reads `.user`
+    if (table === schema.identities) return (state.users ?? []).map(u => ({ user: u }));
     if (table === schema.users) return state.users ?? [];
     if (table === schema.meters) return state.meters ?? [];
     if (table === schema.channels) return state.channels ?? [];
@@ -38,6 +40,7 @@ function fakeDb(state: FakeDbState) {
     select: () => ({
       from: (table: unknown) => {
         const result = {
+          innerJoin: () => result,
           where: async () => rowsFor(table),
         };
         return result;

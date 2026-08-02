@@ -1,7 +1,8 @@
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { Db, schema } from '../db';
 import { METER_OWNED } from '../db/ownership';
 import { enforceMeterCap } from './meter-cap';
+import { retireStaleEmailChannels } from './identities';
 
 // The identity we compare meters by: a user can't hold the same physical meter
 // twice (the DB has a unique index on exactly this tuple).
@@ -56,40 +57,13 @@ export function shadowedChannelIds(
   return loserChannels.filter(c => survivorKeys.has(channelKey(c))).map(c => c.id);
 }
 
-/** The survivor's post-merge identity: keep its own telegram/email/discord id, else inherit the loser's, and keep whichever plan is paid - so no login or paid plan is lost in a merge. */
-export function mergedIdentity(
-  survivor: {
-    telegramChatId: number | null;
-    email: string | null;
-    discordUserId: string | null;
-    plan: string;
-  },
-  loser: {
-    telegramChatId: number | null;
-    email: string | null;
-    discordUserId: string | null;
-    plan: string;
-  }
-): {
-  telegramChatId: number | null;
-  email: string | null;
-  discordUserId: string | null;
-  plan: string;
-} {
-  return {
-    telegramChatId: survivor.telegramChatId ?? loser.telegramChatId,
-    email: survivor.email ?? loser.email,
-    discordUserId: survivor.discordUserId ?? loser.discordUserId,
-    plan: survivor.plan !== 'free' ? survivor.plan : loser.plan,
-  };
-}
-
 /**
  * Merge the loser account into the survivor: move meters (dropping duplicates the
- * survivor already has), channels, subscriptions, payments, and pending alerts,
- * then delete the loser and stamp the survivor with the merged identity columns
- * (each login the survivor lacked is inherited from the loser). Finally re-applies
- * the survivor's meter cap. All the row moves run in one transaction.
+ * survivor already has), channels, subscriptions, payments, pending alerts, and
+ * login identities (a provider the survivor already has wins; the loser's
+ * duplicate is dropped), then delete the loser and keep whichever plan is paid.
+ * Finally re-applies the survivor's meter cap. All the row moves run in one
+ * transaction.
  */
 export async function mergeAccounts(
   db: Db,
@@ -167,52 +141,53 @@ export async function mergeAccounts(
       .set({ userId: survivorId })
       .where(eq(schema.pendingAlerts.userId, loserId));
 
-    const { telegramChatId, email, discordUserId, plan } = mergedIdentity(survivor, loser);
-    // The loser's identity rows FK users with ON DELETE no action, so they have
-    // to go before the user row (ownership.ts flags identities repointOnMerge -
-    // this is where merge honors it). We rebuild the survivor's rows from the
-    // merged columns below rather than repointing, since a same-provider
-    // collision would trip the (user_id, provider) unique.
-    await tx.delete(schema.identities).where(eq(schema.identities.userId, loserId));
-    // Delete the loser first so its telegram_chat_id / discord_user_id /
-    // lower(email) uniques are free before we stamp them onto the survivor.
-    await tx.delete(schema.users).where(eq(schema.users.id, loserId));
-    await tx
-      .update(schema.users)
-      .set({ telegramChatId, discordUserId, email, plan })
-      .where(eq(schema.users.id, survivorId));
-    // Keep the survivor's identity rows in step with the columns just stamped
-    // (the dual-write invariant): one row per provider it now has, right uid.
-    const wanted = [
-      telegramChatId !== null ? { provider: 'telegram', uid: String(telegramChatId) } : null,
-      discordUserId !== null ? { provider: 'discord', uid: discordUserId } : null,
-      email !== null ? { provider: 'email', uid: email.toLowerCase() } : null,
-    ].filter((x): x is { provider: string; uid: string } => x !== null);
-    const survivorIds = await tx
+    // Plan: keep the survivor's if it's paid, else inherit the loser's paid plan.
+    const plan = survivor.plan !== 'free' ? survivor.plan : loser.plan;
+
+    // Identities are the source of truth: move the loser's rows to the survivor.
+    // A provider the survivor already holds can't be repointed (the
+    // (user_id, provider) unique), so the survivor keeps its own and the loser's
+    // duplicate is dropped - the same precedence the old columns encoded.
+    const survivorIdentities = await tx
       .select()
       .from(schema.identities)
       .where(eq(schema.identities.userId, survivorId));
-    for (const row of survivorIds) {
-      const want = wanted.find(w => w.provider === row.provider);
-      if (!want || want.uid !== row.providerUid) {
-        await tx.delete(schema.identities).where(eq(schema.identities.id, row.id));
-      }
+    const loserIdentities = await tx
+      .select()
+      .from(schema.identities)
+      .where(eq(schema.identities.userId, loserId));
+    const survivorProviders = new Set(survivorIdentities.map(i => i.provider));
+    const identityDropIds = loserIdentities
+      .filter(i => survivorProviders.has(i.provider))
+      .map(i => i.id);
+    const identityMoveIds = loserIdentities
+      .filter(i => !survivorProviders.has(i.provider))
+      .map(i => i.id);
+    if (identityDropIds.length > 0) {
+      await tx.delete(schema.identities).where(inArray(schema.identities.id, identityDropIds));
     }
-    const kept = new Set(
-      survivorIds
-        .filter(row => wanted.some(w => w.provider === row.provider && w.uid === row.providerUid))
-        .map(row => row.provider)
-    );
-    for (const w of wanted) {
-      if (!kept.has(w.provider)) {
-        await tx.insert(schema.identities).values({
-          userId: survivorId,
-          provider: w.provider,
-          providerUid: w.uid,
-          verified: true,
-        });
-      }
+    if (identityMoveIds.length > 0) {
+      await tx
+        .update(schema.identities)
+        .set({ userId: survivorId })
+        .where(inArray(schema.identities.id, identityMoveIds));
     }
+    // If the survivor now holds an email identity (its own or inherited), retire
+    // any other enabled email channel so the dispatcher doesn't fan balance mail
+    // to an address the merge superseded - the same guard attachEmailToUser uses.
+    const [emailIdentity] = await tx
+      .select()
+      .from(schema.identities)
+      .where(
+        and(eq(schema.identities.userId, survivorId), eq(schema.identities.provider, 'email'))
+      );
+    if (emailIdentity) {
+      await retireStaleEmailChannels(tx, survivorId, emailIdentity.providerUid);
+    }
+    // The loser's identity rows are gone (moved or dropped), so its user row can
+    // be deleted without tripping the ON DELETE no action FK.
+    await tx.delete(schema.users).where(eq(schema.users.id, loserId));
+    await tx.update(schema.users).set({ plan }).where(eq(schema.users.id, survivorId));
     return { status: 'merged' as const, plan };
   });
 

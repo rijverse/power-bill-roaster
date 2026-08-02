@@ -39,6 +39,15 @@ CREATE TABLE "channels" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "identities" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"user_id" integer NOT NULL,
+	"provider" text NOT NULL,
+	"provider_uid" text NOT NULL,
+	"verified" boolean DEFAULT true NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "meters" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"user_id" integer NOT NULL,
@@ -103,22 +112,19 @@ CREATE TABLE "subscriptions" (
 --> statement-breakpoint
 CREATE TABLE "users" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"telegram_chat_id" bigint,
-	"discord_user_id" text,
-	"email" text,
 	"tone_pref" text DEFAULT 'roast' NOT NULL,
 	"quiet_start" integer,
 	"quiet_end" integer,
 	"plan" text DEFAULT 'free' NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "users_telegram_chat_id_unique" UNIQUE("telegram_chat_id"),
-	CONSTRAINT "users_discord_user_id_unique" UNIQUE("discord_user_id")
+	"meter_limit" integer,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 ALTER TABLE "alert_state" ADD CONSTRAINT "alert_state_meter_id_meters_id_fk" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "alerts_log" ADD CONSTRAINT "alerts_log_meter_id_meters_id_fk" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "alerts_log" ADD CONSTRAINT "alerts_log_channel_id_channels_id_fk" FOREIGN KEY ("channel_id") REFERENCES "public"."channels"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "channels" ADD CONSTRAINT "channels_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "identities" ADD CONSTRAINT "identities_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "meters" ADD CONSTRAINT "meters_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "payments" ADD CONSTRAINT "payments_subscription_id_subscriptions_id_fk" FOREIGN KEY ("subscription_id") REFERENCES "public"."subscriptions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "payments" ADD CONSTRAINT "payments_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -126,9 +132,16 @@ ALTER TABLE "pending_alerts" ADD CONSTRAINT "pending_alerts_meter_id_meters_id_f
 ALTER TABLE "pending_alerts" ADD CONSTRAINT "pending_alerts_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "readings" ADD CONSTRAINT "readings_meter_id_meters_id_fk" FOREIGN KEY ("meter_id") REFERENCES "public"."meters"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "subscriptions" ADD CONSTRAINT "subscriptions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "alerts_log_sent_at_idx" ON "alerts_log" USING btree ("sent_at");--> statement-breakpoint
+CREATE INDEX "alerts_log_status_sent_idx" ON "alerts_log" USING btree ("delivery_status","sent_at");--> statement-breakpoint
+CREATE INDEX "alerts_log_meter_idx" ON "alerts_log" USING btree ("meter_id");--> statement-breakpoint
+CREATE INDEX "channels_user_idx" ON "channels" USING btree ("user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "identities_provider_uid_idx" ON "identities" USING btree ("provider","provider_uid");--> statement-breakpoint
+CREATE UNIQUE INDEX "identities_user_provider_idx" ON "identities" USING btree ("user_id","provider");--> statement-breakpoint
 CREATE UNIQUE INDEX "meters_user_provider_account_meter_idx" ON "meters" USING btree ("user_id","provider","account_no","meter_no");--> statement-breakpoint
 CREATE UNIQUE INDEX "payments_external_ref_idx" ON "payments" USING btree ("external_ref");--> statement-breakpoint
 CREATE INDEX "pending_alerts_status_next_idx" ON "pending_alerts" USING btree ("status","next_attempt");--> statement-breakpoint
 CREATE INDEX "pending_alerts_meter_idx" ON "pending_alerts" USING btree ("meter_id");--> statement-breakpoint
 CREATE INDEX "readings_meter_fetched_idx" ON "readings" USING btree ("meter_id","fetched_at");--> statement-breakpoint
-CREATE UNIQUE INDEX "users_email_lower_idx" ON "users" USING btree (lower("email")) WHERE "users"."email" is not null;
+CREATE INDEX "subscriptions_user_status_idx" ON "subscriptions" USING btree ("user_id","status");--> statement-breakpoint
+CREATE INDEX "subscriptions_status_period_end_idx" ON "subscriptions" USING btree ("status","current_period_end");

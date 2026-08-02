@@ -2,15 +2,10 @@ import { and, eq, sql } from 'drizzle-orm';
 import { Db, schema } from '../db';
 
 // The normalized identity layer: one row per (user, provider) in the identities
-// table, replacing the telegram_chat_id / discord_user_id / email columns that
-// used to live on users. linkIdentity is the single path any surface (web hub,
-// either bot) calls to connect a provider to an account; it never merges on its
-// own - a collision with an account that already owns the identity comes back as
-// 'needs-merge' so the caller can confirm first.
-//
-// While the readers are being ported (see the plan's expand/contract steps), the
-// writers here ALSO keep the legacy users columns in sync so unported readers
-// still work. That dual-write is removed once every reader reads identities.
+// table - the single source of truth for a user's logins. linkIdentity is the
+// one path any surface (web hub, either bot) calls to connect a provider to an
+// account; it never merges on its own - a collision with an account that already
+// owns the identity comes back as 'needs-merge' so the caller can confirm first.
 
 export type Provider = 'telegram' | 'discord' | 'email';
 
@@ -72,20 +67,6 @@ function channelFor(input: LinkInput): { type: string; address: string } {
       return { type: 'discord-dm', address: input.discordUserId };
     case 'email':
       return { type: 'email', address: input.email.trim() };
-  }
-}
-
-// The legacy users column an input writes to (dual-write during the transition).
-function legacyIdentitySet(
-  input: LinkInput
-): Partial<{ telegramChatId: number; discordUserId: string; email: string }> {
-  switch (input.provider) {
-    case 'telegram':
-      return { telegramChatId: input.chatId };
-    case 'discord':
-      return { discordUserId: input.discordUserId };
-    case 'email':
-      return { email: input.email.trim() };
   }
 }
 
@@ -247,10 +228,6 @@ export async function linkIdentity(
     }
   }
 
-  await db
-    .update(schema.users)
-    .set(legacyIdentitySet(input))
-    .where(eq(schema.users.id, targetUserId));
   if (input.provider === 'email') {
     await retireStaleEmailChannels(db, targetUserId, input.email.trim());
   }
@@ -283,7 +260,6 @@ export async function unlinkIdentity(
   }
 
   await db.delete(schema.identities).where(eq(schema.identities.id, target.id));
-  await db.update(schema.users).set(legacyClear(provider)).where(eq(schema.users.id, userId));
 
   if (provider === 'email') {
     await db
@@ -306,20 +282,7 @@ export async function unlinkIdentity(
   return { status: 'unlinked' };
 }
 
-function legacyClear(
-  provider: Provider
-): Partial<{ telegramChatId: null; discordUserId: null; email: null }> {
-  switch (provider) {
-    case 'telegram':
-      return { telegramChatId: null };
-    case 'discord':
-      return { discordUserId: null };
-    case 'email':
-      return { email: null };
-  }
-}
-
-// ---- resolvers (used by the readers once they're ported off users.*) --------
+// ---- resolvers (the reader-facing view over the identities table) -----------
 
 /** The user owning a provider identity, or null. */
 export async function findUserByProvider(

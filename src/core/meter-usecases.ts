@@ -1,5 +1,6 @@
 import { and, eq, gte } from 'drizzle-orm';
 import { Db, schema } from '../db';
+import { findUserByProvider } from './identities';
 import { effectiveMeterLimit } from './plans';
 import { RunOutPrediction, predictRunOut } from './prediction';
 import { Tone } from './tone';
@@ -17,12 +18,9 @@ export async function findUserByIdentity(
   db: Db,
   identity: PlatformIdentity
 ): Promise<schema.User | null> {
-  const condition =
-    identity.kind === 'telegram'
-      ? eq(schema.users.telegramChatId, identity.chatId)
-      : eq(schema.users.discordUserId, identity.discordUserId);
-  const [user] = await db.select().from(schema.users).where(condition);
-  return user ?? null;
+  return identity.kind === 'telegram'
+    ? findUserByProvider(db, 'telegram', String(identity.chatId))
+    : findUserByProvider(db, 'discord', identity.discordUserId);
 }
 
 /**
@@ -35,16 +33,9 @@ export async function ensureUser(db: Db, identity: PlatformIdentity): Promise<sc
   if (existing) {
     return existing;
   }
-  const [user] = await db
-    .insert(schema.users)
-    .values(
-      identity.kind === 'telegram'
-        ? { telegramChatId: identity.chatId }
-        : { discordUserId: identity.discordUserId }
-    )
-    .returning();
-  // The normalized identity row. Dual-written alongside the legacy users column
-  // above until the readers are ported off it.
+  const [user] = await db.insert(schema.users).values({}).returning();
+  // The identity row is the source of truth for this login; the channel below is
+  // its verified delivery route (talking to the bot proves the address).
   await db.insert(schema.identities).values({
     userId: user.id,
     provider: identity.kind,

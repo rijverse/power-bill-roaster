@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1783765637699,
+      "when": 1785663568224,
       "tag": "0000_init",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1784710807687,
-      "tag": "0001_add_identities",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1784793842507,
-      "tag": "0002_add_indexes",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1784971867601,
-      "tag": "0003_add_meter_limit",
       "breakpoints": true
     }
   ]

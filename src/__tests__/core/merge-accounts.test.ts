@@ -1,7 +1,6 @@
 import {
   chooseSurvivor,
   partitionMeters,
-  mergedIdentity,
   shadowedChannelIds,
   mergeAccounts,
 } from '../../core/merge-accounts';
@@ -114,38 +113,6 @@ describe('partitionMeters', () => {
   });
 });
 
-describe('mergedIdentity', () => {
-  it('keeps the survivor telegram/email/discord id/plan when it has them', () => {
-    expect(
-      mergedIdentity(
-        { telegramChatId: 10, email: 'a@b.com', discordUserId: '111', plan: 'plus' },
-        { telegramChatId: 20, email: 'c@d.com', discordUserId: '222', plan: 'free' }
-      )
-    ).toEqual({ telegramChatId: 10, email: 'a@b.com', discordUserId: '111', plan: 'plus' });
-  });
-
-  it('inherits the loser telegram, email, discord id, and paid plan when the survivor lacks them', () => {
-    // survivor has no logins and is free; the loser's identities and paid plan survive
-    expect(
-      mergedIdentity(
-        { telegramChatId: null, email: null, discordUserId: null, plan: 'free' },
-        { telegramChatId: 20, email: 'c@d.com', discordUserId: '222', plan: 'business' }
-      )
-    ).toEqual({ telegramChatId: 20, email: 'c@d.com', discordUserId: '222', plan: 'business' });
-  });
-
-  it('never drops a discord identity in a telegram+web merge', () => {
-    // regression: the survivor is a web account, the loser a telegram account
-    // that had already linked Discord - the discord id must carry over
-    expect(
-      mergedIdentity(
-        { telegramChatId: null, email: 'a@b.com', discordUserId: null, plan: 'free' },
-        { telegramChatId: 20, email: null, discordUserId: '333', plan: 'free' }
-      )
-    ).toMatchObject({ telegramChatId: 20, discordUserId: '333' });
-  });
-});
-
 // A recording fake with transaction support: canned SELECT results per table are
 // consumed in call order, writes are recorded. Mirrors the link-identity fake but
 // covers the full mergeAccounts transaction (the FK-safe identity reconciliation).
@@ -205,49 +172,32 @@ function mergeFakeDb(queues: {
 }
 
 describe('mergeAccounts', () => {
-  it('deletes the loser identities before the user row and re-syncs the survivor', async () => {
-    // Regression: a bot-created loser holds an identity row FK-ing users
-    // (ON DELETE no action). Deleting the user without clearing identities first
-    // FK-violates. Here the loser is a telegram account, the survivor a web one.
-    const survivor = {
-      id: 1,
-      telegramChatId: null,
-      email: 'web@x.com',
-      discordUserId: null,
-      plan: 'free',
-    };
-    const loser = {
-      id: 2,
-      telegramChatId: 555,
-      email: null,
-      discordUserId: null,
-      plan: 'free',
-    };
-    const { db, inserts, updates, deletes } = mergeFakeDb({
+  it('moves the loser identity rows to the survivor, then deletes the loser user', async () => {
+    // Identities are the source of truth: the loser (a telegram account) holds a
+    // provider the survivor (a web/email account) lacks, so its identity row
+    // repoints to the survivor. The user row is deleted only after, so its
+    // ON DELETE no action FK stays satisfied.
+    const survivor = { id: 1, plan: 'free' };
+    const loser = { id: 2, plan: 'free' };
+    const { db, updates, deletes } = mergeFakeDb({
       users: [[survivor], [loser]],
       meters: [[], [], []], // survivor, loser, then enforceMeterCap's active list
       channels: [[], []],
-      identities: [[{ id: 10, userId: 1, provider: 'email', providerUid: 'web@x.com' }]],
+      identities: [
+        [{ id: 10, userId: 1, provider: 'email', providerUid: 'web@x.com' }], // survivor's
+        [{ id: 20, userId: 2, provider: 'telegram', providerUid: '555' }], // loser's, moves over
+        [{ id: 10, userId: 1, provider: 'email', providerUid: 'web@x.com' }], // survivor email lookup
+      ],
     });
 
     expect(await mergeAccounts(db, 1, 2)).toBe('merged');
 
-    const identitiesDeletedAt = deletes.findIndex(d => d.table === schema.identities);
-    const userDeletedAt = deletes.findIndex(d => d.table === schema.users);
-    expect(identitiesDeletedAt).toBeGreaterThanOrEqual(0);
-    expect(identitiesDeletedAt).toBeLessThan(userDeletedAt);
-
-    // survivor inherits the loser's telegram: synced identity row + legacy column
-    expect(inserts.find(i => i.table === schema.identities)?.values).toMatchObject({
-      userId: 1,
-      provider: 'telegram',
-      providerUid: '555',
-      verified: true,
-    });
-    expect(updates.find(u => u.table === schema.users)?.values).toMatchObject({
-      telegramChatId: 555,
-      email: 'web@x.com',
-    });
+    // the loser's telegram identity repoints to the survivor (no legacy column write)
+    expect(updates.find(u => u.table === schema.identities)?.values).toEqual({ userId: 1 });
+    // only the merged plan is stamped on the survivor user row
+    expect(updates.find(u => u.table === schema.users)?.values).toEqual({ plan: 'free' });
+    // and the loser user row is gone
+    expect(deletes.some(d => d.table === schema.users)).toBe(true);
   });
 
   // The behavioral half of the ownership registry. ownership.test.ts pins the
@@ -255,20 +205,18 @@ describe('mergeAccounts', () => {
   // claims to own - which is how identities sat in the registry, marked
   // repointOnMerge, while merge never touched it (a live FK violation).
   it('writes to every user-keyed table the registry says it repoints', async () => {
-    const survivor = {
-      id: 1,
-      telegramChatId: null,
-      email: 'web@x.com',
-      discordUserId: null,
-      plan: 'free',
-    };
-    const loser = { id: 2, telegramChatId: 555, email: null, discordUserId: null, plan: 'free' };
+    const survivor = { id: 1, plan: 'free' };
+    const loser = { id: 2, plan: 'free' };
     const { db, updates, deletes } = mergeFakeDb({
       users: [[survivor], [loser]],
       // loser holds a meter the survivor lacks, so the meters repoint fires
       meters: [[], [{ id: 30, provider: 'desco', accountNo: 'A1', meterNo: 'M1' }], []],
       channels: [[], []],
-      identities: [[{ id: 10, userId: 1, provider: 'email', providerUid: 'web@x.com' }]],
+      identities: [
+        [], // survivor has none
+        [{ id: 20, userId: 2, provider: 'telegram', providerUid: '555' }], // loser's, moves -> identities touched
+        [], // no survivor email identity
+      ],
     });
 
     expect(await mergeAccounts(db, 1, 2)).toBe('merged');

@@ -2,6 +2,7 @@ import { getServerConfig } from './config';
 import { createDb, schema } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
+import { contactTargets } from './core/identities';
 import { Dispatcher, AlertButton, DiscordDmSender } from './notifications/dispatcher';
 import { AlertDispatcherWorker } from './core/alert-dispatcher';
 import { createSmsGateway } from './notifications/sms';
@@ -89,10 +90,11 @@ async function main(): Promise<void> {
   // Plan-change notices prefer Telegram, falling back to a Discord DM so a
   // Discord-only user still hears their plan changed. No channel = no notice.
   const notifyPlanChange = async (user: schema.User, text: string, embed: DiscordEmbed) => {
-    if (user.telegramChatId != null) {
-      await telegramSender.sendTelegram(user.telegramChatId, text);
-    } else if (discordDm && user.discordUserId) {
-      await discordDm.sendDm(user.discordUserId, embed);
+    const targets = await contactTargets(db, user.id);
+    if (targets.telegramChatId != null) {
+      await telegramSender.sendTelegram(targets.telegramChatId, text);
+    } else if (discordDm && targets.discordUserId) {
+      await discordDm.sendDm(targets.discordUserId, embed);
     }
   };
   subscriptions.setHooks({

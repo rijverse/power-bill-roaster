@@ -267,28 +267,24 @@ export class Dispatcher {
     channels: schema.Channel[]
   ): Promise<DispatchResult> {
     const message = renderAlert(action, ctx, tone);
-    if (!message || user.telegramChatId === null) {
-      return empty();
-    }
-    const key = 'telegram';
-    if (alreadyDelivered.has(key)) {
-      return empty(); // delivered on a previous attempt - don't resend
-    }
-    // Deliberately NOT deliverable(): Telegram has no per-address row by default
-    // (it rides user.telegramChatId), and a telegram row is never `verified` in
-    // the OTP sense - talking to the bot IS the verification. So respect
-    // `enabled` and ignore `verified`; requiring verified here would mute every
-    // Telegram user. Oldest row wins deterministically - a merge can leave two.
-    // It's a single-target send with buttons rather than a loop over addresses,
-    // which is the other reason it doesn't go through fanOut.
+    // Telegram rides its channel row: the chat id is the row's address, and
+    // talking to the bot IS the verification (a telegram row is never `verified`
+    // in the OTP sense), so respect `enabled` and ignore `verified`. Oldest row
+    // wins deterministically - a merge can leave two. Deliberately NOT
+    // deliverable() / fanOut: it's a single-target send with buttons, not a loop
+    // over addresses.
     const tgChannel = channels
       .filter(c => c.type === 'telegram')
       .reduce<schema.Channel | undefined>(
         (oldest, c) => (!oldest || c.id < oldest.id ? c : oldest),
         undefined
       );
-    if (tgChannel && !tgChannel.enabled) {
+    if (!message || !tgChannel || !tgChannel.enabled) {
       return empty();
+    }
+    const key = 'telegram';
+    if (alreadyDelivered.has(key)) {
+      return empty(); // delivered on a previous attempt - don't resend
     }
     // Recovery is good news with nothing to act on; every other alert gets a
     // one-tap recharge link and a snooze button (snooze mutes the repeat nag).
@@ -304,7 +300,7 @@ export class Dispatcher {
     let ok = true;
     try {
       await withTimeout(
-        this.telegram.sendTelegram(user.telegramChatId, message, buttons),
+        this.telegram.sendTelegram(Number(tgChannel.address), message, buttons),
         SEND_TIMEOUT_MS,
         'telegram send'
       );

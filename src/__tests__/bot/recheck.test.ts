@@ -13,13 +13,19 @@ const config = {
 function fakeDb(opts: { user?: unknown; meter?: unknown }) {
   return {
     select: () => ({
-      from: (t: unknown) => ({
-        where: async () => {
-          if (t === schema.users) return opts.user ? [opts.user] : [];
-          if (t === schema.meters) return opts.meter ? [opts.meter] : [];
-          return [];
-        },
-      }),
+      from: (t: unknown) => {
+        const builder = {
+          innerJoin: () => builder,
+          // findUserByProvider joins identities -> users and reads `.user`
+          where: async () => {
+            if (t === schema.identities) return opts.user ? [{ user: opts.user }] : [];
+            if (t === schema.users) return opts.user ? [opts.user] : [];
+            if (t === schema.meters) return opts.meter ? [opts.meter] : [];
+            return [];
+          },
+        };
+        return builder;
+      },
     }),
     insert: () => ({ values: async () => undefined }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),

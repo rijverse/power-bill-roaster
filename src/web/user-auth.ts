@@ -168,6 +168,42 @@ export function verifyWhatsAppConnectToken(
   return accountId(unsignExpiring('wa-connect', token, secret, now));
 }
 
+// Merge-confirmation token: names the two accounts a pending merge would combine.
+// Minted only once the server has established the requester controls both sides (a
+// live session on one, a fresh identity/email proof for the other), so it is the
+// capability that authorizes the merge. The confirm POST re-checks the session is
+// one of the two. Short-lived like the other link tokens.
+export function signMergeToken(
+  a: number,
+  b: number,
+  secret: string,
+  expiresAtMs = Date.now() + LINK_TTL_MS
+): string {
+  return sign('merge', `${a}\n${b}\n${expiresAtMs}`, secret);
+}
+
+/** The two account ids a merge token names, or null if invalid/expired. */
+export function verifyMergeToken(
+  token: string,
+  secret: string,
+  now = Date.now()
+): { a: number; b: number } | null {
+  const data = unsignExpiring('merge', token, secret, now);
+  if (data === null) {
+    return null;
+  }
+  const parts = data.split('\n');
+  if (parts.length !== 2) {
+    return null;
+  }
+  const a = parseInt(parts[0]);
+  const b = parseInt(parts[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) {
+    return null;
+  }
+  return { a, b };
+}
+
 /** One of our numeric account ids, or null if the payload didn't carry one. */
 function accountId(raw: string | null): number | null {
   if (raw === null) {

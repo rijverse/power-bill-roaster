@@ -5,6 +5,8 @@ import {
   verifyMagicCode,
   signLinkToken,
   verifyLinkToken,
+  signMergeToken,
+  verifyMergeToken,
   signUserSession,
   verifyUserSession,
   csrfFor,
@@ -101,6 +103,32 @@ describe('account-link tokens', () => {
     expect(verifyMagicLink(link, SECRET)).toBeNull();
     // and a session isn't a valid link token
     expect(verifyLinkToken(signUserSession(42, SECRET), SECRET)).toBeNull();
+  });
+});
+
+describe('merge tokens', () => {
+  it('round-trips the two account ids', () => {
+    expect(verifyMergeToken(signMergeToken(7, 9, SECRET), SECRET)).toEqual({ a: 7, b: 9 });
+  });
+
+  it('preserves order (a is the preferred survivor on a tie)', () => {
+    expect(verifyMergeToken(signMergeToken(9, 7, SECRET), SECRET)).toEqual({ a: 9, b: 7 });
+  });
+
+  it('rejects an expired merge token', () => {
+    expect(verifyMergeToken(signMergeToken(7, 9, SECRET, Date.now() - 1), SECRET)).toBeNull();
+  });
+
+  it('rejects a token that names one account twice', () => {
+    expect(verifyMergeToken(signMergeToken(7, 7, SECRET), SECRET)).toBeNull();
+  });
+
+  it('is namespaced apart from the other token kinds', () => {
+    const merge = signMergeToken(7, 9, SECRET);
+    expect(verifyUserSession(merge, SECRET)).toBeNull();
+    expect(verifyLinkToken(merge, SECRET)).toBeNull();
+    // and a link token isn't a valid merge token
+    expect(verifyMergeToken(signLinkToken(7, SECRET), SECRET)).toBeNull();
   });
 });
 

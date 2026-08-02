@@ -71,9 +71,12 @@ describe('Dispatcher discord branch', () => {
   });
 
   it("an isolated discord failure doesn't block another channel", async () => {
-    const tgUser = { id: 1, telegramChatId: 555, plan: 'free' } as unknown as schema.User;
+    const tgUser = { id: 1, plan: 'free' } as unknown as schema.User;
     fetchSpy.mockRejectedValueOnce(new Error('network'));
-    const db = fakeChannelsDb([channel({ id: 9, type: 'discord', address: WEBHOOK })]);
+    const db = fakeChannelsDb([
+      channel({ id: 9, type: 'discord', address: WEBHOOK }),
+      channel({ id: 3, type: 'telegram', address: '555' }),
+    ]);
     const send = jest.fn(async () => undefined);
     const dispatcher = new Dispatcher(db, { sendTelegram: send }, null, null);
 

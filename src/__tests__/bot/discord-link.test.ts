@@ -25,7 +25,12 @@ function fakeDb(usersQueue: unknown[][]) {
       from: (t: unknown) => {
         const builder = {
           innerJoin: () => builder,
-          where: async () => (t === schema.users ? (usersQueue[i++] ?? []) : []),
+          // findUserByProvider joins identities -> users and reads `.user`
+          where: async () => {
+            if (t === schema.identities) return (usersQueue[i++] ?? []).map(r => ({ user: r }));
+            if (t === schema.users) return usersQueue[i++] ?? [];
+            return [];
+          },
         };
         return builder;
       },
@@ -82,11 +87,16 @@ const discordUser = { id: 9, telegramChatId: null, discordUserId: DISCORD_ID, pl
 describe('/start link_ with a discord-link token', () => {
   it('stamps the discord id on an existing telegram account and opens the DM channel', async () => {
     // discord-id lookup: none; findUser: the telegram account
-    const { db, updates, inserted } = fakeDb([[], [tgUser]]);
+    const { db, inserted } = fakeDb([[], [tgUser]]);
     const bot = makeBot(db);
     await bot.start(`link_${signDiscordLinkToken(DISCORD_ID, SECRET)}`);
     expect(bot.replies.join(' ')).toMatch(/Linked/i);
-    expect(updates).toContainEqual({ discordUserId: DISCORD_ID });
+    // the discord identity row lands (source of truth), not a users column
+    expect(inserted.find(x => x.table === schema.identities)?.values).toMatchObject({
+      userId: 7,
+      provider: 'discord',
+      providerUid: DISCORD_ID,
+    });
     const channels = inserted.filter(x => x.table === schema.channels);
     expect(channels[0].values).toMatchObject({
       type: 'discord-dm',
@@ -108,11 +118,16 @@ describe('/start link_ with a discord-link token', () => {
 
   it('attaches telegram to an existing discord-only account', async () => {
     // discord-id lookup: the discord account; findUser: none
-    const { db, updates } = fakeDb([[discordUser], []]);
+    const { db, inserted } = fakeDb([[discordUser], []]);
     const bot = makeBot(db);
     await bot.start(`link_${signDiscordLinkToken(DISCORD_ID, SECRET)}`);
     expect(bot.replies.join(' ')).toMatch(/Linked/i);
-    expect(updates).toContainEqual({ telegramChatId: 100 });
+    // telegram identity attached to the discord account (source of truth)
+    expect(inserted.find(x => x.table === schema.identities)?.values).toMatchObject({
+      userId: 9,
+      provider: 'telegram',
+      providerUid: '100',
+    });
   });
 
   it('says already-linked when both sides are the same account', async () => {

@@ -11,6 +11,7 @@ import {
   magicCode,
   csrfFor,
   signDiscordLinkToken,
+  signMergeToken,
 } from '../../web/user-auth';
 import { eraseUser } from '../../core/erase-user';
 
@@ -278,6 +279,141 @@ describe('app - connect Discord', () => {
       provider: 'discord',
       providerUid: DISCORD_ID,
     });
+  });
+});
+
+describe('app - connect Discord (needs-merge)', () => {
+  const DISCORD_ID = '111222333444555666';
+
+  it('routes a Discord id owned by another account to the merge confirm screen', async () => {
+    // The discord identity already belongs to user 2, so linkIdentity returns
+    // needs-merge; the handler must NOT merge silently - it redirects to the
+    // confirm screen with a signed merge token instead.
+    const db = {
+      select: () => ({
+        from: (t: unknown) => ({
+          where: async () =>
+            t === schema.identities
+              ? [{ id: 5, userId: 2, provider: 'discord', providerUid: DISCORD_ID }]
+              : t === schema.users
+                ? [{ id: 1, plan: 'free' }]
+                : [],
+        }),
+      }),
+      $count: async () => 0,
+    } as unknown as Db;
+    const { base } = await startServer({ db });
+    const token = signDiscordLinkToken(DISCORD_ID, SECRET);
+    const res = await fetch(`${base}/app/connect/discord?token=${encodeURIComponent(token)}`, {
+      headers: { Cookie: COOKIE },
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location') ?? '').toMatch(/^\/app\/merge\?token=/);
+  });
+});
+
+describe('app - merge confirmation', () => {
+  // Summaries only need a plan and a meter count; no identities -> the label
+  // falls back to "Account #n", which is fine for the render.
+  const summaryDb = () =>
+    ({
+      select: () => ({
+        from: (t: unknown) => ({
+          where: async () => (t === schema.users ? [{ id: 1, plan: 'free' }] : []),
+        }),
+      }),
+    }) as unknown as Db;
+
+  it('renders the confirm page for a token that names the signed-in account', async () => {
+    const { base } = await startServer({ db: summaryDb() });
+    const token = signMergeToken(1, 2, SECRET);
+    const res = await fetch(`${base}/app/merge?token=${encodeURIComponent(token)}`, {
+      headers: { Cookie: COOKIE },
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toMatch(/Combine these two accounts/i);
+  });
+
+  it('rejects a token that does not name the signed-in account', async () => {
+    const { base } = await startServer();
+    const token = signMergeToken(2, 3, SECRET); // session is user 1
+    const res = await fetch(`${base}/app/merge?token=${encodeURIComponent(token)}`, {
+      headers: { Cookie: COOKIE },
+      redirect: 'manual',
+    });
+    expect(res.headers.get('location')).toBe('/app?status=badlink');
+  });
+
+  it('refuses the merge POST without a CSRF token', async () => {
+    const { base } = await startServer();
+    const res = await fetch(`${base}/app/merge`, {
+      method: 'POST',
+      headers: { Cookie: COOKIE, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: signMergeToken(1, 2, SECRET) }).toString(),
+      redirect: 'manual',
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/app');
+  });
+});
+
+describe('app - disconnect a sign-in method', () => {
+  it('disconnects a provider when another identity remains', async () => {
+    const deletes: unknown[] = [];
+    const db = {
+      select: () => ({
+        from: (t: unknown) => ({
+          where: async () =>
+            t === schema.identities
+              ? [
+                  { id: 1, userId: 1, provider: 'telegram', providerUid: '5' },
+                  { id: 2, userId: 1, provider: 'email', providerUid: 'a@b.com' },
+                ]
+              : [],
+        }),
+      }),
+      delete: (table: unknown) => ({ where: async () => void deletes.push(table) }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+    } as unknown as Db;
+    const { base } = await startServer({ db });
+    const res = await fetch(`${base}/app/api/identities/disconnect`, {
+      method: 'POST',
+      headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'telegram' }),
+    });
+    expect(res.status).toBe(200);
+    expect(deletes).toContain(schema.identities);
+  });
+
+  it('refuses to remove the last identity', async () => {
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: async () => [{ id: 1, userId: 1, provider: 'telegram', providerUid: '5' }],
+        }),
+      }),
+      delete: () => ({ where: async () => undefined }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+    } as unknown as Db;
+    const { base } = await startServer({ db });
+    const res = await fetch(`${base}/app/api/identities/disconnect`, {
+      method: 'POST',
+      headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'telegram' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an unknown provider', async () => {
+    const { base } = await startServer();
+    const res = await fetch(`${base}/app/api/identities/disconnect`, {
+      method: 'POST',
+      headers: { Cookie: COOKIE, 'X-CSRF-Token': CSRF, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'nope' }),
+    });
+    expect(res.status).toBe(400);
   });
 });
 

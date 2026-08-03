@@ -47,18 +47,23 @@ echo "e2e OK: /admin is a 404 (ADMIN_PASSWORD unset = panel disabled)"
 # Seed the watched meter: chat id 1111 matches the Telegram chat the Mockoon
 # updates come from, so the alert has somewhere to go, and the account/meter
 # numbers match the mocked DESCO getBalance (which answers with a balance under
-# the critical threshold). The identity row goes in alongside the legacy column,
-# the same pairing linkIdentity keeps in the app.
+# the critical threshold). Logins live in identities now, and the dispatcher
+# reads the telegram chat id from the telegram channel row's address - so seed
+# the user, its telegram identity, that channel, and the meter together, keyed
+# off the freshly-inserted user id (the DB is a throwaway, recreated each run).
 echo "Seeding an account + meter to watch..."
 $dc exec -T postgres-test psql -U powerroast -d powerroast -v ON_ERROR_STOP=1 -q <<'SQL'
-INSERT INTO users (telegram_chat_id, plan) VALUES (1111, 'free')
-  ON CONFLICT (telegram_chat_id) DO NOTHING;
-INSERT INTO identities (user_id, provider, provider_uid, verified)
-  SELECT id, 'telegram', '1111', true FROM users WHERE telegram_chat_id = 1111
-  ON CONFLICT DO NOTHING;
+WITH u AS (
+  INSERT INTO users (plan) VALUES ('free') RETURNING id
+), ins_identity AS (
+  INSERT INTO identities (user_id, provider, provider_uid, verified)
+    SELECT id, 'telegram', '1111', true FROM u
+), ins_channel AS (
+  INSERT INTO channels (user_id, type, address, verified, enabled)
+    SELECT id, 'telegram', '1111', true, true FROM u
+)
 INSERT INTO meters (user_id, provider, account_no, meter_no, low_threshold, critical_threshold, active)
-  SELECT id, 'desco', '12345678', '87654321', 150, 100, true FROM users WHERE telegram_chat_id = 1111
-  ON CONFLICT DO NOTHING;
+  SELECT id, 'desco', '12345678', '87654321', 150, 100, true FROM u;
 SQL
 seeded=$($dc exec -T postgres-test psql -U powerroast -d powerroast -tAc \
   "SELECT count(*) FROM meters WHERE active" 2>/dev/null || echo 0)

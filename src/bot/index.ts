@@ -77,7 +77,7 @@ const DISCORD_TEST_WINDOW_MS = 10 * 60 * 1000;
 const EMAIL_LINKS_PER_WINDOW = 5;
 const EMAIL_LINK_WINDOW_MS = 15 * 60 * 1000;
 
-function helpText(appUrl: string): string {
+function helpText(appUrl: string, billingLive: boolean): string {
   return [
     '⚡ *Power Roast* - your brutally honest prepaid balance watchdog.',
     '',
@@ -85,7 +85,9 @@ function helpText(appUrl: string): string {
     '',
     '/balance - check balances right now',
     '/meters - list your registered meters',
-    '/sms <phone> - get alerts by SMS too (paid plans)',
+    // No point advertising a paid-only channel while there's nothing to buy -
+    // /upgrade already answers "not switched on yet" on a free-only launch.
+    ...(billingLive ? ['/sms <phone> - get alerts by SMS too (paid plans)'] : []),
     '/discord <url> - get alerts in a Discord channel (free)',
     '/email <address> - sign in to the web dashboard with this chat',
     '/plan - your current plan',
@@ -134,7 +136,7 @@ export function createBot(
   // Meters and their settings are managed on the web dashboard now; the bot
   // points here instead of registering meters itself.
   const appUrl = `${config.publicBaseUrl.replace(/\/+$/, '')}/app`;
-  const HELP_TEXT = helpText(appUrl);
+  const HELP_TEXT = helpText(appUrl, live);
   // Shown wherever a chat has no linked account: sign up on the web, then connect.
   const signupPointer =
     `You don't have an account yet. Sign up (or sign in) at ${appUrl}, ` +

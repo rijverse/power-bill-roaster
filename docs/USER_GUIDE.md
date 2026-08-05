@@ -1,7 +1,8 @@
 # Power-Roast User Guide
 
 Welcome to **Power-Roast**. This guide explains how to create your account, add a
-DESCO meter, and get low-balance alerts on Telegram, Discord, and WhatsApp.
+DESCO meter, and get low-balance alerts on Telegram or Discord (WhatsApp is
+coming, see below).
 
 Your account lives on the **web dashboard** and is keyed to your email. You add and
 manage meters there, then connect any chat app you like to receive alerts. One
@@ -45,6 +46,10 @@ alerts to a channel, use a webhook instead (see below).
 ### WhatsApp
 Tap **Connect WhatsApp** on the dashboard. It opens WhatsApp with a short code
 already filled in, just hit send to link your number.
+
+WhatsApp is not switched on yet: the outbound sender is still being wired up
+(see [DEPLOY.md](DEPLOY.md#8-whatsapp-channel-optional)), so the option only
+appears once your operator has enabled it. Until then, use Telegram or Discord.
 
 ### Discord channel webhook (optional)
 To post alerts into a specific Discord channel instead of a DM:

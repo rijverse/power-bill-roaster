@@ -1,6 +1,13 @@
 import http from 'http';
 import { listen, closeServers } from '../helpers/http-server';
-import { MAX_BODY_BYTES, clientIp, csrfHeader, isMutating, readBody } from '../../web/http-utils';
+import {
+  MAX_BODY_BYTES,
+  clientIp,
+  csrfHeader,
+  forwardedFor,
+  isMutating,
+  readBody,
+} from '../../web/http-utils';
 
 afterEach(closeServers);
 
@@ -24,6 +31,34 @@ describe('clientIp', () => {
   it('reports "unknown" rather than undefined when there is no socket address', () => {
     const req = { headers: {}, socket: {} } as unknown as http.IncomingMessage;
     expect(clientIp(req)).toBe('unknown');
+  });
+});
+
+describe('forwardedFor', () => {
+  // Caddy and nginx append the peer address to whatever X-Forwarded-For arrived,
+  // so every entry but the last is client-written. Reading the first one made the
+  // rate-limiter key attacker-controlled: rotate the header, get a fresh budget.
+  it('takes the last hop, not the client-supplied first one', () => {
+    expect(forwardedFor('9.9.9.9, 203.0.113.7')).toBe('203.0.113.7');
+    expect(forwardedFor('evil, evil2, evil3, 203.0.113.7')).toBe('203.0.113.7');
+  });
+
+  it('reads a single hop', () => {
+    expect(forwardedFor('203.0.113.7')).toBe('203.0.113.7');
+  });
+
+  it('tolerates a repeated header, treating it as one appended chain', () => {
+    expect(forwardedFor(['9.9.9.9', '203.0.113.7'])).toBe('203.0.113.7');
+  });
+
+  it('trims whitespace and skips empty entries', () => {
+    expect(forwardedFor('  9.9.9.9 ,, 203.0.113.7  ')).toBe('203.0.113.7');
+  });
+
+  it('is null when there is nothing usable, so the caller falls back', () => {
+    expect(forwardedFor(undefined)).toBeNull();
+    expect(forwardedFor('')).toBeNull();
+    expect(forwardedFor(' , ')).toBeNull();
   });
 });
 

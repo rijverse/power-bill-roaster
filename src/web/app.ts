@@ -71,6 +71,11 @@ export interface AppDeps {
   subscriptions: SubscriptionService;
   /** magic-link email sends, keyed by email+ip */
   loginLimiter: RateLimiter;
+  /** sign-in attempts for one address, keyed by email alone - no IP to rotate.
+   *  Sends and code guesses get separate budgets off the same instance. */
+  emailLimiter: RateLimiter;
+  /** aggregate sign-in cap across every address, the IP-rotation backstop */
+  loginGlobalLimiter: RateLimiter;
   /** DESCO lookups on add-meter, keyed by user id */
   meterLimiter: RateLimiter;
   /** per-request CSP nonce; inline <script> blocks must carry it to run */
@@ -598,7 +603,7 @@ export async function handleAppRequest(
   res: http.ServerResponse,
   deps: AppDeps
 ): Promise<boolean> {
-  const { db, config, mailer, loginLimiter, nonce } = deps;
+  const { db, config, mailer, loginLimiter, emailLimiter, loginGlobalLimiter, nonce } = deps;
   const url = new URL(req.url ?? '/', `http://localhost:${config.port}`);
   const path = url.pathname;
   if (path !== '/app' && !path.startsWith('/app/')) {
@@ -635,7 +640,7 @@ export async function handleAppRequest(
       redirect(res, '/app?status=bademail');
       return true;
     }
-    if (!loginLimiter.allow(`${email}|${clientIp(req)}`)) {
+    if (!loginLimiter.allow(`${email}|${clientIp(req)}`) || !emailLimiter.allow(`send:${email}`)) {
       redirect(res, '/app?status=ratelimited');
       return true;
     }
@@ -670,7 +675,15 @@ export async function handleAppRequest(
       redirect(res, '/app?status=badcode');
       return true;
     }
-    if (!loginLimiter.allow(`${email}|${clientIp(req)}`)) {
+    // The email-keyed and global limiters are what actually bound a guesser: the
+    // code is derived from (email, time bucket) so it can be attacked without the
+    // owner ever asking for one, and the IP half of the first key is worth
+    // nothing against someone rotating addresses.
+    if (
+      !loginLimiter.allow(`${email}|${clientIp(req)}`) ||
+      !emailLimiter.allow(`code:${email}`) ||
+      !loginGlobalLimiter.allow('app-login')
+    ) {
       redirect(res, '/app?status=ratelimited');
       return true;
     }

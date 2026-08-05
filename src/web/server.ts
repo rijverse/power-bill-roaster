@@ -38,6 +38,13 @@ const ADMIN_LOGIN_GLOBAL_ATTEMPTS = 50;
 // lookups on add-meter (politeness to the upstream API).
 const APP_LOGIN_SENDS = 5;
 const APP_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+// The sign-in code is a stateless 6 digits (user-auth.ts), so the attempt budget
+// is the only thing standing between a guesser and an account. Both of these are
+// keyed *without* the client IP: behind a proxy the IP is only as trustworthy as
+// the proxy is, and an IP-rotating attacker would otherwise get an unbounded
+// budget. Per-email stops a targeted grind, the global one stops a wide sweep.
+const APP_CODE_ATTEMPTS = 10;
+const APP_LOGIN_GLOBAL_ATTEMPTS = 200;
 const APP_METER_LOOKUPS = 6;
 const APP_METER_WINDOW_MS = 10 * 60 * 1000;
 // Operator "re-check balance now" politeness cap toward DESCO, keyed per meter.
@@ -196,6 +203,8 @@ export function createWebServer(
   const loginLimiter = new RateLimiter(ADMIN_LOGIN_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const loginGlobalLimiter = new RateLimiter(ADMIN_LOGIN_GLOBAL_ATTEMPTS, ADMIN_LOGIN_WINDOW_MS);
   const appLoginLimiter = new RateLimiter(APP_LOGIN_SENDS, APP_LOGIN_WINDOW_MS);
+  const appEmailLimiter = new RateLimiter(APP_CODE_ATTEMPTS, APP_LOGIN_WINDOW_MS);
+  const appLoginGlobalLimiter = new RateLimiter(APP_LOGIN_GLOBAL_ATTEMPTS, APP_LOGIN_WINDOW_MS);
   const appMeterLimiter = new RateLimiter(APP_METER_LOOKUPS, APP_METER_WINDOW_MS);
   const adminRecheckLimiter = new RateLimiter(ADMIN_RECHECKS, ADMIN_RECHECK_WINDOW_MS);
   const secure = (config.publicBaseUrl ?? '').startsWith('https');
@@ -227,6 +236,8 @@ export function createWebServer(
           mailer,
           subscriptions,
           loginLimiter: appLoginLimiter,
+          emailLimiter: appEmailLimiter,
+          loginGlobalLimiter: appLoginGlobalLimiter,
           meterLimiter: appMeterLimiter,
           nonce,
         });

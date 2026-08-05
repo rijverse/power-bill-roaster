@@ -74,12 +74,31 @@ export async function parseJson(
 // slip past the per-IP rate limiters - so fall back to the socket address.
 export const trustProxy = process.env.TRUST_PROXY === '1';
 
+/**
+ * The client address from X-Forwarded-For, or null if there isn't a usable one.
+ *
+ * The **last** hop, not the first. Caddy and nginx both append the peer address
+ * to whatever X-Forwarded-For arrived, so everything left of the final entry is
+ * a value the client wrote and the last entry is the only one our own proxy
+ * put there. Reading the first entry (the instinct, since that's "the client")
+ * hands the rate-limiter key straight to the caller.
+ *
+ * Split out from clientIp so it's testable - trustProxy is fixed at import.
+ */
+export function forwardedFor(header: string | string[] | undefined): string | null {
+  const raw = Array.isArray(header) ? header.join(',') : header;
+  const hops = (raw ?? '')
+    .split(',')
+    .map(hop => hop.trim())
+    .filter(Boolean);
+  return hops.length > 0 ? hops[hops.length - 1] : null;
+}
+
 export function clientIp(req: http.IncomingMessage): string {
   if (trustProxy) {
-    const fwd = req.headers['x-forwarded-for'];
-    const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0].trim();
-    if (first) {
-      return first;
+    const fwd = forwardedFor(req.headers['x-forwarded-for']);
+    if (fwd) {
+      return fwd;
     }
   }
   return req.socket.remoteAddress || 'unknown';

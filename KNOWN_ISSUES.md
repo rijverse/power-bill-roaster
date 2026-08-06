@@ -120,6 +120,16 @@ test; `__tests__/helpers/http-server.ts` is the place to do it.
   design - `target_user_id` is a plain column, not an FK, so erasure doesn't
   cascade. The `/privacy` text discloses this; it carries no balance or meter
   data.
+- **No CodeQL job.** Dropped after it failed the PR on six alerts (1 critical, 5
+  high) that were all false positives, with no true positive to weigh against
+  them: a test helper's `<script>` scanner read as an HTML sanitizer; the sha256
+  in `adminSessionSecret` and in `timingSafeStringEqual` read as password
+  storage (it's key derivation and a constant-time compare, neither is stored);
+  and `fetchWithTimeout` read as SSRF, though the only user-supplied URL that
+  reaches it is host-allowlisted by `isValidDiscordWebhookUrl` and re-checked at
+  the send site. It also can't see through the logger's masker, so every masked
+  log line reads as clear-text PII. Re-add it only with those five suppressed,
+  or it just teaches everyone to ignore a red check.
 - **`__Host-` cookie prefix only under HTTPS.** The prefix requires `Secure`,
   which can't be set over dev HTTP, so the cookie name is `__Host-pr_admin` in
   prod and `pr_admin` in dev (`adminCookieName(secure)`). The session is

@@ -192,20 +192,27 @@ bun run db:migrate     # first time only
 bun run dev
 ```
 
-With the mock-mode block enabled in `.env` (see `.env.example`), a scripted mock user
-registers a meter and the fake ৳42.50 balance trips a critical alert within a minute -
-the whole pipeline runs without a Telegram token or touching DESCO.
+With the mock-mode block enabled in `.env` (see `.env.example`), the bot and the poll loop
+run against Mockoon's fake Telegram and DESCO - no real token, nothing external contacted.
+Add a meter on the dashboard at `/app` and the fake ৳42.50 balance trips a critical alert
+on the next cycle. The mock fixture still scripts a `/register` message, but that command
+only points at the dashboard now, so the meter has to come from there.
 
 ### End-to-End Test
 
 ```bash
-docker compose -f docker-compose.test.yml up --build
+bash scripts/e2e.sh
 ```
 
-Spins up the app, a throwaway Postgres, and [Mockoon](https://mockoon.com) faking both the
-Telegram and DESCO APIs. A scripted mock user registers a meter, the fake balance (৳42.50)
-trips the critical threshold, and the alert fires - watch the app logs. Clean up with
-`docker compose -f docker-compose.test.yml down -v`.
+Spins up the production image, a throwaway Postgres, and [Mockoon](https://mockoon.com)
+faking both the Telegram and DESCO APIs, then seeds an account and meter and asserts the
+alert lands. It checks what the unit suites can't: that the image boots read-only with all
+capabilities dropped, `/health` answers 200, `/admin` is a 404 while `ADMIN_PASSWORD` is
+unset, and the fake ৳42.50 balance trips the critical threshold all the way through to a
+delivered alert. It tears its own stack down when it finishes.
+
+Bringing the compose file up by hand only boots the stack - onboarding lives on the web
+dashboard now, so with an empty database there is nothing to poll and no alert ever fires.
 
 ### Lint & Format
 

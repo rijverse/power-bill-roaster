@@ -71,6 +71,59 @@ A few bits worth calling out:
 - The SMS monthly budget window now rolls at midnight Dhaka rather than
   server-local midnight, and quiet-hours/budget code share one fixed-offset
   Dhaka clock instead of two mechanisms.
+- Adding a meter kept the balance it had just fetched. It was read to validate
+  the numbers and then discarded, so with the default six-hour poll interval a
+  new account's dashboard showed ৳0.00 and "every meter is healthy" for the
+  rest of the day, and the first alert waited that long too. Every surface that
+  reads a balance now goes through one `recordReading` path (poll cycle, add a
+  meter, force check, operator re-check), which writes the reading, the
+  alert_state snapshot, and the outbox row together.
+- "Force check" on the dashboard now re-reads the meters from the provider. It
+  only re-rendered what was already in the database, so between poll cycles it
+  did nothing visible.
+- A paused meter is visible and resumable from the dashboard. Pausing removed
+  it from the payload entirely, so the screen read "no meters yet" and the only
+  way back was to retype the account and meter numbers. Resuming counts against
+  the plan cap.
+- The sign-in screen opens on Email, the only path that creates an account.
+  It opened on Telegram, and the bots stopped creating accounts when onboarding
+  moved to the web, so the bot could only point people back at the sign-in page.
+  The "enter the code" form is also prefilled from the address just used
+  (short-lived `pr_email` cookie, not the query string).
+- The tone preview on the Alerts screen renders the real critical-alert copy via
+  `alertPreview`, and follows the threshold sliders. It was a second hardcoded
+  copy of the wording and no longer matched the email being sent.
+- Removed the "Switch to admin" link from every customer's sidebar. It was
+  unconditional and led to a page announcing that it holds customer PII.
+- Deleting an account confirms it happened (`/app?status=deleted`) instead of
+  dropping the user on a "welcome back" sign-in screen, and asks through the
+  shared styled modal rather than a native `prompt()` (which some mobile
+  browsers suppress outright).
+- Landing-page pricing comes from `core/plans.ts`. It advertised "Roast Pro
+  ৳99" and "Power User ৳249"; the app sells Plus ৳40 and Business ৳250. Its
+  hero and closing calls to action no longer promise a bot chat for a link that
+  opens an email sign-in, and the nav no longer overflows sideways below 460px.
+- Stale `/register` instructions replaced with the dashboard everywhere they
+  survived: the token dashboard's empty state, the `/stop` confirmation, the
+  "can't read your meter" notice, and the plan-expiry notice (which also
+  offered `/upgrade` during a free-only launch).
+- Every page carries an inline favicon; each page load used to 404 on
+  `/favicon.ico`.
+- User-facing counts read "1 meter" instead of "1 meter(s)".
+
+### Admin console fixes
+
+- The operator's reason is recorded for pause, resume, revoke, and erase, not
+  just grant. The audit row deliberately still identifies the customer by id
+  only: it outlives the account, so it must not carry their address.
+- Erasing a customer asks the operator to type that customer's email. It asked
+  for the word "ERASE", which is identical in every tab and cannot catch
+  erasing the wrong person.
+- A single month of revenue renders as one figure instead of a full-width
+  "trend" drawn from one data point with the same month at both ends.
+- The customer detail shows the normalized tone (Savage/Mild) rather than the
+  raw `roast` column value.
+- `prModal` moved to `theme.ts` so both consoles share one confirm dialog.
 
 ## [1.0.0] - 2026-07-02
 

@@ -14,7 +14,7 @@ import { logger } from '../logger';
 export const CONNECTED_EMBED: DiscordEmbed = {
   title: 'Power Roast connected ✅',
   description:
-    "Low-balance alerts for your meter(s) will land here. If you're reading this, it works.",
+    "Low-balance alerts for your meters will land here. If you're reading this, it works.",
   color: 0x3ba55d, // green, matching COLOR.ok in the Discord bot
 };
 

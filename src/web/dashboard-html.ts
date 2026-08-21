@@ -5,7 +5,7 @@
 
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
-export function dashboardHtml(nonce: string, token: string): string {
+export function dashboardHtml(nonce: string, token: string, appUrl = '/app'): string {
   const body = `<div style="position:relative; z-index:1; max-width:880px; margin:0 auto; padding:36px 20px 64px;">
   <header style="text-align:center; margin-bottom:18px;">
     <div style="display:flex; justify-content:center;">${logo(true)}</div>
@@ -75,7 +75,7 @@ async function load() {
   }
   const data = await res.json();
   if (!data.meters.length) {
-    app.innerHTML = '<div class="pr-card pr-empty">No active meters. Message the bot: /register</div>';
+    app.innerHTML = '<div class="pr-card pr-empty">No active meters. Add one on your dashboard: <a href="${appUrl}" style="color:var(--gold)">${appUrl}</a></div>';
     return;
   }
   app.innerHTML = statRow(data.meters);

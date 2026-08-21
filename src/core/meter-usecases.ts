@@ -141,9 +141,12 @@ export async function stopMonitoring(db: Db, userId: number): Promise<void> {
   await db.update(schema.meters).set({ active: false }).where(eq(schema.meters.userId, userId));
 }
 
-/** The reply both bots give after /stop - the policy wording lives in one place. */
-export const STOP_CONFIRMED =
-  'Monitoring paused for all your meters. Use /register to start again. Good luck out there. 🕯️';
+/** The reply both bots give after /stop - the policy wording lives in one place.
+ *  Meters are only paused, and resuming them is a dashboard action now, so this
+ *  can't point at /register any more. */
+export function stopConfirmed(appUrl: string): string {
+  return `Monitoring paused for all your meters. Nothing is deleted - resume them any time on your dashboard: ${appUrl}`;
+}
 export const STOP_NOTHING_TO_DO = 'Nothing to stop - you have no registered meters.';
 
 /**

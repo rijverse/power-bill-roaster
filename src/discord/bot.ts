@@ -19,7 +19,7 @@ import {
   recentPrediction,
   setTone,
   stopMonitoring,
-  STOP_CONFIRMED,
+  stopConfirmed,
   STOP_NOTHING_TO_DO,
 } from '../core/meter-usecases';
 import { SubscriptionService } from '../billing';
@@ -385,7 +385,7 @@ export function createDiscordBot(
       return reply(STOP_NOTHING_TO_DO);
     }
     await stopMonitoring(db, user.id);
-    return reply(STOP_CONFIRMED);
+    return reply(stopConfirmed(appUrl));
   }
 
   async function handleDelete(discordUserId: string, confirm: string): Promise<InteractionReply> {

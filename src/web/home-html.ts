@@ -4,6 +4,7 @@
 // of Chart.js, no new CDNs. Brutalist Feature-Stack: full-bleed bands split by
 // hard rules, an oversized uppercase hero, a ruled capability matrix.
 import { pageDoc, logo } from './theme';
+import { maxMetersFor, priceBdtFor, smsPerMonthFor } from '../core/plans';
 
 const GITHUB = 'https://github.com/rijverse/power-bill-roaster';
 
@@ -134,6 +135,14 @@ const STYLE = `
 
 @media (max-width: 880px) {
   .lp-nav .links { display: none; }
+  .lp-nav-inner { padding: 16px 18px; gap: 12px; }
+}
+/* the two nav buttons plus the wordmark stop fitting around here, and the
+   overflow pushed the whole page sideways */
+@media (max-width: 460px) {
+  .lp-nav .right .ghost { display: none; }
+}
+@media (max-width: 880px) {
   .lp-hero, .lp-split, .lp-2col, .lp-matrix, .lp-prices { grid-template-columns: minmax(0, 1fr); }
   .lp-hero { padding: 44px 0; gap: 40px; }
   .lp-section { padding: 60px 0; }
@@ -208,7 +217,7 @@ export function homeHtml(billingLive = false): string {
       </div>
       <div class="right">
         <a class="pr-btn ghost sm" href="${GITHUB}" target="_blank" rel="noopener">${I.star} Star on GitHub</a>
-        <a class="pr-btn gold sm" href="/app">Start the bot</a>
+        <a class="pr-btn gold sm" href="/app">Start watching</a>
       </div>
     </div>
   </nav>`;
@@ -221,7 +230,7 @@ export function homeHtml(billingLive = false): string {
         <h1 class="lp-h1">Recharge now, or get <span class="hl">roasted</span> in the dark.</h1>
         <p class="lp-lead">Your prepaid balance is one bad day from zero. And after how you've treated that meter, can you blame it for wanting out? Power·Roast emails you before the lights do.</p>
         <div class="lp-ctarow">
-          <a class="pr-btn gold" href="/app">${I.msg} Message the bot</a>
+          <a class="pr-btn gold" href="/app">${I.msg} Start watching my meter</a>
           <a class="pr-btn ghost" href="${GITHUB}" target="_blank" rel="noopener">${I.git} Self-host free</a>
         </div>
         <div class="lp-checks">
@@ -360,11 +369,11 @@ export function homeHtml(billingLive = false): string {
       </div>
     </div>
     <div class="lp-path bot">
-      <h3>Hosted Telegram bot</h3>
+      <h3>Hosted, on the web</h3>
       <p>${
         paid
-          ? 'No fork, no secrets. Just message the bot. It handles everything and unlocks predictions, a web dashboard, multi-meter, and SMS.'
-          : 'No fork, no secrets. Just message the bot. It watches your meter, predicts the run-out, and roasts you on Telegram, Discord, or email. Free.'
+          ? 'No fork, no secrets. Sign in with your email, add a meter, done. Unlocks predictions, the dashboard, multi-meter, and SMS.'
+          : 'No fork, no secrets. Sign in with your email and add a meter. It predicts the run-out and roasts you by email, Telegram, or Discord. Free.'
       }</p>
       <div class="lp-bullets" style="margin-top:0">
         ${bullet('Web dashboard with history charts')}
@@ -378,7 +387,7 @@ export function homeHtml(billingLive = false): string {
   const pricing = `<section class="lp-section" id="pricing"><div class="lp-wrap">
     <div class="lp-head">
       <h2 class="lp-h2">Cheaper than living in the dark.</h2>
-      <p class="lp-sub">Self-host for free, forever. Or let the bot do the work and pay in BDT via bKash or SSLCommerz.</p>
+      <p class="lp-sub">Self-host for free, forever. Or let us do the work and pay in BDT via bKash or SSLCommerz.</p>
     </div>
     <div class="lp-prices">
       <div class="lp-price">
@@ -389,18 +398,18 @@ export function homeHtml(billingLive = false): string {
         <a class="pr-btn ghost block" href="${GITHUB}" target="_blank" rel="noopener">Fork on GitHub</a>
       </div>
       <div class="lp-price pop">
-        <div class="pname">Roast Pro <span class="pop-badge">Most popular</span></div>
-        <div class="amt">৳99 <span>/ month</span></div>
-        <div class="blurb">The hosted bot, fully loaded.</div>
-        <div class="pfeat">${priceFeat('Telegram + email, zero setup')}${priceFeat('Web dashboard + history charts')}${priceFeat('Run-out predictions')}${priceFeat('Up to 3 meters')}</div>
+        <div class="pname">Plus <span class="pop-badge">Most popular</span></div>
+        <div class="amt">৳${priceBdtFor('plus')} <span>/ month</span></div>
+        <div class="blurb">The hosted watchdog, fully loaded.</div>
+        <div class="pfeat">${priceFeat('Telegram + email, zero setup')}${priceFeat('Web dashboard + history charts')}${priceFeat('Run-out predictions')}${priceFeat(`Up to ${maxMetersFor('plus')} meters`)}${priceFeat(`${smsPerMonthFor('plus')} SMS alerts / month`)}</div>
         <a class="pr-btn gold block" href="/app">Start with bKash</a>
       </div>
       <div class="lp-price">
-        <div class="pname">Power User</div>
-        <div class="amt">৳249 <span>/ month</span></div>
+        <div class="pname">Business</div>
+        <div class="amt">৳${priceBdtFor('business')} <span>/ month</span></div>
         <div class="blurb">For landlords and big families.</div>
-        <div class="pfeat">${priceFeat('Everything in Roast Pro')}${priceFeat('SMS alerts included')}${priceFeat('Unlimited meters')}${priceFeat('Priority recharge reminders')}</div>
-        <a class="pr-btn ghost block" href="/app">Choose Power User</a>
+        <div class="pfeat">${priceFeat('Everything in Plus')}${priceFeat(`${smsPerMonthFor('business')} SMS alerts / month`)}${priceFeat('Unlimited meters')}${priceFeat('Priority recharge reminders')}</div>
+        <a class="pr-btn ghost block" href="/app">Choose Business</a>
       </div>
     </div>
     <p class="lp-pricenote">60-day money-back guarantee. Cancel anytime. No per-meter gouging.</p>
@@ -430,9 +439,9 @@ export function homeHtml(billingLive = false): string {
 
   const finalCta = `<section class="lp-section"><div class="lp-wrap"><div class="lp-final">
     <h2 class="lp-h2">Don't wait for the dark.</h2>
-    <p class="lp-sub">Set it up in under an hour, or just message the bot. Either way, you'll never get ghosted by your own meter again.</p>
+    <p class="lp-sub">Two numbers off your bill and you're watching. Either way, you'll never get ghosted by your own meter again.</p>
     <div class="lp-ctarow">
-      <a class="pr-btn gold" href="/app">${I.msg} Message the bot</a>
+      <a class="pr-btn gold" href="/app">${I.msg} Start watching my meter</a>
       <a class="pr-btn ghost" href="${GITHUB}" target="_blank" rel="noopener">${I.git} Self-host free</a>
     </div>
   </div></div></section>`;

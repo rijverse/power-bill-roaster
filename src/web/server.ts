@@ -326,7 +326,13 @@ export function createWebServer(
           json(res, 200, await dashboardData(db, userId));
         } else {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(dashboardHtml(nonce, url.searchParams.get('t')!));
+          res.end(
+            dashboardHtml(
+              nonce,
+              url.searchParams.get('t')!,
+              `${config.publicBaseUrl.replace(/\/+$/, '')}/app`
+            )
+          );
         }
         return;
       }

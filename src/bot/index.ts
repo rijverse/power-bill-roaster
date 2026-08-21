@@ -31,7 +31,7 @@ import {
   recentPrediction,
   setTone,
   stopMonitoring,
-  STOP_CONFIRMED,
+  stopConfirmed,
   STOP_NOTHING_TO_DO,
 } from '../core/meter-usecases';
 import {
@@ -788,7 +788,7 @@ export function createBot(
       return;
     }
     await stopMonitoring(db, user.id);
-    await ctx.reply(STOP_CONFIRMED);
+    await ctx.reply(stopConfirmed(appUrl));
   });
 
   // operator-only metrics; silent for everyone else

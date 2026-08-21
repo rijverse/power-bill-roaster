@@ -2,6 +2,7 @@ import { getServerConfig } from './config';
 import { createDb, schema } from './db';
 import { createBot } from './bot';
 import { Scheduler } from './core/scheduler';
+import { plural } from './core/plural';
 import { contactTargets } from './core/identities';
 import { Dispatcher, AlertButton, DiscordDmSender } from './notifications/dispatcher';
 import { AlertDispatcherWorker } from './core/alert-dispatcher';
@@ -99,9 +100,10 @@ async function main(): Promise<void> {
   };
   subscriptions.setHooks({
     notifyDowngrade: async (user, expiredPlan, pausedMeters) => {
+      const appUrl = `${config.publicBaseUrl.replace(/\/+$/, '')}/app`;
       const pausedNote =
         pausedMeters > 0
-          ? ` I paused ${pausedMeters} meter(s) beyond the free limit - /upgrade, then /register them again to wake them up.`
+          ? ` I paused ${plural(pausedMeters, 'meter')} beyond the free limit - pick which ones stay active on your dashboard: ${appUrl}`
           : '';
       await notifyPlanChange(
         user,

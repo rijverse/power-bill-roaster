@@ -1,11 +1,9 @@
 import { eq, and, gte, lte, sql } from 'drizzle-orm';
 import type { Pool } from 'pg';
 import { Db, schema } from '../db';
-import { evaluate, AlertStateSnapshot, AlertLevel } from './alert-machine';
-import { recentPrediction } from './meter-usecases';
 import { contactTargets } from './identities';
+import { recordReading, readingFromBalance } from './meter-reading';
 import { getProvider } from '../providers';
-import { MeterContext } from '../notifications/alert-copy';
 import { TelegramSender, DiscordDmSender } from '../notifications/dispatcher';
 import { SubscriptionService } from '../billing';
 import { ServerConfig } from '../config';
@@ -258,98 +256,13 @@ export class Scheduler {
       throw lastError;
     }
 
-    const balance = balanceData.balance;
-
-    await this.db.insert(schema.readings).values({
-      meterId: meter.id,
-      balance,
-      currentMonthConsumption: balanceData.currentMonthConsumption ?? null,
-      readingTime: balanceData.readingTime ?? null,
-    });
-
-    // The joined row is authoritative for everything the poll cycle owns. The one
-    // column another process can change underneath us is remindersSnoozedUntil -
-    // the snooze button writes it, possibly while this very cycle is running - and
-    // it gates only the reminder branch, which can only be reached from a non-ok
-    // level. So re-read for a meter that's already in alert, and take the free ride
-    // for the healthy majority.
-    const stateRow =
-      joinedState && joinedState.level !== 'ok'
-        ? ((
-            await this.db
-              .select()
-              .from(schema.alertState)
-              .where(eq(schema.alertState.meterId, meter.id))
-          )[0] ?? joinedState)
-        : joinedState;
-
-    const prev: AlertStateSnapshot = {
-      level: (stateRow?.level ?? 'ok') as AlertLevel,
-      lastAlertAt: stateRow?.lastAlertAt ?? null,
-      lastBalance: stateRow?.lastBalance ?? null,
-      remindersSnoozedUntil: stateRow?.remindersSnoozedUntil ?? null,
-    };
-
-    const now = new Date();
-    const decision = evaluate(
-      prev,
-      balance,
-      { low: meter.lowThreshold, critical: meter.criticalThreshold },
-      now,
-      this.config.reminderIntervalHours * 60 * 60 * 1000
-    );
-
-    const alertSent = decision.action !== 'none';
-    const stateUpdate = {
-      level: decision.level,
-      lastBalance: balance,
-      lastAlertAt: alertSent ? now : (stateRow?.lastAlertAt ?? null),
-      rechargeDetectedAt: decision.rechargeDetected ? now : (stateRow?.rechargeDetectedAt ?? null),
-      // a successful read clears any "can't reach this meter" state
-      consecutiveFailures: 0,
-      failureNotifiedAt: null,
-      // an alert that actually fires ends an active snooze; a reminder
-      // suppressed by snooze (action 'none') keeps it so it still holds
-      remindersSnoozedUntil: alertSent ? null : (stateRow?.remindersSnoozedUntil ?? null),
-      updatedAt: now,
-    };
-
-    if (!alertSent) {
-      // no alert to send - just refresh the level/balance snapshot, no
-      // transaction needed because nothing fans out from here.
-      await this.db
-        .insert(schema.alertState)
-        .values({ meterId: meter.id, ...stateUpdate })
-        .onConflictDoUpdate({ target: schema.alertState.meterId, set: stateUpdate });
-      return;
-    }
-
-    // wrap alert_state + pending_alerts in one transaction so a crash between
-    // them can't leave lastAlertAt advanced but no row queued (silencing the
-    // user) or vice versa (sending the same alert twice).
-    const ctx: MeterContext = {
-      nickname: meter.nickname,
-      accountNo: meter.accountNo,
-      meterNo: meter.meterNo,
-      balance,
-      lowThreshold: meter.lowThreshold,
-      criticalThreshold: meter.criticalThreshold,
-      prediction: await recentPrediction(this.db, meter.id, balance, now),
+    // The joined row is authoritative for everything the poll cycle owns, so
+    // pass it down: recordReading only re-selects alert_state for a meter that
+    // is already in alert (remindersSnoozedUntil can change underneath us).
+    await recordReading(this.db, meter, user.id, readingFromBalance(balanceData), {
+      reminderIntervalMs: this.config.reminderIntervalHours * 60 * 60 * 1000,
       rechargeUrl: this.config.rechargeUrl,
-    };
-
-    await this.db.transaction(async tx => {
-      await tx
-        .insert(schema.alertState)
-        .values({ meterId: meter.id, ...stateUpdate })
-        .onConflictDoUpdate({ target: schema.alertState.meterId, set: stateUpdate });
-      await tx.insert(schema.pendingAlerts).values({
-        meterId: meter.id,
-        userId: user.id,
-        action: decision.action,
-        level: decision.level,
-        payload: JSON.stringify(ctx),
-      });
+      joinedState,
     });
   }
 
@@ -390,7 +303,7 @@ export class Scheduler {
     const label = meter.nickname ?? `meter ${meter.meterNo}`;
     const body = [
       "DESCO's service may be down, or the account/meter numbers may have changed (a replaced meter gets new numbers). Balance alerts for it are paused until I can read it again.",
-      'If the meter changed, use /stop and then /register the new one.',
+      `If the meter got replaced, add its new numbers on your dashboard: ${this.config.publicBaseUrl.replace(/\/+$/, '')}/app`,
     ].join('\n');
     if (target.kind === 'telegram') {
       await this.sender.sendTelegram(

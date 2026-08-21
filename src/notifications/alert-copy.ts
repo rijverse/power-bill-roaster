@@ -190,3 +190,49 @@ export function alertCopy(
   // noImplicitReturns still wants a terminal return on the fall-off path.
   return null;
 }
+
+// Sentinel numbers no real meter will have, so the tokens below can be swapped
+// back out without a regex over the copy itself.
+const PREVIEW_BALANCE = 987654.21;
+const PREVIEW_LOW = 918273;
+const PREVIEW_CRITICAL = 546372;
+
+export interface AlertPreview {
+  title: string;
+  body: string;
+  roast: string;
+  accent: string;
+}
+
+/**
+ * The critical-alert copy with its numbers left as {bal} / {low} / {crit}
+ * tokens, for the dashboard's "this is what lands in your inbox" preview. It
+ * comes from alertCopy so the preview can't drift: the dashboard used to ship
+ * its own hardcoded pair of strings, and they stopped matching the real email
+ * the first time the copy here changed.
+ */
+export function alertPreview(tone: Tone): AlertPreview {
+  const copy = alertCopy(
+    'critical-alert',
+    {
+      nickname: null,
+      accountNo: '',
+      meterNo: '',
+      balance: PREVIEW_BALANCE,
+      lowThreshold: PREVIEW_LOW,
+      criticalThreshold: PREVIEW_CRITICAL,
+    },
+    tone
+  )!;
+  const tokenize = (text: string) =>
+    text
+      .replace(new RegExp(PREVIEW_BALANCE.toFixed(2), 'g'), '{bal}')
+      .replace(new RegExp(String(PREVIEW_LOW), 'g'), '{low}')
+      .replace(new RegExp(String(PREVIEW_CRITICAL), 'g'), '{crit}');
+  return {
+    title: tokenize(copy.title),
+    body: tokenize(copy.body),
+    roast: tokenize(copy.roast),
+    accent: copy.email.accent,
+  };
+}

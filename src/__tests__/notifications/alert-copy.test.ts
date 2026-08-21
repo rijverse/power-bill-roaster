@@ -1,6 +1,6 @@
 import { AlertAction } from '../../core/alert-machine';
 import { TONES } from '../../core/tone';
-import { alertCopy, MeterContext } from '../../notifications/alert-copy';
+import { alertCopy, alertPreview, MeterContext } from '../../notifications/alert-copy';
 import { renderAlert } from '../../notifications/telegram-templates';
 import { discordAlertEmbed } from '../../notifications/discord-templates';
 import { emailAlert } from '../../notifications/email-templates';
@@ -81,6 +81,45 @@ describe('alertCopy is the single source of alert wording', () => {
           expect(/^[\x20-\x7E]*$/.test(sms)).toBe(true);
         }
       }
+    });
+  });
+
+  describe('dashboard preview', () => {
+    // The Alerts screen shows "this is what lands in your inbox". It used to
+    // ship its own hardcoded pair of strings, which stopped matching the real
+    // email the first time the copy here changed.
+    it('renders the same words as the real critical alert, with the numbers tokenized', () => {
+      for (const tone of TONES) {
+        const real = alertCopy('critical-alert', ctx, tone)!;
+        const preview = alertPreview(tone);
+        const filled = (text: string) =>
+          text
+            .split('{bal}')
+            .join(ctx.balance.toFixed(2))
+            .split('{low}')
+            .join(String(ctx.lowThreshold))
+            .split('{crit}')
+            .join(String(ctx.criticalThreshold));
+
+        expect(filled(preview.title)).toBe(real.title);
+        expect(filled(preview.body)).toBe(real.body);
+        expect(filled(preview.roast)).toBe(real.roast);
+        expect(preview.accent).toBe(real.email.accent);
+      }
+    });
+
+    it('leaves no sentinel numbers in the copy it hands the client', () => {
+      for (const tone of TONES) {
+        const p = alertPreview(tone);
+        const all = [p.title, p.body, p.roast].join(' ');
+        expect(all).not.toMatch(/987654|918273|546372/);
+      }
+    });
+
+    it('tokenizes the threshold the critical body quotes', () => {
+      // the slider has to be able to move the preview, so the number can't be baked in
+      expect(alertPreview('savage').body).toContain('{crit}');
+      expect(alertPreview('mild').body).toContain('{crit}');
     });
   });
 });

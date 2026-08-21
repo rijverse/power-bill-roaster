@@ -7,6 +7,8 @@
 // faithfully but clearly marked as previews. Mutations echo the CSRF token.
 
 import { DEFAULT_RECHARGE_URL } from '../core/recharge';
+import { alertPreview } from '../notifications/alert-copy';
+import { TONES } from '../core/tone';
 import { pageDoc, logo, CHART_SCRIPT, CLIENT_HELPERS } from './theme';
 
 /** Server-side HTML escape for the few standalone pages rendered here. */
@@ -81,21 +83,35 @@ const LOGIN_STATUS: Record<string, { cls: string; msg: string }> = {
     msg: 'That email already has an account. Sign in with it, then use Connect Telegram to link them.',
   },
   disabled: { cls: 'pr-err', msg: 'Email sign-in is not configured on this server yet.' },
+  deleted: {
+    cls: 'pr-good',
+    msg: '✅ Your account and every meter, reading, and alert channel on it are gone. No hard feelings.',
+  },
 };
 
-export function loginHtml(nonce: string, mailEnabled: boolean, status: string | null): string {
+export function loginHtml(
+  nonce: string,
+  mailEnabled: boolean,
+  status: string | null,
+  emailHint: string | null = null,
+  botUrl: string | null = null
+): string {
   const s = status ? LOGIN_STATUS[status] : undefined;
   const notice = s ? `<p class="${s.cls}" style="margin:0 0 14px">${s.msg}</p>` : '';
+  // The address they just typed, so neither form makes them type it twice. Held
+  // in a short-lived cookie rather than the query string - it ends up in access
+  // logs and referrers otherwise.
+  const hint = emailHint ? escHtml(emailHint) : '';
 
   // After a link is sent, offer the emailed code as a fallback for people whose
   // mail app opened the link in a different browser than the one they started in.
   const codeForm =
     mailEnabled && status === 'sent'
       ? `<div style="margin-top:18px; padding-top:18px; border-top:1px solid var(--border-soft)">
-          <label class="pr-label" for="lcemail">Or enter the 6-digit code from the email</label>
+          <label class="pr-label" for="code">Or enter the 6-digit code from the email</label>
           <form method="POST" action="/app/login/code" style="margin-top:8px">
-            <input class="pr-input" id="lcemail" type="email" name="email" placeholder="you@example.com" required style="margin-bottom:10px">
-            <input class="pr-input mono" id="code" name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" placeholder="123 456" required style="margin-bottom:12px; letter-spacing:0.15em">
+            <input class="pr-input" id="lcemail" type="email" name="email" placeholder="you@example.com" value="${hint}" required style="margin-bottom:10px">
+            <input class="pr-input mono" id="code" name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" placeholder="123 456" required autofocus style="margin-bottom:12px; letter-spacing:0.15em">
             <button class="pr-btn ghost block" type="submit">Sign in with code</button>
           </form>
         </div>`
@@ -105,21 +121,22 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
     ? `<form method="POST" action="/app/login">
         ${notice}
         <label class="pr-label" for="email">Email</label>
-        <input class="pr-input" id="email" type="email" name="email" placeholder="you@example.com" required style="margin-bottom:18px">
-        <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember, we email you a one-tap link.</p>
+        <input class="pr-input" id="email" type="email" name="email" placeholder="you@example.com" value="${hint}" required style="margin-bottom:18px">
+        <p class="muted" style="font-size:13px; margin:-8px 0 18px">No password to remember, we email you a one-tap link. New here? The same link creates your account.</p>
         <button class="pr-btn gold block" type="submit">Send sign-in link &amp; brace yourself</button>
       </form>${codeForm}`
     : `<div class="pr-err" style="background:rgba(255,82,71,0.08); border:1.5px solid rgba(255,82,71,0.28); border-radius:var(--r-sm); padding:14px 16px; min-height:0">Email sign-in is not configured on this server yet. Use the Telegram bot instead.</div>`;
 
-  // Default to the Telegram tab (matches the design); if there's an email status
-  // message to show, open the Email tab so the user sees it.
-  const initialTab = status ? 'email' : 'telegram';
+  // Email first: it is the only path that creates an account (the bots stopped
+  // doing that when onboarding moved here), so opening on Telegram sent people
+  // to a bot that could only point them back at this page.
+  const initialTab = mailEnabled ? 'email' : 'telegram';
 
   const body = `<div class="pr-loginwrap">
   <div class="pr-loginbrand">
     ${logo(true)}
-    <h1>Welcome back.<br>Your meter <span>missed you.</span></h1>
-    <p>It's been quietly judging your recharge habits while you were gone. Sign in and face the numbers.</p>
+    <h1>Recharge on time,<br>or <span>get roasted.</span></h1>
+    <p>One email, no password. Sign in to add a meter and let it judge your recharge habits.</p>
     <div class="pr-peek">
       <span style="display:grid; place-items:center; width:42px; height:42px; border-radius:var(--r-sm); background:rgba(255,82,71,0.14); flex:none;">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF5247" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"></path></svg>
@@ -134,17 +151,17 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
   <div class="pr-formcard">
     <div style="margin-bottom:24px">
       <div style="font-size:22px; font-weight:800; color:var(--text); letter-spacing:-0.02em; margin-bottom:5px;">Sign in to Power·Roast</div>
-      <div style="font-size:14px; color:var(--muted);">Pick your poison. Both lead to the same uncomfortable truth.</div>
+      <div style="font-size:14px; color:var(--muted);">Email gets you in. Telegram is where the roasts land afterwards.</div>
     </div>
 
     <div class="pr-tabs" style="margin-bottom:24px">
-      <button class="pr-tab" type="button" data-tab="telegram">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>
-        Telegram
-      </button>
       <button class="pr-tab" type="button" data-tab="email">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m2 7 10 6 10-6"></path></svg>
         Email
+      </button>
+      <button class="pr-tab" type="button" data-tab="telegram">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>
+        Telegram
       </button>
     </div>
 
@@ -156,10 +173,10 @@ export function loginHtml(nonce: string, mailEnabled: boolean, status: string | 
             <svg width="32" height="32" viewBox="0 0 24 24" fill="#fff"><path d="M21.9 4.3 2.9 11.6c-1 .4-1 1.4-.2 1.7l4.9 1.5 1.9 5.8c.2.5.4.7.8.7.4 0 .6-.2.9-.5l2.4-2.4 4.9 3.6c.9.5 1.5.2 1.7-.8l3.2-15c.3-1.2-.5-1.8-1.3-1.4z"></path></svg>
           </span>
         </div>
-        <div style="font-size:16px; font-weight:700; color:var(--text); margin-bottom:6px;">Open the bot to sign in</div>
-        <p class="muted" style="margin:0 auto; max-width:300px; font-size:14px; line-height:1.55;">No password to forget. Open the bot, send <b style="color:var(--text-2)">/start</b>, and it'll watch your meters and roast you right there.</p>
+        <div style="font-size:16px; font-weight:700; color:var(--text); margin-bottom:6px;">Get your roasts in Telegram</div>
+        <p class="muted" style="margin:0 auto; max-width:300px; font-size:14px; line-height:1.55;">Accounts and meters live here on the web. Sign in with email first, then tap <b style="color:var(--text-2)">Connect Telegram</b> on your dashboard and alerts land in the chat.</p>
       </div>
-      <a href="https://t.me/" target="_blank" rel="noopener" class="pr-btn blue block" style="text-decoration:none">Open Telegram
+      <a href="${botUrl ? escHtml(botUrl) : 'https://telegram.org/apps'}" target="_blank" rel="noopener" class="pr-btn blue block" style="text-decoration:none">Open Telegram
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
       </a>
     </div>
@@ -202,6 +219,7 @@ export function appShellHtml(
   csrf: string,
   rechargeUrl: string = DEFAULT_RECHARGE_URL
 ): string {
+  const ROAST_PREVIEWS = Object.fromEntries(TONES.map(t => [t, alertPreview(t)]));
   const body = `<div class="pr-shell">
   <div id="pr-scrim"></div>
   <aside class="pr-sidebar" id="pr-sidebar">
@@ -214,7 +232,6 @@ export function appShellHtml(
       <button class="pr-navbtn" type="button" data-screen="billing">${IC.billing}Billing &amp; recharge</button>
     </nav>
     <div class="pr-side-foot">
-      <a class="pr-navbtn" href="/admin" style="border:1px solid var(--border);background:rgba(255,255,255,0.03);font-size:13px;gap:11px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 6v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6z"></path></svg>Switch to admin</a>
       <div class="pr-user">
         <span class="pr-avatar" id="navAvatar"></span>
         <div class="who"><div class="n" id="navName">...</div><div class="m" id="navPlan"></div></div>
@@ -326,6 +343,25 @@ function gauge(m, size) {
 }
 
 // reusable add-meter card (markup + wiring)
+function pausedCard() {
+  const ps = (DATA.pausedMeters || []);
+  if (!ps.length) return '';
+  return '<div class="pr-card" style="margin-top:18px"><div class="pr-section-head" style="margin-bottom:4px"><span class="pr-card-title">Paused</span><span class="mono muted" style="font-size:12px">' + ps.length + ' not being checked</span></div>' +
+    '<div class="pr-card-sub" style="margin-bottom:14px">History and thresholds are kept. Resume to start checking again.</div>' +
+    ps.map(p => '<div class="row" style="gap:10px;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--border-soft)">' +
+      '<div><div style="font-size:13.5px;font-weight:600;color:var(--text)">' + esc(p.label) + '</div><div class="mono" style="font-size:11.5px;color:var(--faint)">acct ' + esc(p.accountNo) + ', meter ' + esc(p.meterNo) + '</div></div>' +
+      '<button class="pr-btn ghost sm" type="button" data-resume="' + p.id + '">Resume</button></div>').join('') +
+    '<p class="pr-err" id="resumeErr" style="margin-top:8px"></p></div>';
+}
+function wireResume() {
+  host.querySelectorAll('[data-resume]').forEach(b => {
+    b.onclick = async () => {
+      const err = host.querySelector('#resumeErr'); if (err) err.textContent = '';
+      try { await post('/meters/' + b.dataset.resume + '/resume'); SEL = 0; await load(); }
+      catch (e) { if (err) err.textContent = e.message; }
+    };
+  });
+}
 function addMeterCard() {
   return '<div class="pr-card" style="margin-top:18px"><div class="pr-card-title">Add a meter</div>' +
     '<div class="pr-card-sub" style="margin-bottom:16px">Find these on your provider\\'s bill or prepaid portal.</div>' +
@@ -412,7 +448,12 @@ function dashBanner() {
 }
 function renderDashboard() {
   if (!DATA.meters.length) {
-    host.innerHTML = '<div class="pr-card pr-empty" style="margin-bottom:18px">No meters yet. Add one below to start watching it.</div>' + addMeterCard();
+    const paused = (DATA.pausedMeters || []).length;
+    const msg = paused
+      ? 'Nothing is being checked right now. Resume a paused meter below, or add another one.'
+      : 'No meters yet. Add one below to start watching it.';
+    host.innerHTML = '<div class="pr-card pr-empty" style="margin-bottom:18px">' + msg + '</div>' + pausedCard() + addMeterCard();
+    wireResume();
     wireAddMeter();
     return;
   }
@@ -466,7 +507,10 @@ function renderDashboard() {
 // ---- screen: meter detail ------------------------------------------------
 function renderMeter() {
   if (!DATA.meters.length) {
-    host.innerHTML = '<div class="pr-card pr-empty" style="margin-bottom:18px">No meters yet. Add one below.</div>' + addMeterCard();
+    const paused = (DATA.pausedMeters || []).length;
+    const msg = paused ? 'Every meter on this account is paused.' : 'No meters yet. Add one below.';
+    host.innerHTML = '<div class="pr-card pr-empty" style="margin-bottom:18px">' + msg + '</div>' + pausedCard() + addMeterCard();
+    wireResume();
     wireAddMeter();
     return;
   }
@@ -500,17 +544,19 @@ function renderMeter() {
     '<div class="row" style="gap:10px"><input type="text" id="nick" class="pr-input" placeholder="Nickname (e.g. Flat 3B)" value="' + esc(m.nickname || '') + '" style="flex:1;min-width:160px"><button class="pr-btn ghost" id="nickBtn" type="button">Rename</button><button class="pr-btn ghost" id="pauseBtn" type="button">Pause monitoring</button></div>' +
     '<p class="pr-err" id="mErr" style="margin-top:8px"></p></div>';
 
+  h += pausedCard();
   h += addMeterCard();
 
   host.innerHTML = h;
   host.querySelectorAll('[data-go]').forEach(el => el.onclick = () => go(el.dataset.go));
+  wireResume();
   const err = host.querySelector('#mErr');
   host.querySelector('#nickBtn').onclick = async () => {
     err.textContent = '';
     try { await post('/meters/' + m.id + '/nickname', { name: host.querySelector('#nick').value }); await load(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#pauseBtn').onclick = async () => {
-    if (!confirm('Pause monitoring for this meter?')) return;
+    if (!(await prModal({ title: 'Pause monitoring', body: 'We stop checking ' + m.label + ' and stop alerting on it. Its history and thresholds are kept, and you can resume it from this screen whenever you want.', confirmLabel: 'Pause monitoring' }))) return;
     err.textContent = '';
     try { await post('/meters/' + m.id + '/pause'); SEL = 0; await load(); } catch (e) { err.textContent = e.message; }
   };
@@ -522,10 +568,10 @@ function statCard(k, n, d, cls) {
 }
 
 // ---- screen: alerts & thresholds ----------------------------------------
-const ROASTS = {
-  savage: { accent: '#FF5247', subject: '⚡ Your electricity is about to ghost you', body: 'Bro. {bal} is your line in the sand and you sprinted past it. Recharge now, or start rationing fridge openings like it\\'s a survival show.' },
-  mild: { accent: '#34D399', subject: 'Heads-up: your balance is getting low', body: 'Friendly nudge, your meter is at {bal}. Might be a good time to top up before it runs out.' },
-};
+// Injected from alert-copy.ts (see alertPreview): the real critical-alert
+// wording, with {bal}/{low}/{crit} filled in below. Hardcoding it here again
+// is how the preview stopped matching the email people actually get.
+const ROASTS = ${JSON.stringify(ROAST_PREVIEWS)};
 function hourLabel(h) { const ap = h < 12 ? 'am' : 'pm'; const hr = h % 12 === 0 ? 12 : h % 12; return hr + ap; }
 function hourOpts(sel) { let o = ''; for (let h = 0; h < 24; h++) o += '<option value="' + h + '"' + (h === sel ? ' selected' : '') + '>' + hourLabel(h) + '</option>'; return o; }
 
@@ -666,7 +712,7 @@ function renderAlerts() {
   host.querySelectorAll('[data-disc]').forEach(b => {
     b.onclick = async () => {
       const discErr = host.querySelector('#discErr'); if (discErr) discErr.textContent = '';
-      if (!confirm('Disconnect ' + b.dataset.disc + ' from this account? You can reconnect it later.')) return;
+      if (!(await prModal({ title: 'Disconnect ' + b.dataset.disc, body: 'Remove ' + b.dataset.disc + ' as a sign-in method for this account? You can reconnect it later.', confirmLabel: 'Disconnect' }))) return;
       try { await post('/identities/disconnect', { provider: b.dataset.disc }); await load(); }
       catch (e) { if (discErr) discErr.textContent = e.message; }
     };
@@ -674,8 +720,16 @@ function renderAlerts() {
   // roast preview reflects the selected (savable) tone
   function paintRoast() {
     const r = ROASTS[ROAST];
-    host.querySelector('#roastPrev').innerHTML = '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">' + esc(r.subject) + '</div><div style="font-size:13px;line-height:1.6;color:var(--text-2)">' + esc(r.body.replace('{bal}', fmt(m.balance))) + '</div>';
-    host.querySelector('#roastPrev').style.borderLeftColor = r.accent;
+    const lo = host.querySelector('#loRange'), cr = host.querySelector('#crRange');
+    const fill = t => t
+      .split('{bal}').join(m.balance == null ? 'your balance' : fmt(m.balance))
+      .split('{low}').join(lo ? lo.value : m.lowThreshold)
+      .split('{crit}').join(cr ? cr.value : m.criticalThreshold);
+    const prev = host.querySelector('#roastPrev');
+    prev.innerHTML = '<div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px">' + esc(fill(r.title)) + '</div>' +
+      '<div style="font-size:13px;line-height:1.6;color:var(--text-2)">' + esc(fill(r.body)) + '</div>' +
+      (r.roast ? '<div style="font-size:13px;line-height:1.6;color:var(--muted);margin-top:6px">' + esc(fill(r.roast)) + '</div>' : '');
+    prev.style.borderLeftColor = r.accent;
     host.querySelectorAll('[data-roast]').forEach(b => b.classList.toggle('on', b.dataset.roast === ROAST));
   }
   host.querySelectorAll('[data-roast]').forEach(b => b.onclick = () => { ROAST = b.dataset.roast; paintRoast(); });
@@ -685,8 +739,8 @@ function renderAlerts() {
   qhToggle.onchange = () => host.querySelector('#qhRow').style.display = qhToggle.checked ? 'flex' : 'none';
   // threshold sliders
   const lo = host.querySelector('#loRange'), cr = host.querySelector('#crRange');
-  lo.oninput = () => host.querySelector('#loVal').textContent = '৳' + lo.value;
-  cr.oninput = () => host.querySelector('#crVal').textContent = '৳' + cr.value;
+  lo.oninput = () => { host.querySelector('#loVal').textContent = '৳' + lo.value; paintRoast(); };
+  cr.oninput = () => { host.querySelector('#crVal').textContent = '৳' + cr.value; paintRoast(); };
   // Save settings: tone + quiet hours + thresholds in one go (channels save instantly)
   host.querySelector('#saveBtn').onclick = async () => {
     const msg = host.querySelector('#saveMsg'); msg.textContent = ''; msg.className = 'pr-good'; msg.style.textAlign = 'center';
@@ -735,7 +789,9 @@ function paintBilling(b) {
   // left: recharge deep-link + history
   h += '<div class="pr-stack">';
   h += '<div class="pr-card"><div class="pr-card-title">Recharge a meter</div><div class="pr-card-sub" style="margin-bottom:16px">' +
-    (m ? esc(m.label) + ' is at ' + fmt(m.balance) + '. ' : '') + 'Recharge runs on the official provider portal, your meter and account are below.</div>' +
+    (m
+      ? esc(m.label) + ' is at ' + fmt(m.balance) + '. Recharge runs on the official provider portal, your meter and account are below.'
+      : 'Recharge runs on the official provider portal. Add a meter here and we\\'ll keep its numbers handy.') + '</div>' +
     (m ? '<div class="pr-list" style="margin-bottom:16px"><div class="pr-rowitem"><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Account</div><div style="font-weight:600;color:var(--text)">' + esc(m.accountNo) + '</div></div><div style="flex:1"><div class="mono" style="font-size:11px;color:var(--faint);text-transform:uppercase">Meter</div><div style="font-weight:600;color:var(--text)">' + esc(m.meterNo) + '</div></div></div></div>' : '') +
     '<a class="pr-btn gold block" href="' + RECHARGE_URL + '" target="_blank" rel="noopener" style="padding:15px;text-decoration:none">Open provider recharge →</a></div>';
   // Payment history is meaningless on a free-only launch; only show it once billing is live.
@@ -753,9 +809,9 @@ function paintBilling(b) {
   // right: current plan + manage/upgrade
   h += '<div class="pr-stack">';
   h += '<div class="pr-plan"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><span class="mono" style="font-size:11px;font-weight:700;color:var(--gold);letter-spacing:0.04em">CURRENT PLAN</span>' +
-    (b.subscription ? '<span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>' + esc(b.subscription.status) + (b.subscription.currentPeriodEnd ? ', renews ' + when(b.subscription.currentPeriodEnd).split(',')[0] : '') + '</span>' : '<span class="mono muted" style="font-size:11px">free plan</span>') + '</div>' +
+    (b.live && b.subscription ? '<span class="mono" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--green)"><span style="width:6px;height:6px;border-radius:50%;background:var(--green)"></span>' + esc(b.subscription.status) + (b.subscription.currentPeriodEnd ? ', renews ' + when(b.subscription.currentPeriodEnd).split(',')[0] : '') + '</span>' : '<span class="mono muted" style="font-size:11px">' + (b.live ? 'free plan' : 'launch pricing') + '</span>') + '</div>' +
     '<div style="font-size:26px;font-weight:800;color:var(--text);letter-spacing:-0.02em;margin-bottom:4px">' + esc(cur.name) + '</div>' +
-    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">৳' + cur.priceBdt + '</span><span style="font-size:13px;color:var(--faint)">/ month' + (cur.priceBdt === 0 ? ', free forever' : '') + '</span></div>' +
+    '<div style="display:flex;align-items:baseline;gap:6px;margin-bottom:18px"><span style="font-size:30px;font-weight:800;color:var(--gold);letter-spacing:-0.03em">৳' + (b.live ? cur.priceBdt : 0) + '</span><span style="font-size:13px;color:var(--faint)">' + (b.live ? '/ month' + (cur.priceBdt === 0 ? ', free forever' : '') : ', free during launch') + '</span></div>' +
     '<div style="display:flex;flex-direction:column;gap:9px">' + planFeatures(cur) + '</div></div>';
 
   h += '<div class="pr-card" style="padding:20px"><div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">' + (upgrades.length ? 'Upgrade' : b.live ? 'Manage plan' : 'Your plan') + '</div>';
@@ -781,8 +837,8 @@ function paintBilling(b) {
     } catch (e) { err.textContent = e.message; btn.disabled = false; }
   });
   host.querySelector('#delBtn').onclick = async () => {
-    if (prompt('This erases your account and ALL data. Type DELETE to confirm.') !== 'DELETE') return;
-    try { await post('/account/delete'); location.href = '/app'; } catch (e) { host.querySelector('#billErr').textContent = e.message; }
+    if (!(await prModal({ title: 'Delete your account', body: 'This erases your account, every meter, all balance history, and every alert channel. It cannot be undone.', confirmLabel: 'Delete forever', danger: true, requireText: 'DELETE' }))) return;
+    try { await post('/account/delete'); location.href = '/app?status=deleted'; } catch (e) { host.querySelector('#billErr').textContent = e.message; }
   };
 }
 function featRow(t) { return '<div class="pr-feat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FBB024" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>' + esc(t) + '</div>'; }
@@ -824,9 +880,23 @@ window.addEventListener('hashchange', () => {
 const refreshBtn = document.getElementById('refreshBtn');
 refreshBtn.onclick = async () => {
   const icon = document.getElementById('refreshIcon');
+  const label = document.getElementById('refreshLabel');
   icon.classList.add('pr-spin');
-  document.getElementById('refreshLabel').textContent = 'Checking...';
-  try { await load(); } finally { icon.classList.remove('pr-spin'); document.getElementById('refreshLabel').textContent = 'Force check'; }
+  label.textContent = 'Checking...';
+  // re-read the meters from the provider first - this button used to only
+  // re-render what was already in the database, so between poll cycles it
+  // looked broken
+  try {
+    await post('/refresh');
+    await load();
+  } catch (e) {
+    label.textContent = 'Try again';
+    setTimeout(() => { label.textContent = 'Force check'; }, 2500);
+    return;
+  } finally {
+    icon.classList.remove('pr-spin');
+  }
+  label.textContent = 'Force check';
 };
 
 // initial screen from hash

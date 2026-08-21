@@ -16,7 +16,9 @@ import {
   billingLive,
 } from '../core/plans';
 import { Tone, normalizeTone, TONES } from '../core/tone';
-import { setTone, atMeterCap } from '../core/meter-usecases';
+import { setTone, atMeterCap, activeMeters } from '../core/meter-usecases';
+import { recordReading, readingFromBalance } from '../core/meter-reading';
+import { plural } from '../core/plural';
 import {
   linkIdentity,
   unlinkIdentity,
@@ -43,6 +45,10 @@ import { readCookie } from './admin-session';
 import { appShellHtml, loginHtml, mergeConfirmHtml, MergeAccount } from './app-html';
 import {
   userCookieName,
+  emailHintCookie,
+  clearEmailHintCookie,
+  emailHintCookieName,
+  readEmailHint,
   signMagicLink,
   verifyMagicLink,
   magicCode,
@@ -477,10 +483,11 @@ async function addMeter(
     return { status: 404, body: { error: 'No such account.' } };
   }
   if (await atMeterCap(db, user)) {
+    const limit = effectiveMeterLimit(user);
     return {
       status: 400,
       body: {
-        error: `Your plan watches ${effectiveMeterLimit(user)} meter(s). That's the limit.`,
+        error: `Your plan watches ${plural(limit, 'meter')}. That's the limit.`,
       },
     };
   }
@@ -488,10 +495,9 @@ async function addMeter(
     return { status: 429, body: { error: 'Too many lookups. Give it a few minutes.' } };
   }
 
-  let balance: number;
+  let data;
   try {
-    const data = await getProvider('desco').getBalance({ accountNo, meterNo });
-    balance = data.balance;
+    data = await getProvider('desco').getBalance({ accountNo, meterNo });
   } catch {
     return {
       status: 400,
@@ -509,19 +515,75 @@ async function addMeter(
         eq(schema.meters.meterNo, meterNo)
       )
     );
+  let meter: schema.Meter;
   if (existing) {
-    await db.update(schema.meters).set({ active: true }).where(eq(schema.meters.id, existing.id));
+    [meter] = await db
+      .update(schema.meters)
+      .set({ active: true })
+      .where(eq(schema.meters.id, existing.id))
+      .returning();
   } else {
-    await db.insert(schema.meters).values({
-      userId,
-      provider: 'desco',
-      accountNo,
-      meterNo,
-      lowThreshold: config.defaultThresholds.low,
-      criticalThreshold: config.defaultThresholds.critical,
-    });
+    [meter] = await db
+      .insert(schema.meters)
+      .values({
+        userId,
+        provider: 'desco',
+        accountNo,
+        meterNo,
+        lowThreshold: config.defaultThresholds.low,
+        criticalThreshold: config.defaultThresholds.critical,
+      })
+      .returning();
   }
-  return { status: 200, body: { ok: true, balance } };
+
+  // Keep the balance we just fetched: without this the meter has no reading
+  // until the next poll cycle (6h by default), so the dashboard shows ৳0.00
+  // and "every meter is healthy" for a meter that may already be critical -
+  // and the first alert waits out the same six hours.
+  await recordReading(db, meter, userId, readingFromBalance(data), {
+    reminderIntervalMs: config.reminderIntervalHours * 60 * 60 * 1000,
+    rechargeUrl: config.rechargeUrl,
+  });
+  return { status: 200, body: { ok: true, balance: data.balance } };
+}
+
+/**
+ * Re-read every active meter from the provider. This is what the dashboard's
+ * force-check button calls: it used to only re-render from the database, which
+ * meant a user had no way to see a fresh balance between poll cycles.
+ */
+async function refreshMeters(
+  deps: AppDeps,
+  userId: number
+): Promise<{ status: number; body: unknown }> {
+  const { db, config, meterLimiter } = deps;
+  if (!meterLimiter.allow(userId)) {
+    return { status: 429, body: { error: 'Too many checks. Give it a few minutes.' } };
+  }
+  const meters = await activeMeters(db, userId);
+  if (meters.length === 0) {
+    return { status: 200, body: { ok: true, checked: 0, failed: 0 } };
+  }
+  let failed = 0;
+  for (const meter of meters) {
+    try {
+      const data = await getProvider(meter.provider).getBalance({
+        accountNo: meter.accountNo,
+        meterNo: meter.meterNo,
+      });
+      await recordReading(db, meter, userId, readingFromBalance(data), {
+        reminderIntervalMs: config.reminderIntervalHours * 60 * 60 * 1000,
+        rechargeUrl: config.rechargeUrl,
+      });
+    } catch (error) {
+      failed++;
+      logger.warn(`Force check failed for meter ${meter.id}`, error);
+    }
+  }
+  if (failed === meters.length) {
+    return { status: 502, body: { error: "Couldn't reach DESCO just now. Try again shortly." } };
+  }
+  return { status: 200, body: { ok: true, checked: meters.length - failed, failed } };
 }
 
 async function setThreshold(
@@ -623,7 +685,17 @@ export async function handleAppRequest(
     if (authed) {
       html(res, 200, appShellHtml(nonce, csrfFor(cookie, secret), config.rechargeUrl));
     } else {
-      html(res, 200, loginHtml(nonce, mailEnabled, url.searchParams.get('status')));
+      html(
+        res,
+        200,
+        loginHtml(
+          nonce,
+          mailEnabled,
+          url.searchParams.get('status'),
+          readEmailHint(readCookie(req, emailHintCookieName(secure))),
+          config.botUsername ? `https://t.me/${config.botUsername}` : null
+        )
+      );
     }
     return true;
   }
@@ -657,7 +729,7 @@ export async function handleAppRequest(
       redirect(res, '/app?status=sendfailed');
       return true;
     }
-    redirect(res, '/app?status=sent');
+    redirect(res, '/app?status=sent', emailHintCookie(email, secure));
     return true;
   }
 
@@ -692,7 +764,10 @@ export async function handleAppRequest(
       return true;
     }
     const user = await findOrCreateByEmail(db, email);
-    redirect(res, '/app', userCookie(signUserSession(user.id, secret), secure));
+    redirect(res, '/app', [
+      userCookie(signUserSession(user.id, secret), secure),
+      clearEmailHintCookie(secure),
+    ]);
     return true;
   }
 
@@ -911,6 +986,12 @@ export async function handleAppRequest(
       return true;
     }
 
+    if (path === '/app/api/refresh' && method === 'POST') {
+      const result = await refreshMeters(deps, userId);
+      json(res, result.status, result.body);
+      return true;
+    }
+
     if (path === '/app/api/settings' && method === 'POST') {
       const body = await parseJson(req);
       if (!body) {
@@ -999,7 +1080,7 @@ export async function handleAppRequest(
       return true;
     }
 
-    const meterMatch = /^\/app\/api\/meters\/(\d+)\/(threshold|nickname|pause)$/.exec(path);
+    const meterMatch = /^\/app\/api\/meters\/(\d+)\/(threshold|nickname|pause|resume)$/.exec(path);
     if (meterMatch && method === 'POST') {
       const meter = await ownedMeter(db, userId, parseInt(meterMatch[1]));
       if (!meter) {
@@ -1009,6 +1090,20 @@ export async function handleAppRequest(
       const action = meterMatch[2];
       if (action === 'pause') {
         await db.update(schema.meters).set({ active: false }).where(eq(schema.meters.id, meter.id));
+        json(res, 200, { ok: true });
+        return true;
+      }
+      if (action === 'resume') {
+        const [user] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+        // resuming counts against the cap like adding one would, otherwise
+        // pause/resume is a way around it
+        if (user && (await atMeterCap(db, user))) {
+          json(res, 400, {
+            error: `Your plan watches ${plural(effectiveMeterLimit(user), 'meter')}. Pause another one first.`,
+          });
+          return true;
+        }
+        await db.update(schema.meters).set({ active: true }).where(eq(schema.meters.id, meter.id));
         json(res, 200, { ok: true });
         return true;
       }

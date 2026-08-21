@@ -29,9 +29,13 @@ export function html(
   res.end(body);
 }
 
-export function redirect(res: http.ServerResponse, location: string, setCookie?: string): void {
+export function redirect(
+  res: http.ServerResponse,
+  location: string,
+  setCookie?: string | string[]
+): void {
   const headers: http.OutgoingHttpHeaders = { Location: location };
-  if (setCookie) {
+  if (setCookie && setCookie.length > 0) {
     headers['Set-Cookie'] = setCookie;
   }
   res.writeHead(302, headers);

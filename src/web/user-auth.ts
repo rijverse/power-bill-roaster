@@ -230,3 +230,53 @@ export function userCookie(
 ): string {
   return buildCookie(userCookieSpec(secure), value, secure, maxAgeSec);
 }
+
+const EMAIL_HINT_COOKIE = 'pr_email';
+const EMAIL_HINT_TTL_MS = 30 * 60 * 1000;
+
+export function emailHintCookieName(secure: boolean): string {
+  return secure ? `__Host-${EMAIL_HINT_COOKIE}` : EMAIL_HINT_COOKIE;
+}
+
+function emailHintSpec(secure: boolean): CookieSpec {
+  return {
+    name: emailHintCookieName(secure),
+    path: secure ? '/' : '/app',
+    sameSite: 'Lax',
+    ttlMs: EMAIL_HINT_TTL_MS,
+  };
+}
+
+/**
+ * Remembers the address someone just requested a sign-in link for, so the
+ * "enter the code" form doesn't ask them to type it a second time. Not a
+ * credential and not a session: it only prefills a field, and the six-digit
+ * code is still required. The query string would do the same job but would
+ * leave the address in access logs and referrers.
+ */
+export function emailHintCookie(email: string, secure: boolean): string {
+  return buildCookie(
+    emailHintSpec(secure),
+    Buffer.from(email, 'utf8').toString('base64url'),
+    secure
+  );
+}
+
+/** Clears the hint - sign-in succeeded, or the address is no longer relevant. */
+export function clearEmailHintCookie(secure: boolean): string {
+  return buildCookie(emailHintSpec(secure), '', secure, 0);
+}
+
+export function readEmailHint(raw: string | null): string | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const email = Buffer.from(raw, 'base64url').toString('utf8');
+    return EMAIL_HINT_RE.test(email) ? email : null;
+  } catch {
+    return null;
+  }
+}
+
+const EMAIL_HINT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

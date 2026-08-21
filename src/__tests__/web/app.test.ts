@@ -109,6 +109,23 @@ describe('app - login page', () => {
     expect(await (await fetch(`${base}/app`)).text()).toContain('not configured');
   });
 
+  it('opens on the email tab, the only path that can create an account', async () => {
+    // The bots stopped creating accounts when onboarding moved to the web, so a
+    // Telegram-first sign-in screen sent people to a bot that could only point
+    // them back here.
+    const { base } = await startServer();
+    const html = await (await fetch(`${base}/app`)).text();
+    expect(html).toContain("show('email')");
+    expect(html).not.toContain("show('telegram')");
+  });
+
+  it('does not offer the operator console to customers', async () => {
+    const { base } = await startServer();
+    const html = await (await fetch(`${base}/app`, { headers: { Cookie: COOKIE } })).text();
+    expect(html).not.toContain('Switch to admin');
+    expect(html).not.toContain('href="/admin"');
+  });
+
   it('serves the app shell with a valid session cookie', async () => {
     const { base } = await startServer();
     const res = await fetch(`${base}/app`, { headers: { Cookie: COOKIE } });
@@ -125,6 +142,46 @@ describe('app - magic-link sign in', () => {
     expect(res.headers.get('location')).toBe('/app?status=sent');
     expect(mailer!.send).toHaveBeenCalledTimes(1);
     expect((mailer!.send as jest.Mock).mock.calls[0][0]).toBe('person@example.com');
+  });
+
+  it('remembers the address so the code form does not ask for it twice', async () => {
+    const { base } = await startServer();
+    const res = await form('/app/login', base, { email: 'person@example.com' });
+    const cookie = res.headers.get('set-cookie') ?? '';
+    expect(cookie).toContain('pr_email=');
+    expect(cookie).toContain('HttpOnly');
+    // the address must not ride in the URL, which ends up in logs and referrers
+    expect(res.headers.get('location')).toBe('/app?status=sent');
+  });
+
+  it('drops the hint once the code gets them in', async () => {
+    const { base } = await startServer();
+    const res = await form('/app/login/code', base, {
+      email: 'me@example.com',
+      code: magicCode('me@example.com', SECRET),
+    });
+    expect(res.status).toBe(302);
+    const cookies = res.headers.getSetCookie();
+    expect(cookies.some(c => c.startsWith('pr_user=') && !c.includes('Max-Age=0'))).toBe(true);
+    expect(cookies.some(c => c.startsWith('pr_email=') && c.includes('Max-Age=0'))).toBe(true);
+  });
+
+  it('prefills both sign-in forms from that cookie', async () => {
+    const { base } = await startServer();
+    const hint = Buffer.from('person@example.com', 'utf8').toString('base64url');
+    const html = await (
+      await fetch(`${base}/app?status=sent`, { headers: { Cookie: `pr_email=${hint}` } })
+    ).text();
+    expect(html).toContain('value="person@example.com"');
+  });
+
+  it('ignores a hint cookie that is not an address', async () => {
+    const { base } = await startServer();
+    const junk = Buffer.from('<script>x</script>', 'utf8').toString('base64url');
+    const html = await (
+      await fetch(`${base}/app?status=sent`, { headers: { Cookie: `pr_email=${junk}` } })
+    ).text();
+    expect(html).not.toContain('<script>x</script>');
   });
 
   it('rejects a bad address without emailing', async () => {

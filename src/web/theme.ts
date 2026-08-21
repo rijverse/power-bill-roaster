@@ -360,10 +360,23 @@ export function logo(big = false): string {
 /** Fixed ambient layer. Drop once near the top of <body>. */
 export const AMBIENT = `<div class="pr-ambient"></div>`;
 
+// The bolt from the logo, inline so it costs no request and needs no CSP host.
+// Without it every page load 404s on /favicon.ico.
+const FAVICON =
+  '<link rel="icon" href="data:image/svg+xml,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+      '<rect width="32" height="32" rx="7" fill="#FBB024"/>' +
+      '<path d="M18.5 5 9 18h5.5L13 27l10-13.5h-6z" fill="#1a1408"/>' +
+      '</svg>'
+  ) +
+  '">';
+
 export function pageHead(title: string): string {
   return `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
+${FAVICON}
 ${FONT_LINKS}
 <title>${title}</title>
 <style>${BASE_STYLE}</style>`;
@@ -427,4 +440,36 @@ window.prChart = function (canvas, readings, opts) {
 export const CLIENT_HELPERS = `
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = n => n === null || n === undefined ? 'n/a' : '\\u09F3' + Number(n).toFixed(2);
-const when = s => s ? new Date(s).toLocaleString() : 'n/a';`;
+const when = s => s ? new Date(s).toLocaleString() : 'n/a';
+// Styled stand-in for confirm()/prompt(), shared by both consoles: resolves
+// true on confirm. With requireText set, the confirm button stays disabled
+// until it's typed exactly. Native prompt() is suppressed outright by some
+// mobile browsers, which is no way to gate an irreversible action.
+function prModal(opts) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(10,8,4,0.72);display:grid;place-items:center;padding:20px';
+    ov.innerHTML = '<div class="pr-card" style="max-width:430px;width:100%" role="dialog" aria-modal="true">' +
+      '<div style="font-size:15px;font-weight:800;color:var(--text);margin-bottom:8px">' + esc(opts.title) + '</div>' +
+      '<p class="muted" style="font-size:13px;line-height:1.55;margin:0 0 14px">' + esc(opts.body) + '</p>' +
+      (opts.requireText ? '<input class="pr-input mono" id="prModalInput" placeholder="Type ' + esc(opts.requireText) + ' to confirm" autocomplete="off" autocapitalize="off" style="margin-bottom:12px">' : '') +
+      '<div class="row" style="justify-content:flex-end;gap:8px">' +
+        '<button class="pr-btn ghost" type="button" id="prModalCancel">Cancel</button>' +
+        '<button class="pr-btn ' + (opts.danger ? 'danger' : 'gold') + '" type="button" id="prModalOk"' + (opts.requireText ? ' disabled' : '') + '>' + esc(opts.confirmLabel || 'Confirm') + '</button>' +
+      '</div></div>';
+    document.body.appendChild(ov);
+    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+    function done(v) { document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); }
+    document.addEventListener('keydown', onKey, true);
+    const ok = ov.querySelector('#prModalOk');
+    const input = ov.querySelector('#prModalInput');
+    ov.querySelector('#prModalCancel').onclick = () => done(false);
+    ov.onclick = e => { if (e.target === ov) done(false); };
+    ok.onclick = () => done(true);
+    if (input) {
+      input.focus();
+      input.oninput = () => { ok.disabled = input.value.trim() !== opts.requireText; };
+      input.onkeydown = e => { if (e.key === 'Enter' && !ok.disabled) done(true); };
+    } else { ok.focus(); }
+  });
+}`;

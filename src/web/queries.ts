@@ -10,12 +10,21 @@ const HISTORY_DAYS = 30;
  * prediction, and the 10 most recent alerts. Pure read - no auth concerns here.
  */
 export async function dashboardData(db: Db, userId: number) {
-  const meters = await db
-    .select()
-    .from(schema.meters)
-    .where(and(eq(schema.meters.userId, userId), eq(schema.meters.active, true)));
+  const all = await db.select().from(schema.meters).where(eq(schema.meters.userId, userId));
+  const meters = all.filter(m => m.active);
+  // Paused meters keep their history and thresholds, so they have to stay
+  // visible: without them a pause (the user's own, or an operator's) is
+  // indistinguishable from an empty account and there's nothing to resume.
+  const pausedMeters = all
+    .filter(m => !m.active)
+    .map(m => ({
+      id: m.id,
+      label: m.nickname ?? `Meter ${m.meterNo}`,
+      meterNo: m.meterNo,
+      accountNo: m.accountNo,
+    }));
   if (meters.length === 0) {
-    return { meters: [], alerts: [] };
+    return { meters: [], alerts: [], pausedMeters };
   }
   const meterIds = meters.map(m => m.id);
   const since = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000);
@@ -71,5 +80,6 @@ export async function dashboardData(db: Db, userId: number) {
       action: a.action,
       sentAt: a.sentAt.toISOString(),
     })),
+    pausedMeters,
   };
 }

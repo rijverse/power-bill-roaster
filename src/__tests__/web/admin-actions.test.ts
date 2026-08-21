@@ -6,6 +6,10 @@ import { Db, schema } from '../../db';
 import { ServerConfig } from '../../config';
 import { signAdminSession, csrfFor } from '../../web/admin-session';
 
+// eraseUser walks every table that references the user; the fake db here can't
+// stand in for that, and these tests are about the action plumbing around it.
+jest.mock('../../core/erase-user', () => ({ eraseUser: jest.fn(async () => undefined) }));
+
 // Mock the provider layer, not global fetch - the test's own HTTP client uses fetch too.
 jest.mock('../../providers', () => {
   const actual = jest.requireActual('../../providers');
@@ -66,9 +70,22 @@ async function startServer(state: State) {
         },
       }),
     }),
+    // insert(...).values(...) is awaited directly in some paths and chained with
+    // .onConflictDoUpdate / .returning in others (recordReading does both), so the
+    // fake has to be thenable and chainable.
     insert: (t: unknown) => ({
-      values: async (v: unknown) => void inserts.push({ table: t, values: v }),
+      values: (v: unknown) => {
+        inserts.push({ table: t, values: v });
+        const b = {
+          onConflictDoUpdate: () => Promise.resolve(undefined),
+          returning: () => Promise.resolve([v]),
+          then: (res: (x: unknown) => unknown, rej?: (e: unknown) => unknown) =>
+            Promise.resolve(undefined).then(res, rej),
+        };
+        return b;
+      },
     }),
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
     $count: async () => meters.filter(m => m.active).length,
   } as unknown as Db;
   const subscriptions = {
@@ -257,5 +274,56 @@ describe('admin meter-cap override', () => {
       expect((await post(base, '/admin/api/users/7/meterlimit', { limit })).status).toBe(400);
     }
     expect(updates).toHaveLength(0);
+  });
+});
+
+describe('audit reasons', () => {
+  // The operator's reason is the only thing that can explain an action later:
+  // the target is an id, and after an erase that id resolves to nobody. It used
+  // to be read on grant only, so pause and erase logged nothing but "n/a".
+  it('records the reason given for a pause', async () => {
+    const { base, inserts } = await startServer({
+      user: { id: 7, plan: 'free' },
+      meters: [meter(1, true)],
+    });
+    await post(base, '/admin/api/users/7/pause', { reason: 'chargeback dispute' });
+    const audit = inserts.find(i => i.table === schema.adminAudit)!.values as {
+      action: string;
+      detail: string | null;
+    };
+    expect(audit.action).toBe('pause');
+    expect(audit.detail).toBe('reason=chargeback dispute');
+  });
+
+  it('records the reason given for an erase', async () => {
+    const { base, inserts } = await startServer({ user: { id: 7, plan: 'free' } });
+    await post(base, '/admin/api/users/7/erase', { reason: 'support request #12' });
+    const audit = inserts.find(i => i.table === schema.adminAudit)!.values as {
+      action: string;
+      detail: string | null;
+    };
+    expect(audit.action).toBe('erase');
+    expect(audit.detail).toBe('reason=support request #12');
+  });
+
+  it('keeps the customer address out of the row that outlives the account', async () => {
+    const { base, inserts } = await startServer({
+      user: { id: 7, plan: 'free', email: 'someone@example.com' },
+    });
+    await post(base, '/admin/api/users/7/erase', { reason: 'gdpr' });
+    const audit = inserts.find(i => i.table === schema.adminAudit)!.values;
+    expect(JSON.stringify(audit)).not.toContain('someone@example.com');
+  });
+
+  it('logs nothing extra when no reason is given', async () => {
+    const { base, inserts } = await startServer({
+      user: { id: 7, plan: 'free' },
+      meters: [meter(1, true)],
+    });
+    await post(base, '/admin/api/users/7/pause');
+    const audit = inserts.find(i => i.table === schema.adminAudit)!.values as {
+      detail: string | null;
+    };
+    expect(audit.detail).toBeNull();
   });
 });

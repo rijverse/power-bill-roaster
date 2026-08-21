@@ -123,36 +123,7 @@ async function meterAction(id, meterId, verb) {
   return postAdmin('/users/' + id + '/meters/' + meterId + '/' + verb);
 }
 function clearCharts() { CHARTS.forEach(c => { try { c.destroy(); } catch (e) {} }); CHARTS = []; }
-// Styled stand-in for confirm()/prompt(): resolves true on confirm. With
-// requireText set, the confirm button stays disabled until it's typed exactly.
-function prModal(opts) {
-  return new Promise(resolve => {
-    const ov = document.createElement('div');
-    ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(10,8,4,0.72);display:grid;place-items:center;padding:20px';
-    ov.innerHTML = '<div class="pr-card" style="max-width:430px;width:100%" role="dialog" aria-modal="true">' +
-      '<div style="font-size:15px;font-weight:800;color:var(--text);margin-bottom:8px">' + esc(opts.title) + '</div>' +
-      '<p class="muted" style="font-size:13px;line-height:1.55;margin:0 0 14px">' + esc(opts.body) + '</p>' +
-      (opts.requireText ? '<input class="pr-input mono" id="prModalInput" placeholder="Type ' + esc(opts.requireText) + ' to confirm" autocomplete="off" style="margin-bottom:12px">' : '') +
-      '<div class="row" style="justify-content:flex-end;gap:8px">' +
-        '<button class="pr-btn ghost" type="button" id="prModalCancel">Cancel</button>' +
-        '<button class="pr-btn ' + (opts.danger ? 'danger' : 'gold') + '" type="button" id="prModalOk"' + (opts.requireText ? ' disabled' : '') + '>' + esc(opts.confirmLabel || 'Confirm') + '</button>' +
-      '</div></div>';
-    document.body.appendChild(ov);
-    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
-    function done(v) { document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); }
-    document.addEventListener('keydown', onKey, true);
-    const ok = ov.querySelector('#prModalOk');
-    const input = ov.querySelector('#prModalInput');
-    ov.querySelector('#prModalCancel').onclick = () => done(false);
-    ov.onclick = e => { if (e.target === ov) done(false); };
-    ok.onclick = () => done(true);
-    if (input) {
-      input.focus();
-      input.oninput = () => { ok.disabled = input.value.trim() !== opts.requireText; };
-      input.onkeydown = e => { if (e.key === 'Enter' && !ok.disabled) done(true); };
-    } else { ok.focus(); }
-  });
-}
+function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
 function planPill(plan) { return '<span class="pr-pill ' + (plan === 'free' ? '' : 'low') + '">' + esc(plan) + '</span>'; }
 function copyChip(label, value) { return '<button class="pr-btn ghost sm copyBtn" type="button" data-copy="' + esc(value) + '">' + label + '</button>'; }
 function balanceClass(m) { return m.balance === null ? 'muted' : m.balance < m.criticalThreshold ? 'critical' : m.balance < m.lowThreshold ? 'low' : 'ok'; }
@@ -184,6 +155,14 @@ function healthRow(label, meta, val, color) {
 }
 function mrrSvg(series) {
   if (!series.length) return '<div class="pr-empty" style="padding:48px 0">No payments recorded yet.</div>';
+  // One month is not a trend: drawing it as a line gave a full-width mountain
+  // out of a single point, with the same month on both ends of the axis.
+  if (series.length === 1) {
+    return '<div class="pr-empty" style="padding:36px 0;display:flex;flex-direction:column;align-items:center;gap:6px">' +
+      '<div style="font-size:26px;font-weight:800;color:var(--green);letter-spacing:-0.02em">' + fmt(series[0].total) + '</div>' +
+      '<div class="mono" style="font-size:11px;color:var(--faint)">' + esc(series[0].month) + ', first month on record</div>' +
+      '<div class="mono" style="font-size:11px;color:var(--faint)">a trend line needs a second month</div></div>';
+  }
   const W = 600, H = 200, n = series.length;
   const max = Math.max.apply(null, series.map(s => s.total).concat([1]));
   const x = i => (n === 1 ? W / 2 : (i / (n - 1)) * W);
@@ -392,7 +371,7 @@ async function openDetail(id) {
         '<button class="pr-btn ghost" type="button" id="pauseBtn">Pause monitoring</button>' +
         '<button class="pr-btn danger" type="button" id="eraseBtn">Erase customer</button>' +
       '</div>' +
-      '<input id="grantReason" class="pr-input" type="text" placeholder="Reason for grant (optional, saved to the audit log)" style="margin-top:8px">' +
+      '<input id="grantReason" class="pr-input" type="text" placeholder="Reason (optional, saved to the audit log for any action below)" style="margin-top:8px">' +
       // Meter cap override: blank means follow the plan. Lowering it pauses the
       // excess right away, so the number always matches what is being watched.
       '<div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">' +
@@ -426,15 +405,15 @@ async function openDetail(id) {
       try { await meterAction(u.id, mid, 'pause'); await openDetail(u.id); await loadList(); } catch (e) { msg.textContent = e.message; }
     };
   }
-  if (d.pausedMeters.length) {
+  if (d.active.pausedMeters.length) {
     const c = document.createElement('div'); c.className = 'pr-card'; c.style.marginTop = '18px';
     c.innerHTML = '<div class="pr-section-head" style="margin-bottom:6px"><span class="mono" style="font-weight:700;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.06em">Paused meters</span><button class="pr-btn ghost sm" type="button" id="resumeAll">Resume all</button></div>' +
-      d.pausedMeters.map(m => '<div class="row" style="justify-content:space-between;gap:10px;padding:4px 0"><span class="muted" style="font-size:13px">' + esc(m.nickname ?? m.meterNo) + ', acct ' + esc(m.accountNo) + '</span><button class="pr-btn ghost sm pResume" type="button" data-mid="' + m.id + '">Resume</button></div>').join('') +
+      d.active.pausedMeters.map(m => '<div class="row" style="justify-content:space-between;gap:10px;padding:4px 0"><span class="muted" style="font-size:13px">' + esc(m.label) + ', acct ' + esc(m.accountNo) + '</span><button class="pr-btn ghost sm pResume" type="button" data-mid="' + m.id + '">Resume</button></div>').join('') +
       '<p class="pr-err pMsg" style="margin-top:6px"></p>';
     det.appendChild(c);
     const pMsg = c.querySelector('.pMsg');
     c.querySelector('#resumeAll').onclick = async () => {
-      try { const r = await action(u.id, 'resume'); if (r.stillPaused) pMsg.textContent = r.stillPaused + ' meter(s) stayed paused (plan cap full).'; await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
+      try { const r = await action(u.id, 'resume', { reason: reasonNow() }); if (r.stillPaused) pMsg.textContent = plural(r.stillPaused, 'meter') + ' stayed paused (plan cap full).'; await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
     };
     c.querySelectorAll('.pResume').forEach(b => b.onclick = async () => {
       try { await meterAction(u.id, b.dataset.mid, 'resume'); await openDetail(u.id); await loadList(); } catch (e) { pMsg.textContent = e.message; }
@@ -456,6 +435,7 @@ async function openDetail(id) {
   }
 
   const err = host.querySelector('#detailErr');
+  const reasonNow = () => { const el = host.querySelector('#grantReason'); return el ? el.value : ''; };
   host.querySelector('#closeDetail').onclick = () => { DETAIL = null; det.innerHTML = ''; history.replaceState(null, '', '#users'); };
   det.querySelectorAll('[data-days]').forEach(b => b.onclick = () => { host.querySelector('#grantDays').value = b.dataset.days; });
   host.querySelector('#grantBtn').onclick = async () => {
@@ -480,18 +460,25 @@ async function openDetail(id) {
   if (revokeBtn) revokeBtn.onclick = async () => {
     if (!(await prModal({ title: 'Revoke plan', body: 'Cancel this customer\\'s plan and drop them to free? Meters beyond the free cap will be paused.', confirmLabel: 'Revoke plan', danger: true }))) return;
     err.textContent = '';
-    try { await action(u.id, 'revoke'); await loadOverview(); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
+    try { await action(u.id, 'revoke', { reason: reasonNow() }); await loadOverview(); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#pauseBtn').onclick = async () => {
     if (!(await prModal({ title: 'Pause monitoring', body: 'Pause monitoring for every meter this customer has?', confirmLabel: 'Pause all meters' }))) return;
     err.textContent = '';
-    try { await action(u.id, 'pause'); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
+    try { await action(u.id, 'pause', { reason: reasonNow() }); await openDetail(u.id); await loadList(); } catch (e) { err.textContent = e.message; }
   };
   host.querySelector('#eraseBtn').onclick = async () => {
     const im = d.impact || { meters: 0, readings: 0, payments: 0 };
-    if (!(await prModal({ title: 'Erase customer #' + u.id, body: 'This permanently erases ' + im.meters + ' meter(s), ' + im.readings + ' reading(s), and ' + im.payments + ' payment record(s). No undo.', confirmLabel: 'Erase forever', danger: true, requireText: 'ERASE' }))) return;
+    // Typing the customer's own identifier, not a generic word: "ERASE" is the
+    // same in every tab, so it can't catch erasing the wrong person.
+    const who = u.email || ('#' + u.id);
+    if (!(await prModal({
+      title: 'Erase ' + who,
+      body: 'This permanently erases ' + plural(im.meters, 'meter') + ', ' + plural(im.readings, 'reading') + ', and ' + plural(im.payments, 'payment record') + '. No undo. The reason box above is saved to the audit log - after this, the id is all that is left to identify them by.',
+      confirmLabel: 'Erase forever', danger: true, requireText: who,
+    }))) return;
     err.textContent = '';
-    try { await action(u.id, 'erase'); DETAIL = null; det.innerHTML = ''; history.replaceState(null, '', '#users'); await loadOverview(); await loadList(); renderChrome(); } catch (e) { err.textContent = e.message; }
+    try { await action(u.id, 'erase', { reason: reasonNow() }); DETAIL = null; det.innerHTML = ''; history.replaceState(null, '', '#users'); await loadOverview(); await loadList(); renderChrome(); } catch (e) { err.textContent = e.message; }
   };
   // copy buttons (header + meter cards), wired after everything is in the DOM
   det.querySelectorAll('.copyBtn').forEach(b => b.onclick = () => {

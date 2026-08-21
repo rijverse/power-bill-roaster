@@ -24,6 +24,8 @@ import { RateLimiter } from '../core/rate-limiter';
 import { eraseUser } from '../core/erase-user';
 import { enforceMeterCap } from '../core/meter-cap';
 import { atMeterCap } from '../core/meter-usecases';
+import { normalizeTone } from '../core/tone';
+import { recordReading, readingFromBalance } from '../core/meter-reading';
 import { contactTargets } from '../core/identities';
 import {
   isPurchasablePlan,
@@ -497,7 +499,9 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
       plan: user.plan,
       // null = following the plan default; a number is the operator override
       meterLimit: user.meterLimit,
-      tonePref: user.tonePref,
+      // normalized, not the raw column: legacy rows store 'roast' and the
+      // customer's own screen calls that Savage
+      tonePref: normalizeTone(user.tonePref),
       createdAt: user.createdAt.toISOString(),
     },
     limits: {
@@ -506,10 +510,9 @@ async function userDetail(db: Db, subscriptions: SubscriptionService, userId: nu
       smsPerMonth: smsPerMonthFor(user.plan),
     },
     impact: { meters: allMeters.length, readings: readingCount, payments: paymentCount },
+    // active.pausedMeters comes from the same dashboardData the customer app
+    // uses, so the two consoles can't disagree about what is paused
     active: await dashboardData(db, userId),
-    pausedMeters: allMeters
-      .filter(m => !m.active)
-      .map(m => ({ id: m.id, meterNo: m.meterNo, accountNo: m.accountNo, nickname: m.nickname })),
     subscription: subscription
       ? {
           plan: subscription.plan,
@@ -568,6 +571,22 @@ async function grant(
   return { status: 200, body: { ok: true } };
 }
 
+/** The operator's free-text reason, for the audit `detail` of any action. Kept
+ *  short and never the raw JSON body. The reason is the only thing that can
+ *  explain an action after the fact: the target is recorded as an id, and after
+ *  an erase that id resolves to nobody (deliberately - the audit row outlives
+ *  the account, so it must not carry the customer's address). */
+function auditReason(bodyText: string): string | null {
+  try {
+    const b = JSON.parse(bodyText || '{}') as Record<string, unknown>;
+    return typeof b.reason === 'string' && b.reason.trim()
+      ? `reason=${b.reason.trim().slice(0, 150)}`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Build the audit `detail` for a grant: plan / days / operator reason, not raw JSON. */
 function grantAuditDetail(bodyText: string): string | null {
   try {
@@ -575,9 +594,8 @@ function grantAuditDetail(bodyText: string): string | null {
     const parts: string[] = [];
     if (typeof b.plan === 'string') parts.push(`plan=${b.plan}`);
     if (typeof b.days === 'number' || typeof b.days === 'string') parts.push(`days=${b.days}`);
-    if (typeof b.reason === 'string' && b.reason.trim()) {
-      parts.push(`reason=${b.reason.trim().slice(0, 150)}`);
-    }
+    const reason = auditReason(bodyText);
+    if (reason) parts.push(reason);
     return parts.join(' ') || null;
   } catch {
     return null;
@@ -748,6 +766,7 @@ async function setMeterLimit(
 /** Poll DESCO for one meter right now, store the reading, and hand back the balance. */
 async function recheckMeter(
   db: Db,
+  config: ServerConfig,
   userId: number,
   meterId: number
 ): Promise<{ status: number; body: unknown }> {
@@ -763,7 +782,13 @@ async function recheckMeter(
       accountNo: meter.accountNo,
       meterNo: meter.meterNo,
     });
-    await db.insert(schema.readings).values({ meterId, balance: data.balance });
+    // same path as the poll cycle: a re-check that stored only the reading
+    // would leave alert_state stale, so a meter that just went critical would
+    // stay silent until the next cycle
+    await recordReading(db, meter, userId, readingFromBalance(data), {
+      reminderIntervalMs: config.reminderIntervalHours * 60 * 60 * 1000,
+      rechargeUrl: config.rechargeUrl,
+    });
     return { status: 200, body: { ok: true, balance: data.balance } };
   } catch (error) {
     // tell "DESCO is down" (retry) apart from "bad numbers" (won't fix itself)
@@ -990,7 +1015,7 @@ export async function handleAdminRequest(
           json(res, 429, { error: 'Too many re-checks for this meter. Give it a few minutes.' });
           return true;
         }
-        result = await recheckMeter(db, userId, meterId);
+        result = await recheckMeter(db, config, userId, meterId);
       } else {
         result = await setMeterActive(db, userId, meterId, meterAction === 'resume');
       }
@@ -1020,7 +1045,7 @@ export async function handleAdminRequest(
       if (action && method === 'POST') {
         // Mutations need the CSRF token echoed back from the page.
         let result: { status: number; body: unknown };
-        let detail: string | null = null;
+        let detail: string | null;
         if (action === 'grant') {
           const bodyText = await readBody(req);
           result = await grant(db, subscriptions, userId, bodyText);
@@ -1032,12 +1057,17 @@ export async function handleAdminRequest(
           const applied = (result.body as { meterLimit?: number | null }).meterLimit;
           detail = applied === null ? 'cleared (plan default)' : `limit ${String(applied)}`;
         } else if (action === 'pause') {
+          detail = auditReason(await readBody(req));
           result = await pause(db, userId);
         } else if (action === 'resume') {
+          detail = auditReason(await readBody(req));
           result = await resumeAllMeters(db, userId);
         } else if (action === 'revoke') {
+          detail = auditReason(await readBody(req));
           result = await revoke(db, subscriptions, userId);
         } else {
+          // read the reason before the account goes away
+          detail = auditReason(await readBody(req));
           result = await erase(db, userId);
         }
         // only record actions that actually took effect

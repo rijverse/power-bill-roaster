@@ -1,5 +1,6 @@
 import { periodEnd } from '../../billing/subscriptions';
 import { SandboxProvider } from '../../billing/sandbox';
+import { NoopProvider } from '../../billing/none';
 import { isPurchasablePlan, priceBdtFor, PURCHASABLE_PLANS } from '../../core/plans';
 
 describe('periodEnd', () => {
@@ -26,6 +27,19 @@ describe('SandboxProvider', () => {
     expect(checkout.externalRef).toBe('sandbox-test-ref');
     expect(checkout.paymentUrl).toBeNull();
     await expect(provider.verifyPayment()).resolves.toBe('paid');
+  });
+});
+
+describe('NoopProvider (billing disabled)', () => {
+  it('refuses to create a checkout', () => {
+    const provider = new NoopProvider();
+    expect(provider.name).toBe('none');
+    expect(provider.autoConfirms).toBe(false);
+    expect(() => provider.createCheckout()).toThrow(/disabled/i);
+  });
+
+  it('refuses to verify a payment', () => {
+    expect(() => new NoopProvider().verifyPayment()).toThrow(/disabled/i);
   });
 });
 

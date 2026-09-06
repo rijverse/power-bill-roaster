@@ -1,13 +1,24 @@
 # Isolated end-to-end test: app + throwaway Postgres + Mockoon faking both
 # the Telegram Bot API and the DESCO API. Nothing external is contacted.
 #
-#   docker compose -f docker-compose.test.yml up --build
+# Run it through the script, not by hand:
 #
-# Expected flow (watch the app logs): mock user runs /start -> /register ->
-# account -> meter (validated against the mock DESCO), then the scheduler
-# polls, sees balance 42.50 < critical 100, and fires a critical alert.
+#   bash scripts/e2e.sh
 #
-#   docker compose -f docker-compose.test.yml down -v   # clean up
+# `up --build` on its own only boots the stack. It won't do anything visible,
+# because the account and meter are seeded straight into Postgres by the script
+# - onboarding moved to the web dashboard, which needs a mailer this stack
+# deliberately doesn't have. With an empty database there is nothing to poll,
+# so no alert ever fires and the logs just sit there.
+#
+# What the script asserts: the prod image boots read-only with all capabilities
+# dropped, /health is 200, /admin is 404 while ADMIN_PASSWORD is unset, and a
+# seeded meter goes poll -> alert -> delivered (mock DESCO answers 42.50, under
+# the critical threshold of 100).
+#
+# The script cleans up after itself. If you did run `up` by hand:
+#
+#   docker compose -f docker-compose.test.yml down -v
 services:
   postgres-test:
     image: postgres:16-alpine
@@ -25,7 +36,7 @@ services:
       retries: 15
 
   mockoon:
-    image: mockoon/cli:latest
+    image: mockoon/cli:9.7.0
     command: ['--data', '/data/mock.json', '--port', '8080']
     volumes:
       - ./mock/telegram-desco-mock.json:/data/mock.json:ro
@@ -38,8 +49,20 @@ services:
       mockoon:
         condition: service_started
     restart: on-failure
+    # Mirror prod hardening so the e2e proves the app boots under read-only
+    # filesystem + all caps dropped. If a future change writes to disk, this
+    # catches it before prod.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       DATABASE_URL: postgres://powerroast:powerroast@postgres-test:5432/powerroast
+      # sidecar Postgres on the compose network speaks no TLS; allow the plaintext link
+      ALLOW_INSECURE_DB: '1'
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_API_ROOT: http://mockoon:8080
       DESCO_API_BASE_URL: http://mockoon:8080/api/tkdes/customer

@@ -1,9 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  # callable so deploy.yml can gate the production rollout on the same checks
+  # (see .github/workflows/deploy.yml). PRs still trigger it directly above.
+  workflow_call:
 
 jobs:
   check:
@@ -11,12 +12,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: latest
+          bun-version-file: .bun-version
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -27,18 +28,68 @@ jobs:
       - name: Check formatting
         run: bun run format:check
 
-      - name: Test
-        run: bun run test
+      - name: Test with coverage
+        run: bun run test -- --coverage
 
       - name: Build
         run: bun run build
+
+  migrations:
+    # Prove the migrations apply cleanly to a fresh database before deploy.yml
+    # ever runs them against prod. Catches a broken baseline (e.g. a squashed
+    # 0000_init) at PR time instead of in the production migrate step.
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: powerroast
+          POSTGRES_PASSWORD: powerroast
+          POSTGRES_DB: powerroast
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U powerroast"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check migrations are additive (no DROP/ALTER on existing objects)
+        run: bunx tsx scripts/check-additive-migrations.ts
+
+      - name: Apply migrations to a fresh database
+        run: bun run db:migrate
+        env:
+          DATABASE_URL: postgres://powerroast:powerroast@localhost:5432/powerroast
+
+      # The unit suites run against in-memory fakes, which cannot enforce a
+      # foreign key or a unique index - a missing FK cleanup once passed every one
+      # of them and still failed in production. These run against the real
+      # Postgres above, in their own throwaway database per run.
+      - name: Integration tests (real Postgres constraints)
+        run: bun run test:integration
+        env:
+          DATABASE_URL: postgres://powerroast:powerroast@localhost:5432/powerroast
 
   e2e:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Run mocked end-to-end stack
         run: bash scripts/e2e.sh

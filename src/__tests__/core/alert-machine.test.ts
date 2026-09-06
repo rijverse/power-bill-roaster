@@ -62,6 +62,41 @@ describe('evaluate', () => {
     expect(decision.action).toBe('reminder');
   });
 
+  it('suppresses the reminder while snoozed', () => {
+    const staleAlert = new Date(now.getTime() - 25 * 60 * 60 * 1000); // reminder is due
+    const snoozedUntil = new Date(now.getTime() + 60 * 60 * 1000); // snooze ends in 1h
+    const prev = state({
+      level: 'low',
+      lastAlertAt: staleAlert,
+      lastBalance: 140,
+      remindersSnoozedUntil: snoozedUntil,
+    });
+    expect(evaluate(prev, 130, thresholds, now, REMINDER_MS).action).toBe('none');
+  });
+
+  it('reminds again once the snooze has expired', () => {
+    const staleAlert = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+    const expiredSnooze = new Date(now.getTime() - 60 * 60 * 1000); // ended 1h ago
+    const prev = state({
+      level: 'low',
+      lastAlertAt: staleAlert,
+      lastBalance: 140,
+      remindersSnoozedUntil: expiredSnooze,
+    });
+    expect(evaluate(prev, 130, thresholds, now, REMINDER_MS).action).toBe('reminder');
+  });
+
+  it('does not let a snooze block a critical escalation', () => {
+    const snoozedUntil = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const prev = state({
+      level: 'low',
+      lastAlertAt: now,
+      lastBalance: 120,
+      remindersSnoozedUntil: snoozedUntil,
+    });
+    expect(evaluate(prev, 80, thresholds, now, REMINDER_MS).action).toBe('critical-alert');
+  });
+
   it('does not remind when the level improved from critical to low', () => {
     const staleAlert = new Date(now.getTime() - 25 * 60 * 60 * 1000);
     const prev = state({ level: 'critical', lastAlertAt: staleAlert, lastBalance: 50 });

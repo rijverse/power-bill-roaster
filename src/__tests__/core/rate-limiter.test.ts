@@ -41,6 +41,16 @@ describe('RateLimiter', () => {
     limiter.allow('a', t0 + 1); // blocked, must not count
     expect(limiter.allow('a', t0 + WINDOW)).toBe(true);
   });
+
+  it('evicts fully-aged-out keys so the map cannot grow without bound', () => {
+    const limiter = new RateLimiter(3, WINDOW);
+    limiter.allow('a', t0);
+    limiter.allow('b', t0);
+    expect(limiter.size()).toBe(2);
+    // a call past the window sweeps stale keys before recording the new one
+    limiter.allow('c', t0 + WINDOW + 1);
+    expect(limiter.size()).toBe(1);
+  });
 });
 
 describe('maxMetersFor', () => {

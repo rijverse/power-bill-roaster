@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1781246529205,
-      "tag": "0000_bumpy_sumo",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1781269978038,
-      "tag": "0001_abandoned_next_avengers",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1781284180821,
-      "tag": "0002_complete_khan",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1781432493282,
-      "tag": "0003_spicy_vermin",
+      "when": 1785663568224,
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

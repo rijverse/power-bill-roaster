@@ -8,12 +8,12 @@ services:
       POSTGRES_PASSWORD: powerroast
       POSTGRES_DB: powerroast
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
 
   mockoon:
-    image: mockoon/cli:latest
+    image: mockoon/cli:9.7.0
     command: ['--data', '/data/mock.json', '--port', '8080', '--log-transaction']
     ports:
       - '8080:8080'
@@ -22,7 +22,7 @@ services:
 
   # Catch-all SMTP for local email testing. 1025 = SMTP, 8025 = web inbox.
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.30.5
     ports:
       - '1025:1025'
       - '8025:8025'

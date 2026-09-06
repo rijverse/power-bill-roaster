@@ -1,9 +1,9 @@
-import fetch from 'node-fetch';
 import { SslcommerzProvider, mapSslcommerzStatus } from '../../billing/sslcommerz';
 
-jest.mock('node-fetch');
-
-const mockFetch = fetch as jest.MockedFunction<typeof fetch>;
+const mockFetch = jest.spyOn(globalThis, 'fetch');
+mockFetch.mockImplementation(async () => {
+  throw new Error('fetch should be replaced per test');
+});
 
 const config = {
   storeId: 'store',
@@ -13,7 +13,23 @@ const config = {
 };
 
 function jsonResponse(body: unknown) {
-  return { json: async () => body } as never;
+  return {
+    ok: true,
+    status: 200,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as never;
+}
+
+function errorResponse(status: number, body: string) {
+  return {
+    ok: false,
+    status,
+    json: async () => {
+      throw new Error('not JSON');
+    },
+    text: async () => body,
+  } as never;
 }
 
 describe('mapSslcommerzStatus', () => {
@@ -79,5 +95,19 @@ describe('SslcommerzProvider', () => {
 
   it('autoConfirms is false (async confirmation via IPN/redirect)', () => {
     expect(new SslcommerzProvider(config).autoConfirms).toBe(false);
+  });
+
+  it('throws a meaningful error when createCheckout gets a non-2xx HTML response', async () => {
+    mockFetch.mockResolvedValueOnce(errorResponse(503, '<html>Service Unavailable</html>'));
+    const provider = new SslcommerzProvider(config);
+    await expect(
+      provider.createCheckout({ userId: 1, plan: 'plus', amountBdt: 40, reference: 'r' })
+    ).rejects.toThrow('SSLCommerz session returned 503');
+  });
+
+  it('throws a meaningful error when verifyPayment gets a non-2xx response', async () => {
+    mockFetch.mockResolvedValueOnce(errorResponse(500, '<html>Internal Error</html>'));
+    const provider = new SslcommerzProvider(config);
+    await expect(provider.verifyPayment('r')).rejects.toThrow('SSLCommerz validation returned 500');
   });
 });

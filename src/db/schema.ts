@@ -3,7 +3,6 @@ import {
   serial,
   text,
   integer,
-  bigint,
   boolean,
   doublePrecision,
   timestamp,
@@ -11,14 +10,46 @@ import {
   index,
 } from 'drizzle-orm/pg-core';
 
+// A user is just preferences + plan now; the logins that identify them live in
+// the identities table (one row per connected provider).
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
-  telegramChatId: bigint('telegram_chat_id', { mode: 'number' }).unique(),
-  email: text('email'),
   tonePref: text('tone_pref').notNull().default('roast'),
+  // Quiet hours (local Asia/Dhaka, 0-23). Both null = always-on. During quiet
+  // hours non-critical alerts are held back; critical alerts always go through.
+  quietStart: integer('quiet_start'),
+  quietEnd: integer('quiet_end'),
   plan: text('plan').notNull().default('free'),
+  // Operator override for this account's meter cap, set from the admin panel.
+  // Null = use the plan's default (see effectiveMeterLimit); a number wins over
+  // the plan either way, so a comped account can watch more without a fake plan
+  // and an abusive one can be pinned lower.
+  meterLimit: integer('meter_limit'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// A user's login identities, one row per provider they've connected - the single
+// source of truth for who a user is. provider_uid is the provider's own id: the
+// telegram chat id as text, the Discord snowflake, or lower(email). Two uniques:
+// the identity is globally unique (provider + uid), and a user holds at most one
+// identity per provider.
+export const identities = pgTable(
+  'identities',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    provider: text('provider').notNull(), // telegram | discord | email (+ future oauth)
+    providerUid: text('provider_uid').notNull(),
+    verified: boolean('verified').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [
+    uniqueIndex('identities_provider_uid_idx').on(table.provider, table.providerUid),
+    uniqueIndex('identities_user_provider_idx').on(table.userId, table.provider),
+  ]
+);
 
 export const meters = pgTable(
   'meters',
@@ -69,47 +100,74 @@ export const alertState = pgTable('alert_state', {
   lastAlertAt: timestamp('last_alert_at', { withTimezone: true }),
   lastBalance: doublePrecision('last_balance'),
   rechargeDetectedAt: timestamp('recharge_detected_at', { withTimezone: true }),
+  // Set when the user taps "snooze" on an alert: reminders are held back until
+  // this passes. Only silences the repeat nag, not new escalations or recovery.
+  remindersSnoozedUntil: timestamp('reminders_snoozed_until', { withTimezone: true }),
+  // Consecutive failed balance reads (reset to 0 on the next success). Lets us
+  // tell the user once when their meter has gone unreadable instead of going
+  // silent. failureNotifiedAt is when that heads-up was sent.
+  consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+  failureNotifiedAt: timestamp('failure_notified_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const channels = pgTable('channels', {
-  id: serial('id').primaryKey(),
-  userId: integer('user_id')
-    .notNull()
-    .references(() => users.id),
-  type: text('type').notNull(), // telegram | email | sms
-  address: text('address').notNull(), // chat id, email address, or phone number
-  verified: boolean('verified').notNull().default(false),
-  enabled: boolean('enabled').notNull().default(true),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const channels = pgTable(
+  'channels',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    type: text('type').notNull(), // telegram | email | sms | discord (webhook) | discord-dm
+    address: text('address').notNull(), // chat id, email, phone, webhook URL, or discord user id
+    verified: boolean('verified').notNull().default(false),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [index('channels_user_idx').on(table.userId)]
+);
 
-export const alertsLog = pgTable('alerts_log', {
-  id: serial('id').primaryKey(),
-  meterId: integer('meter_id')
-    .notNull()
-    .references(() => meters.id),
-  channelId: integer('channel_id').references(() => channels.id),
-  level: text('level').notNull(),
-  action: text('action').notNull(),
-  deliveryStatus: text('delivery_status').notNull(),
-  sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const alertsLog = pgTable(
+  'alerts_log',
+  {
+    id: serial('id').primaryKey(),
+    meterId: integer('meter_id')
+      .notNull()
+      .references(() => meters.id),
+    channelId: integer('channel_id').references(() => channels.id),
+    level: text('level').notNull(),
+    action: text('action').notNull(),
+    deliveryStatus: text('delivery_status').notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [
+    index('alerts_log_sent_at_idx').on(table.sentAt),
+    index('alerts_log_status_sent_idx').on(table.deliveryStatus, table.sentAt),
+    index('alerts_log_meter_idx').on(table.meterId),
+  ]
+);
 
-export const subscriptions = pgTable('subscriptions', {
-  id: serial('id').primaryKey(),
-  userId: integer('user_id')
-    .notNull()
-    .references(() => users.id),
-  plan: text('plan').notNull(), // plus | business
-  provider: text('provider').notNull(), // sandbox | bkash | sslcommerz | manual
-  status: text('status').notNull().default('pending'), // pending | active | cancelled | expired
-  externalRef: text('external_ref'), // provider-side payment/agreement id
-  currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
-  currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const subscriptions = pgTable(
+  'subscriptions',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    plan: text('plan').notNull(), // plus | business
+    provider: text('provider').notNull(), // sandbox | bkash | sslcommerz | manual
+    status: text('status').notNull().default('pending'), // pending | active | cancelled | expired
+    externalRef: text('external_ref'), // provider-side payment/agreement id
+    currentPeriodStart: timestamp('current_period_start', { withTimezone: true }),
+    currentPeriodEnd: timestamp('current_period_end', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  table => [
+    index('subscriptions_user_status_idx').on(table.userId, table.status),
+    index('subscriptions_status_period_end_idx').on(table.status, table.currentPeriodEnd),
+  ]
+);
 
 // Immutable money ledger: one row per confirmed payment. Subscriptions track
 // state; this table is the record for reconciliation and disputes. The unique
@@ -134,10 +192,62 @@ export const payments = pgTable(
   table => [uniqueIndex('payments_external_ref_idx').on(table.externalRef)]
 );
 
+// Append-only trail of destructive operator actions (grant / pause / erase).
+// target_user_id is a plain column, not a foreign key, so the audit row outlives
+// the very account an erase deletes.
+export const adminAudit = pgTable('admin_audit', {
+  id: serial('id').primaryKey(),
+  action: text('action').notNull(), // grant | pause | erase
+  targetUserId: integer('target_user_id'),
+  detail: text('detail'),
+  ip: text('ip'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Outbox for alerts: written in the same transaction as alert_state, drained
+// by AlertDispatcherWorker. status flips to 'sent' only after a channel
+// confirms delivery, so a crash mid-dispatch never loses or duplicates an
+// alert. payload is the MeterContext snapshot at decision time.
+export const pendingAlerts = pgTable(
+  'pending_alerts',
+  {
+    id: serial('id').primaryKey(),
+    meterId: integer('meter_id')
+      .notNull()
+      .references(() => meters.id),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id),
+    action: text('action').notNull(),
+    level: text('level').notNull(),
+    // Snapshot of the MeterContext at decision time so the worker doesn't have
+    // to re-fetch the meter / predictions to render the message.
+    payload: text('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttempt: timestamp('next_attempt', { withTimezone: true }).notNull().defaultNow(),
+    status: text('status').notNull().default('pending'), // pending | sent | failed
+    lastError: text('last_error'),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+    // What's already been delivered: a JSON array of channel keys
+    // ('telegram', 'email:<channelId>', 'sms:<channelId>'). A retry re-sends only
+    // the channels that failed and skips whatever's already in here, so a blip on
+    // one channel can't double up an alert that already went out on another.
+    delivered: text('delivered').notNull().default('[]'),
+  },
+  table => [
+    index('pending_alerts_status_next_idx').on(table.status, table.nextAttempt),
+    index('pending_alerts_meter_idx').on(table.meterId),
+  ]
+);
+
 export type User = typeof users.$inferSelect;
+export type Identity = typeof identities.$inferSelect;
 export type Meter = typeof meters.$inferSelect;
 export type Reading = typeof readings.$inferSelect;
 export type AlertStateRow = typeof alertState.$inferSelect;
 export type Channel = typeof channels.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type Payment = typeof payments.$inferSelect;
+export type AdminAudit = typeof adminAudit.$inferSelect;
+export type PendingAlert = typeof pendingAlerts.$inferSelect;

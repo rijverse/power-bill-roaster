@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "payments_external_ref_idx" ON "payments" USING btree ("external_ref");

@@ -1,0 +1,177 @@
+# Known Issues / Accepted Trade-offs
+
+Status as of 2026-07-11. The post-launch cleanup that this file used to track is
+done: all eleven items from the pre-launch review of `feat/free-only-launch` are
+closed. Git history is the record of _how_; what's left here is what a reader
+still needs to know — what is deliberately still open, what was decided against,
+and the invariants the tests now hold in place so they don't rot again.
+
+Two ground rules that bit us before and still apply:
+
+- **Never edit an applied migration.** History was squashed to a single
+  `0000_init` before first deploy; always add a new file
+  (`src/__tests__/db/migrations.test.ts` guards this).
+- **Never re-fork the code the tests below pin.** Each one exists because
+  something already drifted once.
+
+---
+
+## Still open
+
+### Free-tier cap is per-account (email), not provably per-human
+
+The 1-meter free cap is enforced per account, and accounts are created only by
+verified-email signup on the web. The bots no longer create accounts or register
+meters (onboarding moved to the dashboard), which closes the old "one free meter
+per platform" bypass: connecting Telegram, Discord, or WhatsApp to an account
+never adds a meter slot. What it does **not** close:
+
+- **Disposable email addresses.** A determined user can still make several
+  accounts with several real inboxes. Far weaker than the old bypass, and
+  tightenable later (block disposable domains at signup).
+- **No proof of meter ownership.** DESCO's public balance endpoint takes just the
+  account + meter numbers (both printed on the bill) and offers no OTP channel, so
+  we can't verify the requester owns the meter. Deferred until a DESCO-side
+  verification path exists.
+
+WhatsApp ships as a provider-agnostic seam with a **stubbed sender**
+(`src/notifications/whatsapp`): the channel, dispatcher fan-out, connect webhook,
+and config are all live, but outbound sends log instead of calling Meta until the
+real Cloud API sender is wired.
+
+The per-account cap is adjustable: `users.meter_limit` (set from the admin panel)
+overrides the plan default in either direction, and lowering it pauses the excess
+immediately. `effectiveMeterLimit` in `src/core/plans.ts` is the one place that
+resolves it.
+
+### The dashboard SPA is still a template string
+
+`web/app-html.ts` and `web/admin-html.ts` ship their client code as inline
+`<script>` inside a template literal, so it gets no typechecking and no linting.
+`__tests__/web/inline-scripts.test.ts` now compiles every generated block (and
+checks the CSP nonce), which catches the silent-failure mode: a syntax error or a
+missing nonce used to reach the browser and render a dead page with no server-side
+error. What it does **not** cover is behavior. Extracting the client code into
+real modules with a build step is the actual fix, deferred because it is a large
+blind refactor with no browser-level tests to catch regressions.
+
+### The uptime monitor is external and unconfigured
+
+`/health` reports `ok` / `stale` / `db-down`, the Dockerfile has a `HEALTHCHECK`
+against it, and the process now runs its own watchdog that exits when the poll
+loop goes stale (`restart: unless-stopped` acts on **exit**, not on unhealthy, so
+a healthcheck alone would restart nothing). None of that is a substitute for an
+external monitor: if the container is down, nothing inside it can tell you.
+**Point an uptime monitor at `/health`** — see `docs/DEPLOY.md`.
+
+### The web test suites flake under parallel load (~1 run in 16)
+
+A web suite occasionally fails a `fetch` with a transport error (`bad port`,
+`fetch failed`) during a full `bun run test`. It is **not** an assertion failure —
+no test has ever failed on its logic — and it does not reproduce in isolation
+(the same suite passes 12/12 alone, and the same open/fetch/close pattern runs
+400/400 clean outside Jest). It predates this cleanup: the first one showed up
+before the test harness was touched at all.
+
+Mitigated, not cured. `__tests__/helpers/setup-fetch.ts` stops undici pooling a
+keep-alive socket per ephemeral test port, which cut it from roughly 1 run in 4
+to 1 in 16 and fixed the "worker failed to exit gracefully" warning outright. The
+remaining suspect is ephemeral-port churn on Windows (~500 short-lived servers per
+run). The real fix is for the suites to stop standing up a fresh HTTP server per
+test; `__tests__/helpers/http-server.ts` is the place to do it.
+
+## Accepted, on purpose
+
+- **`unhandledRejection` only logs.** One floating promise usually isn't grounds
+  to tear the process down — a transient Telegram 429 shouldn't restart the app.
+  The failure that _does_ matter (a rejection wedging the poll loop) is caught by
+  the watchdog, which acts on the symptom rather than trying to classify the cause.
+- **The SMS budget count is a 6th query per alert.** Channels collapsed to a single
+  `WHERE user_id = ?`, but the monthly budget is an aggregate over `alerts_log` and
+  can't be joined away. It only runs on plans that actually have an SMS budget.
+- **`/delete` is implemented three times.** The confirm flows are genuinely
+  different UX (Telegram's 60s pending map, Discord's `confirm:CONFIRM` option, the
+  web modal) and all three already call the shared `eraseUser`. Only the policy
+  wording is shared. A shared state machine over three different confirmation
+  affordances would be worse than what's there. The web one is `prModal` from
+  `theme.ts` (both consoles share it) - it was a native `prompt()`, which some
+  mobile browsers suppress outright, so the irreversible action had no gate there.
+- **The landing page's roast copy is not wired to `alert-copy.ts`.** It's
+  marketing, and it shouldn't silently rewrite itself when alert tone is tuned
+  (`web/home-html.ts`). The dashboard's tone preview is a different matter and
+  _is_ wired (`alertPreview`): it claims to show the email you will actually get,
+  and it had already drifted from it. The landing page's _prices_, unlike its
+  roast copy, now come from `core/plans.ts` - it was advertising two plans
+  ("Roast Pro ৳99", "Power User ৳249") that exist nowhere in the code.
+- **Dashboard links keep an unnamespaced `userId.expiry` payload.** It's a live
+  wire format; changing it invalidates every link already in the wild
+  (`web/token.ts`).
+- **The user cookie is `SameSite=Lax`, the admin cookie is `Strict`.** Not an
+  oversight: the user cookie has to survive the cross-site magic-link redirect
+  (`web/user-auth.ts`).
+- **No `ON DELETE CASCADE`.** Considered and rejected for the erase/merge cleanup:
+  cascade does nothing for `mergeAccounts` (which re-points FKs rather than deleting
+  the parent), it would need the riskiest migration on the list for zero behavior
+  change today, and it trades a loud FK error for silent data loss in exactly the
+  tables backing the privacy policy's erasure promise. `db/ownership.ts` + the
+  reflection test does the job with no migration at all.
+- **A late-landing send after a timeout isn't cancelled.** `withTimeout` stops
+  _waiting_, it doesn't abort the transport. That's fine: the row is retried, and
+  the delivered-key ledger stops the same channel being sent twice.
+- **`grammy` pulls `node-fetch@2.7.0` (EOL).** grammy's HTTP transport depends on
+  node-fetch 2.x, which only receives critical fixes. No app code imports it
+  directly. Track upstream; a grammy 3.x using native fetch is the eventual fix.
+- **`/delete` retains an internal audit log.** `admin_audit` rows (operator
+  actions: grant/pause/erase with a free-text reason) survive `/delete` by
+  design - `target_user_id` is a plain column, not an FK, so erasure doesn't
+  cascade. The `/privacy` text discloses this; it carries no balance or meter
+  data.
+- **No CodeQL job.** Dropped after it failed the PR on six alerts (1 critical, 5
+  high) that were all false positives, with no true positive to weigh against
+  them: a test helper's `<script>` scanner read as an HTML sanitizer; the sha256
+  in `adminSessionSecret` and in `timingSafeStringEqual` read as password
+  storage (it's key derivation and a constant-time compare, neither is stored);
+  and `fetchWithTimeout` read as SSRF, though the only user-supplied URL that
+  reaches it is host-allowlisted by `isValidDiscordWebhookUrl` and re-checked at
+  the send site. It also can't see through the logger's masker, so every masked
+  log line reads as clear-text PII. Re-add it only with those five suppressed,
+  or it just teaches everyone to ignore a red check.
+- **`__Host-` cookie prefix only under HTTPS.** The prefix requires `Secure`,
+  which can't be set over dev HTTP, so the cookie name is `__Host-pr_admin` in
+  prod and `pr_admin` in dev (`adminCookieName(secure)`). The session is
+  HMAC-signed regardless, so cookie injection from a subdomain can't forge a
+  valid token.
+
+## Invariants the tests now hold
+
+Each of these pins something that had already drifted, or that the next refactor
+would plausibly break. If one starts failing, read it before you "fix" it.
+
+| Test                                         | What it stops                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notifications/alert-copy.test.ts`           | Every channel renders the _same_ alert title. The critical title once read "Stone Age Imminent" on chat and "You're About to Live in the Stone Age" in email.                                                                                                                                           |
+| `notifications/dispatcher-telegram.test.ts`  | Telegram delivers to an **unverified** channel row. Talking to the bot _is_ the verification — routing it through a shared "enabled + verified" helper would mute every Telegram user.                                                                                                                  |
+| `notifications/dispatcher-sms.test.ts`       | The monthly SMS budget is a hard cap. It's the only channel that costs money, and it's the one a shared fan-out helper would silently overspend.                                                                                                                                                        |
+| `notifications/dispatcher-channels.test.ts`  | Exactly **one** channels query per alert (was five).                                                                                                                                                                                                                                                    |
+| `notifications/dispatcher-timeout.test.ts`   | A hung channel send is failed, not waited on.                                                                                                                                                                                                                                                           |
+| `core/alert-dispatcher.test.ts`              | A hung row can't wedge the outbox (`tick()` skips while one is in flight, so an unbounded row used to stop _all_ delivery); user/meter lookups stay O(1) per batch.                                                                                                                                     |
+| `web/signed-token.test.ts`                   | A token minted for one purpose can never verify as another (4×4 namespace matrix).                                                                                                                                                                                                                      |
+| `web/login-bruteforce.test.ts`               | The sign-in code budget survives IP rotation. The code is a function of (email, time bucket), so it can be ground down against an address that never asked for one.                                                                                                                                     |
+| `web/http-utils.test.ts`                     | `X-Forwarded-For` is read from the **last** hop. Caddy appends rather than replaces, so the first entry is caller-written - reading it handed out the limiter key.                                                                                                                                      |
+| `web/admin-csrf.test.ts`                     | Every mutating admin route 403s without a CSRF token — including ones added later.                                                                                                                                                                                                                      |
+| `web/admin-hash.test.ts`                     | The client parser shipped to the browser agrees with the server parser, input for input.                                                                                                                                                                                                                |
+| `db/ownership.test.ts`                       | A new table that FKs `users`/`meters` can't be forgotten by `eraseUser`/`mergeAccounts`. Also pins the `users` column set: reflection can't tell you a new identity column needs handling in `mergedIdentity()`.                                                                                        |
+| `db/migrations.test.ts`                      | An applied migration is never edited.                                                                                                                                                                                                                                                                   |
+| `scripts/check-additive-migrations.test.ts`  | A non-additive migration (DROP/ALTER/RENAME) fails CI before prod.                                                                                                                                                                                                                                      |
+| `web/health.test.ts`                         | `/health` actually goes red when the DB is down or the poll loop stops.                                                                                                                                                                                                                                 |
+| `web/security-headers.test.ts`               | The CSP pins the exact Chart.js bundle, not the whole jsdelivr CDN.                                                                                                                                                                                                                                     |
+| `web/html-escaping.test.ts`                  | A crafted dashboard token can't break out of the script context (`</script>` escaped).                                                                                                                                                                                                                  |
+| `no-console.test.ts`                         | Production source uses the PII-masking logger, never `console.*` directly.                                                                                                                                                                                                                              |
+| `billing/subscriptions.test.ts`              | `expireOverdue` rolls back all three writes if the meter cap throws (no half-applied downgrade).                                                                                                                                                                                                        |
+| `cli.test.ts`                                | The CLI exits 1 only on total channel wipeout, and its threshold classify order is pinned.                                                                                                                                                                                                              |
+| `core/meter-reading.test.ts`                 | A balance read that stores the reading but skips alert_state and the outbox. Adding a meter did exactly that, so a new user saw ৳0.00 and "every meter is healthy" until the next poll (6h) and the first alert waited too. Also pins that the poll cycle still pays no extra select per healthy meter. |
+| `web/app-meters.test.ts`                     | Add-a-meter throwing away the balance it just fetched, force check not actually re-polling the provider, and resume ignoring the plan cap.                                                                                                                                                              |
+| `web/queries.test.ts`                        | Paused meters vanishing from the customer payload. While they did, a pause was indistinguishable from an empty account and nothing could resume it.                                                                                                                                                     |
+| `notifications/alert-copy.test.ts` (preview) | The dashboard's tone preview drifting from the email it claims to show. It was a second hardcoded copy and did drift.                                                                                                                                                                                   |
+| `web/admin-actions.test.ts` (audit reasons)  | Pause/erase logging no reason, and the customer's address leaking into the audit row that outlives the account.                                                                                                                                                                                         |
+| `web/app.test.ts` (sign-in defaults)         | The sign-in screen opening on a tab that cannot create an account, and the operator console being advertised in the customer sidebar.                                                                                                                                                                   |

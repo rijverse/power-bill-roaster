@@ -1,0 +1,74 @@
+name: Deploy
+
+# on push to main: run the full CI suite, then apply pending migrations, then
+# build and push the image to ghcr.io/<owner>/<repo>, tagged both :latest and
+# :<sha>. the immutable :<sha> tag is the rollback handle - pin the server to a
+# known-good one if :latest breaks. the server pull/restart is manual
+# (scripts/deploy.sh); the migration safety net means we never ship a new image
+# with a schema change that hasn't been applied first.
+# needs DATABASE_URL as a "production" environment secret (see the migrate job).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Gate the whole deploy on the same checks a PR runs. A red build never
+  # migrates prod or pushes an image, even on a direct push to main.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  migrate:
+    name: Apply migrations
+    needs: checks
+    runs-on: ubuntu-latest
+    # this step writes to the live DB with a production credential. scope it to a
+    # protected GitHub Environment (Settings > Environments > "production": add
+    # required reviewers / a branch rule) and hold DATABASE_URL there, so a stray
+    # push to main can't silently migrate prod without a human approving it.
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - run: bun install --frozen-lockfile
+
+      - name: Apply migrations
+        run: bun run db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+  build-image:
+    name: Build & push image
+    needs: migrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

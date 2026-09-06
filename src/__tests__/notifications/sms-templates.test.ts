@@ -1,5 +1,5 @@
 import { smsAlertText } from '../../notifications/sms-templates';
-import { MeterContext } from '../../notifications/telegram-templates';
+import { MeterContext } from '../../notifications/alert-copy';
 
 const baseCtx: MeterContext = {
   nickname: null,

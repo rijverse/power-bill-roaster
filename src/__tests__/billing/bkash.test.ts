@@ -1,9 +1,9 @@
-import fetch from 'node-fetch';
 import { BkashProvider, mapBkashStatus } from '../../billing/bkash';
 
-jest.mock('node-fetch');
-
-const mockFetch = fetch as jest.MockedFunction<typeof fetch>;
+const mockFetch = jest.spyOn(globalThis, 'fetch');
+mockFetch.mockImplementation(async () => {
+  throw new Error('fetch should be replaced per test');
+});
 
 const config = {
   appKey: 'key',
@@ -15,7 +15,23 @@ const config = {
 };
 
 function jsonResponse(body: unknown) {
-  return { json: async () => body } as never;
+  return {
+    ok: true,
+    status: 200,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as never;
+}
+
+function errorResponse(status: number, body: string) {
+  return {
+    ok: false,
+    status,
+    json: async () => {
+      throw new Error('not JSON');
+    },
+    text: async () => body,
+  } as never;
 }
 
 describe('mapBkashStatus', () => {
@@ -110,5 +126,23 @@ describe('BkashProvider', () => {
 
   it('autoConfirms is false (async confirmation via callback)', () => {
     expect(new BkashProvider(config).autoConfirms).toBe(false);
+  });
+
+  it('throws a meaningful error when the token grant returns a non-2xx HTML page', async () => {
+    mockFetch.mockResolvedValueOnce(errorResponse(502, '<html>Bad Gateway</html>'));
+    const provider = new BkashProvider(config);
+    await expect(
+      provider.createCheckout({ userId: 1, plan: 'plus', amountBdt: 40, reference: 'r' })
+    ).rejects.toThrow('bKash token grant returned 502');
+  });
+
+  it('throws a meaningful error when an authed post returns a non-2xx', async () => {
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse({ id_token: 'tok', expires_in: 3600 }))
+      .mockResolvedValueOnce(errorResponse(500, '<html>Internal Server Error</html>'));
+    const provider = new BkashProvider(config);
+    await expect(
+      provider.createCheckout({ userId: 1, plan: 'plus', amountBdt: 40, reference: 'r' })
+    ).rejects.toThrow('bKash /tokenized/checkout/create returned 500');
   });
 });

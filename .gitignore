@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+# legacy binary lockfile - we track the text bun.lock now; an older bun would
+# regenerate this, so keep it out of the repo
+bun.lockb
 
 # Build output
 dist/
@@ -8,6 +11,10 @@ dist/
 .env
 .env.local
 .env.*.local
+
+# Local docker-compose overrides (host-port remaps etc.) - machine-specific,
+# auto-merged by `docker compose up`, so never commit it
+docker-compose.override.yml
 
 # Logs
 *.log
@@ -30,3 +37,6 @@ coverage/
 
 # Private notes (business/cost details, never public)
 *.private.md
+
+# Local design notes (kept out of the repo)
+design.md

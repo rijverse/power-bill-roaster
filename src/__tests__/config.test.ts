@@ -61,7 +61,7 @@ describe('Config', () => {
         expect(config.desco.accountNo).toBe('13151091');
         expect(config.desco.meterNo).toBe('661120227647');
         expect(config.email.to).toBe('test@example.com');
-        expect(config.smtp.host).toBe('smtp.test.com');
+        expect(config.email.host).toBe('smtp.test.com');
       });
     });
 
@@ -96,7 +96,7 @@ describe('Config', () => {
         const { getConfig } = require('../config');
         const config = getConfig();
 
-        expect(config.smtp.port).toBe(587);
+        expect(config.email.port).toBe(587);
       });
     });
 
@@ -108,7 +108,243 @@ describe('Config', () => {
         const { getConfig } = require('../config');
         const config = getConfig();
 
-        expect(config.smtp.port).toBe(465);
+        expect(config.email.port).toBe(465);
+      });
+    });
+  });
+
+  describe('validateEnv alert channels', () => {
+    const GOOD_WEBHOOK = 'https://discord.com/api/webhooks/123456789/abc-token';
+
+    beforeEach(() => {
+      process.env.DESCO_ACCOUNT_NO = '13151091';
+      process.env.DESCO_METER_NO = '661120227647';
+    });
+
+    const setEmail = () => {
+      process.env.EMAIL_TO = 'test@example.com';
+      process.env.EMAIL_FROM = 'from@example.com';
+      process.env.SMTP_HOST = 'smtp.test.com';
+      process.env.SMTP_USER = 'user';
+      process.env.SMTP_PASS = 'pass';
+    };
+
+    it('accepts an email-only channel', () => {
+      setEmail();
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        const config = getConfig();
+        expect(config.email).not.toBeNull();
+        expect(config.discordWebhookUrl).toBeNull();
+      });
+    });
+
+    it('accepts a discord-only channel (no SMTP)', () => {
+      process.env.DISCORD_WEBHOOK_URL = GOOD_WEBHOOK;
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        const config = getConfig();
+        expect(config.email).toBeNull();
+        expect(config.discordWebhookUrl).toBe(GOOD_WEBHOOK);
+      });
+    });
+
+    it('accepts both channels together', () => {
+      setEmail();
+      process.env.DISCORD_WEBHOOK_URL = GOOD_WEBHOOK;
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        const config = getConfig();
+        expect(config.email).not.toBeNull();
+        expect(config.discordWebhookUrl).toBe(GOOD_WEBHOOK);
+      });
+    });
+
+    it('rejects zero channels with guidance', () => {
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { validateEnv } = require('../config');
+        expect(() => validateEnv()).toThrow('at least one alert channel');
+      });
+    });
+
+    it('rejects a partial SMTP block, naming the missing keys', () => {
+      process.env.EMAIL_TO = 'test@example.com';
+      process.env.EMAIL_FROM = 'from@example.com';
+      process.env.SMTP_HOST = 'smtp.test.com';
+      // SMTP_USER and SMTP_PASS intentionally unset
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { validateEnv } = require('../config');
+        expect(() => validateEnv()).toThrow('SMTP_USER');
+        expect(() => validateEnv()).toThrow('SMTP_PASS');
+      });
+    });
+
+    it('rejects an invalid Discord webhook URL', () => {
+      process.env.DISCORD_WEBHOOK_URL = 'https://evil.com/hook';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { validateEnv } = require('../config');
+        expect(() => validateEnv()).toThrow('not a valid Discord webhook');
+      });
+    });
+  });
+
+  describe('getServerConfig numeric env validation', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://localhost/test';
+      process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    });
+
+    it('rejects a non-numeric LOW_THRESHOLD instead of silently disabling alerts', () => {
+      process.env.LOW_THRESHOLD = 'abc';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(() => getServerConfig()).toThrow('LOW_THRESHOLD must be a finite integer');
+      });
+    });
+
+    it('rejects LOW_THRESHOLD <= CRITICAL_THRESHOLD (inverted disables the low level)', () => {
+      process.env.LOW_THRESHOLD = '50';
+      process.env.CRITICAL_THRESHOLD = '100';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(() => getServerConfig()).toThrow('must be greater than CRITICAL_THRESHOLD');
+      });
+    });
+
+    it('rejects POLL_INTERVAL_HOURS=0 (would hot-loop the scheduler)', () => {
+      process.env.POLL_INTERVAL_HOURS = '0';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(() => getServerConfig()).toThrow('POLL_INTERVAL_HOURS must be greater than 0');
+      });
+    });
+
+    it('rejects a non-numeric ADMIN_CHAT_ID', () => {
+      process.env.ADMIN_CHAT_ID = 'not-a-number';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(() => getServerConfig()).toThrow('ADMIN_CHAT_ID must be a finite integer');
+      });
+    });
+
+    it('accepts a numeric ADMIN_CHAT_ID', () => {
+      process.env.ADMIN_CHAT_ID = '12345';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(getServerConfig().adminChatId).toBe(12345);
+      });
+    });
+  });
+
+  describe('getConfig threshold validation (CLI path)', () => {
+    beforeEach(() => {
+      process.env.DESCO_ACCOUNT_NO = '13151091';
+      process.env.DESCO_METER_NO = '661120227647';
+      process.env.EMAIL_TO = 'test@example.com';
+      process.env.EMAIL_FROM = 'from@example.com';
+      process.env.SMTP_HOST = 'smtp.test.com';
+      process.env.SMTP_USER = 'user';
+      process.env.SMTP_PASS = 'pass';
+    });
+
+    it('rejects a non-numeric CRITICAL_THRESHOLD', () => {
+      process.env.CRITICAL_THRESHOLD = 'oops';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        expect(() => getConfig()).toThrow('CRITICAL_THRESHOLD must be a finite integer');
+      });
+    });
+
+    it('rejects inverted thresholds', () => {
+      process.env.LOW_THRESHOLD = '80';
+      process.env.CRITICAL_THRESHOLD = '80';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getConfig } = require('../config');
+        expect(() => getConfig()).toThrow('must be greater than CRITICAL_THRESHOLD');
+      });
+    });
+  });
+
+  describe('getServerConfig billing https enforcement', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://localhost/test';
+      process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    });
+
+    it('rejects an http:// bKash base URL (would leak creds)', () => {
+      process.env.BILLING_PROVIDER = 'bkash';
+      process.env.BKASH_APP_KEY = 'k';
+      process.env.BKASH_APP_SECRET = 's';
+      process.env.BKASH_USERNAME = 'u';
+      process.env.BKASH_PASSWORD = 'p';
+      process.env.BKASH_BASE_URL = 'http://tokenized.sandbox.bka.sh/v1.2.0-beta';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(() => getServerConfig().billing).toThrow('BKASH_BASE_URL must use https');
+      });
+    });
+
+    it('rejects an http:// SSLCommerz base URL', () => {
+      process.env.BILLING_PROVIDER = 'sslcommerz';
+      process.env.SSLCOMMERZ_STORE_ID = 'store';
+      process.env.SSLCOMMERZ_STORE_PASSWORD = 'pass';
+      process.env.SSLCOMMERZ_BASE_URL = 'http://sandbox.sslcommerz.com';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(() => getServerConfig().billing).toThrow('SSLCOMMERZ_BASE_URL must use https');
+      });
+    });
+
+    it('allows http://localhost for a local sandbox gateway', () => {
+      process.env.BILLING_PROVIDER = 'bkash';
+      process.env.BKASH_APP_KEY = 'k';
+      process.env.BKASH_APP_SECRET = 's';
+      process.env.BKASH_USERNAME = 'u';
+      process.env.BKASH_PASSWORD = 'p';
+      process.env.BKASH_BASE_URL = 'http://localhost:8080/bkash';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(getServerConfig().billing.provider).toBe('bkash');
+      });
+    });
+  });
+
+  describe('getServerConfig billing', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://localhost/test';
+      process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    });
+
+    it('defaults to none so a fresh deploy never auto-approves upgrades', () => {
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(getServerConfig().billing.provider).toBe('none');
+      });
+    });
+
+    it('honors an explicit BILLING_PROVIDER=sandbox for dev', () => {
+      process.env.BILLING_PROVIDER = 'sandbox';
+      jest.isolateModules(() => {
+        jest.mock('dotenv/config', () => ({}));
+        const { getServerConfig } = require('../config');
+        expect(getServerConfig().billing.provider).toBe('sandbox');
       });
     });
   });

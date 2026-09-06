@@ -1,9 +1,5 @@
-import fetch from 'node-fetch';
 import { DescoApiClient } from '../../services/desco-api';
-
-jest.mock('node-fetch');
-
-const mockFetch = fetch as jest.MockedFunction<typeof fetch>;
+import { ProviderLookupError, ProviderUnavailableError } from '../../providers/types';
 
 // helper to create mock api response
 function createApiResponse(balance: number) {
@@ -22,50 +18,59 @@ function createApiResponse(balance: number) {
 
 describe('DescoApiClient', () => {
   let client: DescoApiClient;
+  let fetchSpy: jest.SpyInstance;
 
   beforeEach(() => {
     client = new DescoApiClient();
-    jest.clearAllMocks();
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      throw new Error('fetch should be replaced per test');
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
   });
 
   it('should fetch balance successfully', async () => {
-    mockFetch.mockResolvedValue({
+    fetchSpy.mockResolvedValueOnce({
       json: async () => createApiResponse(878.88),
-    } as any);
+    });
 
     const result = await client.getBalance('13151091', '661120227647');
 
     expect(result.balance).toBe(878.88);
     expect(result.accountNo).toBe('13151091');
-    expect(mockFetch).toHaveBeenCalledWith(
+    expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringContaining('accountNo=13151091'),
       expect.any(Object)
     );
   });
 
-  it('should throw error on invalid API response', async () => {
-    mockFetch.mockResolvedValue({
+  it('should throw a lookup error on an invalid API response', async () => {
+    fetchSpy.mockResolvedValueOnce({
       json: async () => ({ invalid: 'response' }),
-    } as any);
+    });
 
-    await expect(client.getBalance('123', '456')).rejects.toThrow('Invalid API response');
+    await expect(client.getBalance('123', '456')).rejects.toThrow(ProviderLookupError);
   });
 
-  it('should throw error on non-200 code', async () => {
-    mockFetch.mockResolvedValue({
+  it('should throw a lookup error on non-200 code', async () => {
+    fetchSpy.mockResolvedValueOnce({
       json: async () => ({
         code: 500,
         desc: 'Internal Server Error',
         data: null,
       }),
-    } as any);
+    });
 
-    await expect(client.getBalance('123', '456')).rejects.toThrow('Invalid API response');
+    await expect(client.getBalance('123', '456')).rejects.toThrow(ProviderLookupError);
   });
 
-  it('should handle network errors', async () => {
-    mockFetch.mockRejectedValue(new Error('Network error'));
+  it('should throw an unavailable error on network failure', async () => {
+    fetchSpy.mockRejectedValueOnce(new Error('Network error'));
 
-    await expect(client.getBalance('123', '456')).rejects.toThrow('Network error');
+    const promise = client.getBalance('123', '456');
+    await expect(promise).rejects.toThrow(ProviderUnavailableError);
+    await expect(promise).rejects.toThrow('Network error');
   });
 });

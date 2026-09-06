@@ -443,6 +443,10 @@ function dashBanner() {
       '<button class="pr-btn gold" type="button" data-go="billing" style="flex:none">Recharge →</button></div>';
   }
   if (!ms.length) return '';
+  const unknown = ms.filter(m => m.balance === null).length;
+  if (unknown) {
+    return '<div class="pr-banner warn" style="margin-bottom:22px"><div class="bd"><div class="h">Balance unavailable</div><div class="p">No recent balance for ' + unknown + ' meter' + (unknown === 1 ? '' : 's') + '. Use Force check to request a reading.</div></div></div>';
+  }
   return '<div class="pr-banner" style="margin-bottom:22px;background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.42)"><span class="ic" style="background:rgba(52,211,153,0.16)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>' +
     '<div class="bd"><div class="h">Every meter is healthy</div><div class="p">Nothing to roast you about right now. Enjoy it while it lasts.</div></div></div>';
 }
@@ -458,7 +462,10 @@ function renderDashboard() {
     return;
   }
   const ms = DATA.meters;
-  const total = ms.reduce((a, m) => a + (m.balance ?? 0), 0);
+  const known = ms.filter(m => m.balance !== null);
+  const unknown = ms.length - known.length;
+  const total = known.length ? known.reduce((a, m) => a + m.balance, 0) : null;
+  const balanceLabel = unknown && known.length ? 'Known balance, ' + known.length + ' of ' : 'Total balance, ';
   const atRisk = ms.filter(m => m.balance !== null && m.balance < m.lowThreshold);
   const crit = ms.filter(m => m.balance !== null && m.balance < m.criticalThreshold);
   const preds = ms.map(m => days(m)).filter(d => typeof d === 'number');
@@ -468,9 +475,9 @@ function renderDashboard() {
 
   let h = dashBanner();
   h += '<div class="pr-statrow" style="margin-bottom:18px">' +
-    '<div class="pr-stat"><div class="k">Total balance, ' + ms.length + ' meter' + (ms.length === 1 ? '' : 's') + '</div><div class="n">' + fmt(total) + '</div></div>' +
-    '<div class="pr-stat"><div class="k">Meters at risk</div><div style="display:flex;align-items:baseline;gap:8px"><span class="n ' + (atRisk.length ? 'red' : 'green') + '">' + atRisk.length + '</span><span class="muted" style="font-size:14px">of ' + ms.length + '</span></div><div class="d ' + (crit.length ? 'down' : 'warn') + '">' + crit.length + ' critical, ' + (atRisk.length - crit.length) + ' low</div></div>' +
-    '<div class="pr-stat"><div class="k">Next blackout</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? 'n/a' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div><div class="d">' + (soonM ? esc(clip(soonM.label, 22)) + ' leads the race' : 'all steady') + '</div></div>' +
+    '<div class="pr-stat"><div class="k">' + balanceLabel + ms.length + ' meter' + (ms.length === 1 ? '' : 's') + '</div><div class="n">' + fmt(total) + '</div></div>' +
+    '<div class="pr-stat"><div class="k">Meters at risk</div><div style="display:flex;align-items:baseline;gap:8px"><span class="n ' + (atRisk.length ? 'red' : unknown ? 'gold' : 'green') + '">' + atRisk.length + '</span><span class="muted" style="font-size:14px">of ' + ms.length + '</span></div><div class="d ' + (crit.length ? 'down' : 'warn') + '">' + crit.length + ' critical, ' + (atRisk.length - crit.length) + ' low' + (unknown ? ', ' + unknown + ' unknown' : '') + '</div></div>' +
+    '<div class="pr-stat"><div class="k">Next blackout</div><div class="n ' + (soon !== null && soon < 4 ? 'red' : 'gold') + '">' + (soon === null ? 'n/a' : '~' + soon.toFixed(soon < 10 ? 1 : 0) + ' days') + '</div><div class="d">' + (soonM ? esc(clip(soonM.label, 22)) + ' leads the race' : 'not enough history') + '</div></div>' +
   '</div>';
 
   // chart + meters/prediction

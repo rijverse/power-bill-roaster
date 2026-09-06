@@ -56,6 +56,9 @@ A few bits worth calling out:
 
 ### Fixed
 
+- The customer dashboard shows missing balances as unknown and labels partial
+  totals as "Known balance". A meter with no recent reading no longer makes the
+  dashboard claim every meter is healthy or show a zero total.
 - `eraseUser` was dying with a FK violation on `pending_alerts` for any user
   who ever had an alert queued. Outbox rows were never being cleared.
   Erasure now clears them (by meter and by user, both blocks).
